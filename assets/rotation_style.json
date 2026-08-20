@@ -1,0 +1,329 @@
+{
+  "targets": [
+    {
+      "isStage": true,
+      "name": "Stage",
+      "variables": {},
+      "lists": {},
+      "broadcasts": {},
+      "blocks": {},
+      "comments": {},
+      "currentCostume": 0,
+      "costumes": [
+        {
+          "name": "backdrop1",
+          "dataFormat": "svg",
+          "assetId": "bg",
+          "md5ext": "bg.svg",
+          "rotationCenterX": 0,
+          "rotationCenterY": 0
+        }
+      ],
+      "sounds": [],
+      "volume": 100,
+      "layerOrder": 0,
+      "tempo": 60,
+      "videoTransparency": 50,
+      "videoState": "on",
+      "textToSpeechLanguage": null
+    },
+    {
+      "isStage": false,
+      "name": "AllAroundUp",
+      "variables": {},
+      "lists": {},
+      "broadcasts": {},
+      "blocks": {
+        "hat1": {
+          "opcode": "event_whenflagclicked",
+          "next": "pt1",
+          "parent": null,
+          "inputs": {},
+          "fields": {},
+          "shadow": false,
+          "topLevel": true,
+          "x": 0,
+          "y": 0
+        },
+        "pt1": {
+          "opcode": "motion_pointindirection",
+          "next": null,
+          "parent": "hat1",
+          "inputs": {
+            "DIRECTION": [
+              1,
+              [
+                4,
+                "0"
+              ]
+            ]
+          },
+          "fields": {},
+          "shadow": false,
+          "topLevel": false
+        }
+      },
+      "comments": {},
+      "currentCostume": 0,
+      "costumes": [
+        {
+          "name": "a",
+          "dataFormat": "svg",
+          "assetId": "c_AllAroundUp",
+          "md5ext": "c_AllAroundUp.svg",
+          "rotationCenterX": 0,
+          "rotationCenterY": 0
+        }
+      ],
+      "sounds": [],
+      "volume": 100,
+      "layerOrder": 1,
+      "visible": true,
+      "x": -100,
+      "y": 0,
+      "size": 100,
+      "direction": 90,
+      "draggable": false,
+      "rotationStyle": "all around"
+    },
+    {
+      "isStage": false,
+      "name": "AllAroundDown",
+      "variables": {},
+      "lists": {},
+      "broadcasts": {},
+      "blocks": {
+        "hat1": {
+          "opcode": "event_whenflagclicked",
+          "next": "pt1",
+          "parent": null,
+          "inputs": {},
+          "fields": {},
+          "shadow": false,
+          "topLevel": true,
+          "x": 0,
+          "y": 0
+        },
+        "pt1": {
+          "opcode": "motion_pointindirection",
+          "next": null,
+          "parent": "hat1",
+          "inputs": {
+            "DIRECTION": [
+              1,
+              [
+                4,
+                "180"
+              ]
+            ]
+          },
+          "fields": {},
+          "shadow": false,
+          "topLevel": false
+        }
+      },
+      "comments": {},
+      "currentCostume": 0,
+      "costumes": [
+        {
+          "name": "a",
+          "dataFormat": "svg",
+          "assetId": "c_AllAroundDown",
+          "md5ext": "c_AllAroundDown.svg",
+          "rotationCenterX": 0,
+          "rotationCenterY": 0
+        }
+      ],
+      "sounds": [],
+      "volume": 100,
+      "layerOrder": 1,
+      "visible": true,
+      "x": -50,
+      "y": 0,
+      "size": 100,
+      "direction": 90,
+      "draggable": false,
+      "rotationStyle": "all around"
+    },
+    {
+      "isStage": false,
+      "name": "LeftRightLeft",
+      "variables": {},
+      "lists": {},
+      "broadcasts": {},
+      "blocks": {
+        "hat1": {
+          "opcode": "event_whenflagclicked",
+          "next": "pt1",
+          "parent": null,
+          "inputs": {},
+          "fields": {},
+          "shadow": false,
+          "topLevel": true,
+          "x": 0,
+          "y": 0
+        },
+        "pt1": {
+          "opcode": "motion_pointindirection",
+          "next": null,
+          "parent": "hat1",
+          "inputs": {
+            "DIRECTION": [
+              1,
+              [
+                4,
+                "-90"
+              ]
+            ]
+          },
+          "fields": {},
+          "shadow": false,
+          "topLevel": false
+        }
+      },
+      "comments": {},
+      "currentCostume": 0,
+      "costumes": [
+        {
+          "name": "a",
+          "dataFormat": "svg",
+          "assetId": "c_LeftRightLeft",
+          "md5ext": "c_LeftRightLeft.svg",
+          "rotationCenterX": 0,
+          "rotationCenterY": 0
+        }
+      ],
+      "sounds": [],
+      "volume": 100,
+      "layerOrder": 1,
+      "visible": true,
+      "x": 0,
+      "y": 0,
+      "size": 100,
+      "direction": 90,
+      "draggable": false,
+      "rotationStyle": "left-right"
+    },
+    {
+      "isStage": false,
+      "name": "LeftRightRight",
+      "variables": {},
+      "lists": {},
+      "broadcasts": {},
+      "blocks": {
+        "hat1": {
+          "opcode": "event_whenflagclicked",
+          "next": "pt1",
+          "parent": null,
+          "inputs": {},
+          "fields": {},
+          "shadow": false,
+          "topLevel": true,
+          "x": 0,
+          "y": 0
+        },
+        "pt1": {
+          "opcode": "motion_pointindirection",
+          "next": null,
+          "parent": "hat1",
+          "inputs": {
+            "DIRECTION": [
+              1,
+              [
+                4,
+                "90"
+              ]
+            ]
+          },
+          "fields": {},
+          "shadow": false,
+          "topLevel": false
+        }
+      },
+      "comments": {},
+      "currentCostume": 0,
+      "costumes": [
+        {
+          "name": "a",
+          "dataFormat": "svg",
+          "assetId": "c_LeftRightRight",
+          "md5ext": "c_LeftRightRight.svg",
+          "rotationCenterX": 0,
+          "rotationCenterY": 0
+        }
+      ],
+      "sounds": [],
+      "volume": 100,
+      "layerOrder": 1,
+      "visible": true,
+      "x": 50,
+      "y": 0,
+      "size": 100,
+      "direction": 90,
+      "draggable": false,
+      "rotationStyle": "left-right"
+    },
+    {
+      "isStage": false,
+      "name": "DontRotate",
+      "variables": {},
+      "lists": {},
+      "broadcasts": {},
+      "blocks": {
+        "hat1": {
+          "opcode": "event_whenflagclicked",
+          "next": "pt1",
+          "parent": null,
+          "inputs": {},
+          "fields": {},
+          "shadow": false,
+          "topLevel": true,
+          "x": 0,
+          "y": 0
+        },
+        "pt1": {
+          "opcode": "motion_pointindirection",
+          "next": null,
+          "parent": "hat1",
+          "inputs": {
+            "DIRECTION": [
+              1,
+              [
+                4,
+                "-90"
+              ]
+            ]
+          },
+          "fields": {},
+          "shadow": false,
+          "topLevel": false
+        }
+      },
+      "comments": {},
+      "currentCostume": 0,
+      "costumes": [
+        {
+          "name": "a",
+          "dataFormat": "svg",
+          "assetId": "c_DontRotate",
+          "md5ext": "c_DontRotate.svg",
+          "rotationCenterX": 0,
+          "rotationCenterY": 0
+        }
+      ],
+      "sounds": [],
+      "volume": 100,
+      "layerOrder": 1,
+      "visible": true,
+      "x": 100,
+      "y": 0,
+      "size": 100,
+      "direction": 90,
+      "draggable": false,
+      "rotationStyle": "don't rotate"
+    }
+  ],
+  "monitors": [],
+  "extensions": [],
+  "meta": {}
+}

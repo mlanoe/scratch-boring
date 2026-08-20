@@ -1,0 +1,141 @@
+{
+  "targets": [
+    {
+      "isStage": true,
+      "name": "Stage",
+      "variables": {
+        "var_loudness": [
+          "loudness_result",
+          0
+        ],
+        "var_loud": [
+          "loud_result",
+          0
+        ]
+      },
+      "lists": {},
+      "broadcasts": {},
+      "blocks": {},
+      "comments": {},
+      "currentCostume": 0,
+      "costumes": [
+        {
+          "name": "backdrop1",
+          "dataFormat": "svg",
+          "assetId": "bg",
+          "md5ext": "bg.svg",
+          "rotationCenterX": 0,
+          "rotationCenterY": 0
+        }
+      ],
+      "sounds": [],
+      "volume": 100,
+      "layerOrder": 0,
+      "tempo": 60,
+      "videoTransparency": 50,
+      "videoState": "on",
+      "textToSpeechLanguage": null
+    },
+    {
+      "isStage": false,
+      "name": "Sprite1",
+      "variables": {},
+      "lists": {},
+      "broadcasts": {},
+      "blocks": {
+        "hat1": {
+          "opcode": "event_whenflagclicked",
+          "next": "set_loudness",
+          "parent": null,
+          "inputs": {},
+          "fields": {},
+          "shadow": false,
+          "topLevel": true,
+          "x": 0,
+          "y": 0
+        },
+        "expr_loudness": {
+          "opcode": "sensing_loudness",
+          "next": null,
+          "parent": "set_loudness",
+          "inputs": {},
+          "fields": {},
+          "shadow": false,
+          "topLevel": false
+        },
+        "set_loudness": {
+          "opcode": "data_setvariableto",
+          "next": "set_loud",
+          "parent": "hat1",
+          "inputs": {
+            "VALUE": [
+              1,
+              "expr_loudness"
+            ]
+          },
+          "fields": {
+            "VARIABLE": [
+              "loudness_result",
+              "var_loudness"
+            ]
+          },
+          "shadow": false,
+          "topLevel": false
+        },
+        "expr_loud": {
+          "opcode": "sensing_loud",
+          "next": null,
+          "parent": "set_loud",
+          "inputs": {},
+          "fields": {},
+          "shadow": false,
+          "topLevel": false
+        },
+        "set_loud": {
+          "opcode": "data_setvariableto",
+          "next": null,
+          "parent": "set_loudness",
+          "inputs": {
+            "VALUE": [
+              1,
+              "expr_loud"
+            ]
+          },
+          "fields": {
+            "VARIABLE": [
+              "loud_result",
+              "var_loud"
+            ]
+          },
+          "shadow": false,
+          "topLevel": false
+        }
+      },
+      "comments": {},
+      "currentCostume": 0,
+      "costumes": [
+        {
+          "name": "a",
+          "dataFormat": "svg",
+          "assetId": "cA",
+          "md5ext": "cA.svg",
+          "rotationCenterX": 0,
+          "rotationCenterY": 0
+        }
+      ],
+      "sounds": [],
+      "volume": 100,
+      "layerOrder": 1,
+      "visible": true,
+      "x": 0,
+      "y": 0,
+      "size": 100,
+      "direction": 90,
+      "draggable": false,
+      "rotationStyle": "all around"
+    }
+  ],
+  "monitors": [],
+  "extensions": [],
+  "meta": {}
+}

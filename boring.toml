@@ -1,0 +1,137 @@
+[project]
+name = "scratch-boring"
+version = "0.1.0"
+main = "boring/scratch.br"
+
+# The exact-arithmetic tower (BigUint/BigInt/BigFraction/their error enums)
+# used to be embedded directly in boring/scratch.br. It now lives in the
+# sibling ../boring-numlib project instead, so a second project (e.g.
+# whisper-boring) can depend on the same types without copy-pasting them --
+# see boring-numlib/README.md for the motivation. Resolved relative to this
+# boring.toml's own directory, per boring's book.md §15.
+[deps]
+numlib = "../boring-numlib"
+
+# Pulls in the shared, canonical bevy external-type declarations from
+# ../boring-bevylib instead of repeating them here -- see that project's
+# external_types.toml for the full list (a mirror of boring's own built-in
+# `KNOWN_EXTERNAL_TUPLE_STRUCTS`) and why it's declared at all despite being
+# currently redundant with the compiler. This project's own additions (any
+# Bevy tuple struct not already in that shared list, discovered while
+# building the Phase 2 renderer) go directly below as their own
+# tuple_structs/const_fns key, folded in alongside the included list.
+#
+# NOTE: this project is now 100% Boring-authored, same as breakout-boring --
+# `src/sb3_loader.rs` (the last hand-written Rust module; JSON/zip loading)
+# was ported to `boring/sb3_loader.br` once Boring gained @derive(Deserialize)
+# field-renaming and a viable dynamic-JSON-value pattern (a plain
+# @serde(untagged) enum) -- see that file's own header comment. The
+# exact-arithmetic ScratchNumber tower used to be a second hand-written
+# module (src/value_rt.rs) but is now 100% Boring-authored too --
+# BigUint/BigInt/BigFraction themselves now come from ../boring-numlib (see
+# [deps] above), while ScratchNumber/ScratchNumberKind (built on top of them)
+# stay in boring/scratch.br. Nothing extra is needed in this file for either
+# of these -- [external_types] only matters for Bevy's own tuple-struct types.
+[external_types]
+include = ["../boring-bevylib/external_types.toml"]
+# `AudioPlayer` (bevy_audio, Phase 2 Sound category) -- not in boring's
+# built-in `KNOWN_EXTERNAL_TUPLE_STRUCTS` nor boring-bevylib's shared list
+# yet, hand-verified against bevy_audio-0.19.0's `pub struct
+# AudioPlayer<Source = AudioSource>(pub Handle<Source>)` before adding.
+# Project-specific supplement (not touched in boring-bevylib, since no
+# other Boring+Bevy game has needed audio yet) -- purely additive, folds in
+# alongside the included list above (this file's own `[external_types]`
+# section allows one `include` plus its own `tuple_structs` key at once).
+#
+# `Anchor` (bevy_sprite, speech-bubble positioning) -- hand-verified
+# against bevy_sprite-0.19.1's `pub struct Anchor(pub Vec2)` (`sprite.rs`)
+# before adding. Used to make a speech bubble's `Text2d` grow *upward*
+# from its own anchor entity's `Transform` origin rather than being
+# centered on it.
+tuple_structs = ["AudioPlayer", "Anchor"]
+
+# Pulls in the shared Bevy derive-macro whitelist (Component/Resource/Event/
+# Deref) -- see ../boring-bevylib/derives.toml. Unused until Phase 2 adds the
+# `bevy` dependency, but declared now so the Phase 2 diff doesn't also need
+# to touch this file.
+[derives]
+include = ["../boring-bevylib/derives.toml"]
+
+# Argument-borrow whitelist for boring/scratch.br's costume extraction
+# (`extract_current_costume_to_temp_file`), which replaced the hand-written
+# src/costume_rt.rs -- see that function's own doc comment. The zip-related
+# entries (everything but `resvg::render`/`Tree::from_data`, which are
+# costume/SVG-specific) are reused as-is by sound extraction
+# (`extract_sound_to_temp_file`, which replaced src/sound_rt.rs) since it's
+# a strict subset of the same zip-extraction path with no rasterization
+# step. Every entry below was hand-verified against its defining crate's
+# real signature (zip 2.4.2, resvg/usvg 0.48.1) before being added, same
+# rule as every other whitelist in this file. Several are called via
+# explicit UFCS (`Type.method(receiverArg, ...)` instead of
+# `receiver.method(...)`) rather than the more natural instance-method-call
+# spelling -- see each entry's own comment for the specific transpiler
+# quirk that motivated it.
+[external_fns]
+# `ZipFile::read_to_end(&mut self, buf: &mut Vec<u8>)` (std::io::Read) --
+# called via explicit UFCS (`ZipFile.readToEnd(entry, buf)`), same reasoning
+# as `ZipArchive::byName` above: both positions count from 0 (`&mut` for the
+# `self` position, `&mut` for `buf`).
+"ZipFile::readToEnd" = ["&mut", "&mut"]
+# `ZipArchive::by_name(&mut self, name: &str) -> ZipResult<ZipFile>` --
+# called via explicit UFCS (`ZipArchive.byName(archive, entryName)`, not
+# `archive.byName(entryName)`) so this whitelist entry's qualifier doesn't
+# depend on Boring's checker resolving `archive`'s external generic type
+# (`ZipArchive<File>`) at the receiver -- confirmed empirically that an
+# explicit `let ZipArchive<File>? x = ...` local-var type annotation stops
+# `archive.byName(...)`'s own borrow lookup from matching at all (Boring's
+# `resolve_expr_external_type_name` only resolves a plain `Type::Named`, not
+# `Type::Generic("ZipArchive", [File])`). UFCS sidesteps that entirely: the
+# qualifier is the literal `ZipArchive` typed at the call site, no var-type
+# resolution involved. Both positions count from 0 here (no receiver to
+# exclude in this calling form) -- `&mut` for the `self` position, `&` for
+# `name`.
+"ZipArchive::byName" = ["&mut", "&"]
+# `ZipArchive::len(&self) -> usize` / `ZipArchive::by_index(&mut self, index: usize)
+# -> ZipResult<ZipFile>` -- added for `boring/sb3_loader.br`'s own
+# `read_project_json_from_zip` (and `scratch.br`'s `read_zip_entry_bytes`,
+# which inlines the same by-index search), both of which enumerate every zip
+# entry name by index rather than relying on a Rust iterator (Boring has no
+# generic external-iterator consumption) -- see that function's own comment.
+# Both called via the same UFCS pattern as `ZipArchive::byName` above, same
+# reasoning (sidesteps `ZipArchive<File>`'s `Type::Generic` parameter-type
+# problem entirely).
+"ZipArchive::len" = ["&"]
+"ZipArchive::byIndex" = ["&mut"]
+# `Assets::<A>::get_mut(&mut self, id: impl Into<AssetId<A>>) -> Option<AssetMut<'_, A>>`
+# -- `pen.br`'s own `draw_pen_marks` needs a real `&Handle<Image>` here (only
+# `&Handle<A>`/`&mut Handle<A>` implement `Into<AssetId<A>>`, confirmed
+# against real `bevy_asset` source -- an owned `Handle<A>` does not), same
+# `Type::Generic` (`Assets<Image>`) receiver-type-resolution problem
+# `ZipArchive<File>` already has above -- called via explicit UFCS
+# (`Assets.get_mut(images, pen_canvas.handle)`, not `images.get_mut(...)`)
+# for the identical reason.
+"Assets::get_mut" = ["&mut", "&"]
+# `Assets::<A>::get(&self, id: impl Into<AssetId<A>>) -> Option<&A>` --
+# `pen.br`'s own `draw_stamps` needs this to read a *source* costume's
+# raw pixel bytes (while the canvas itself is read via `get_mut`
+# separately, never at the same time -- `draw_stamps`' own doc comment).
+# Same `Type::Generic` (`Assets<Image>`) receiver-type-resolution problem
+# as `get_mut` above, same UFCS workaround (`Assets.get(images, handle)`).
+"Assets::get" = ["&", "&"]
+# `resvg::render(tree: &usvg::Tree, transform: tiny_skia::Transform, pixmap: &mut tiny_skia::PixmapMut)`
+# -- a free function (this project's `boring.toml` doesn't touch the
+# compiler's own built-in std::mem table), middle argument stays by value.
+"resvg::render" = ["&", "", "&mut"]
+# `usvg::Tree::from_data(data: &[u8], opt: &usvg::Options) -> Result<Self, Error>`
+# -- a static `Tree.fromData(bytes, opts)` call, both arguments borrowed.
+"Tree::from_data" = ["&", "&"]
+# `Path::join<P: AsRef<Path>>(&self, path: P) -> PathBuf` -- called via
+# explicit UFCS (`Path.join(dir, name)`, not `dir.join(name)`) because a
+# plain `.join(...)` method call on any receiver is hijacked by Boring's own
+# builtin array/string-join special case (`try_emit_array_special_method`)
+# before it ever reaches the external-call fallback, regardless of the
+# receiver's actual type -- confirmed empirically (`assetsDir.join(name)`
+# transpiled as `assetsDir.iter().map(...).collect::<Vec<&str>>().join(...)`,
+# not `Path::join`). UFCS sidesteps the array-join special case entirely,
+# same reasoning as `ZipArchive::byName`/`ZipFile::readToEnd` above.
+"Path::join" = ["&", "&"]

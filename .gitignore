@@ -1,0 +1,12 @@
+/target
+.DS_Store
+# Phase 2 costume cache: rasterized/extracted costume images written by
+# Sb3Project::extract_current_costume_to_temp_file_for_boring, regenerated
+# on demand from the .sb3 zip -- not source, never checked in.
+/assets/.costume_cache/
+# Same idea, for extracted sound files (Sb3Project::extract_sound_to_temp_file_for_boring).
+/assets/.sound_cache/
+# Real scratch-vm (AGPLv3) test fixtures, fetched on demand by
+# scripts/fetch_scratch_vm_fixtures.sh -- deliberately not vendored into
+# this GPL-3.0-or-later repo, see that script's own header comment.
+/assets/scratch_vm_fixtures/

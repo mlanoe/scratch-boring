@@ -1,0 +1,1623 @@
+# scratch-boring — Boring-authored core: value system, block AST, evaluator,
+# linker, scheduler, and (this file) the Bevy ECS wiring around all of it.
+#
+# Split across several sibling files in this same directory (all pulled in
+# below via a bare `use <name>`, the same same-project multi-file mechanism
+# `sb3_loader.br` was the first to use here -- see its own header comment
+# for the full explanation: every top-level item in a bare-`use`d sibling
+# file is spliced into the same generated Rust file this file's own code
+# lives in, sharing the `use bevy.prelude.*`/`use numlib.big_num.*` below
+# project-wide, so none of them redeclare either). This file used to hold
+# everything directly; it was split once it grew past ~3100 lines:
+#
+# - `sb3_loader.br` — raw `.sb3`/`project.json` -> plain structs (`Sb3Project` etc.)
+# - `values.br` — `ScratchNumber`/`ScratchValue`, the value model
+# - `runtime.br` — `Block`/`BlockKind`, `StopSignal`, and every runtime resource shape
+# - `linker.br` — `Sb3Project` -> real runtime resources + `Block` AST
+# - `interpreter.br` — `eval`/`exec`, the tree-walking evaluator itself
+# - `scheduler.br` — Phase 1's run-to-completion scheduler + test entry points
+# - `assets.br` — costume/sound extraction from a `.sb3` zip
+# - `scratch.br` (this file) — Phase 2's Bevy ECS wiring: components, systems,
+#   `build_app`/`run_game`/`main`
+#
+# `BigUint`/`BigInt`/`BigFraction`/`ScratchNumber` (exact arithmetic, in
+# `values.br`) are 100% Boring-authored. `BigUint`/`BigInt`/`BigFraction`
+# themselves live in the sibling ../boring-numlib project (imported below
+# via this project's boring.toml [deps]) -- extracted out of this project
+# into boring-numlib so other Boring projects can depend on the same types.
+# `ScratchNumber`/`ScratchNumberKind` (built on top of them) stay in
+# `values.br`, since they're specific to this project. This project is
+# 100% Boring-authored, same as breakout-boring -- no hand-written Rust
+# module remains.
+use sb3_loader
+use values
+use runtime
+use linker
+use interpreter
+use scheduler
+use assets
+use pen
+
+use bevy.prelude.*
+# `Volume` (for `sound_setvolumeto`/`changevolumeby`'s own `PlaybackSettings.
+# with_volume` call, below) isn't in `bevy_audio`'s own prelude module
+# (only `GlobalVolume` is -- confirmed by reading that crate's own
+# `src/lib.rs`), so `bevy.prelude.*` alone doesn't bring it in; it needs
+# its own explicit import from the crate root re-export.
+use bevy.audio.Volume
+# `KeyboardInput`/`ButtonState` (for `handle_ask_text_input`'s own real
+# character-by-character text capture, below) aren't re-exported at the
+# `bevy::input` path at all (confirmed: `bevy_input`'s own `src/lib.rs`
+# prelude module doesn't include them, and `bevy::input` only re-exports
+# that same prelude -- a real E0603 "private struct" confirmed with
+# `cargo build`) -- needs a direct `bevy_input` dependency (`Cargo.toml`)
+# to name `bevy_input::keyboard::...` at all, same reasoning `Volume`'s
+# own doc comment above already established for a different crate.
+# `MessageReader<T>` (not `EventReader<T>` -- confirmed against real
+# `bevy_ecs` source: Bevy 0.19 renamed events to "messages" project-wide,
+# `EventReader`/`Events` -> `MessageReader`/`Messages`, `KeyboardInput`
+# itself derives `Message` now, not `Event`) is already in `bevy_ecs`'s
+# own prelude, reachable through the existing `bevy.prelude.*` below --
+# no separate import needed for that one.
+use bevy_input.keyboard.KeyboardInput
+# `ButtonState` itself lives one level up from `KeyboardInput` -- confirmed
+# with a real `cargo build` E0603 that `bevy_input::keyboard::ButtonState`
+# is a private re-export; the real, public definition is `bevy_input::
+# ButtonState` directly (shared across keyboard/mouse/gamepad, not
+# keyboard-specific).
+use bevy_input.ButtonState
+# `Anchor` isn't re-exported through `bevy_sprite::prelude` (confirmed
+# against real `bevy_sprite` source -- that module only re-exports
+# `Sprite`/`SpriteImageMode`/`SpriteMesh`/texture-slice types/`Text2d*`),
+# so `bevy.prelude.*` doesn't surface it either -- same "one level up from
+# where you'd expect" shape as `ButtonState` just above.
+use bevy_sprite.Anchor
+
+# BigUint/BigInt/BigFraction/BigUintError/BigFractionError: pure-Boring
+# exact-arithmetic tower, imported from ../boring-numlib via this project's
+# boring.toml [deps] (numlib = "../boring-numlib") rather than embedded here
+# -- see that project's README for why it was extracted into its own repo
+# (shared with other Boring projects, e.g. whisper-boring, instead of
+# copy-pasted). This is the real, load-bearing implementation backing
+# `ScratchValue.Num` (`values.br`): it replaces the hand-written Rust
+# `src/value_rt.rs` (which used `num-bigint`/`num-rational`) entirely.
+use numlib.big_num.*
+
+# ─── Phase 2: Bevy ECS wiring ─────────────────────────────────────────────
+#
+# This is the "real per-frame scheduler" half of the user's chosen Phase 2
+# scope (rendering + scheduler together, not scheduler-only or rendering-
+# only). Script execution now happens inside a Bevy `Update` system, driven
+# by the engine's own tick, instead of a plain synchronous call from a test
+# or `main`. Honest framing, not a shortcut: no currently-supported block can
+# actually span more than one frame yet (no `wait`/`forever` -- see
+# README.md's roadmap), so every queued script still runs to completion
+# within the single `Update` tick it's picked up in. What changes here is
+# *who owns when a script runs* (Bevy's tick, not the caller) -- genuine
+# mid-script pausing is future work for when `wait`/`forever` land, at which
+# point `run_pending_threads` below is exactly the system that needs to grow
+# a real per-tick work budget instead of draining each thread to completion.
+#
+# Vertical-slice scope for this first pass: load exactly one project (path
+# given at `build_app` time via the `ProjectPath` resource), queue and run
+# its green-flag script(s) once at Startup via `PendingThreads`, and render
+# each target as a solid-color placeholder rect at its saved position --
+# real costume bitmap/SVG rendering is untested territory here (only ever
+# proven in breakout-boring's own hand-authored, non-costume sprites),
+# deliberately deferred to a later Phase 2 pass per README.md rather than
+# faked with a wrong shortcut.
+#
+# `Vars`/`Lists`/`ProcTable`/`Broadcasts` are already `as Resource` (see
+# their own doc comments above) -- that refactor was purely additive, the
+# whole Phase 1 test suite still passes unmodified calling them as plain
+# values the way it always did.
+
+# Marker component for the one entity spawned per Scratch target (Stage +
+# sprites). `target_id` (added for Motion) matches a `Positions` table key
+# (see that struct's own doc comment on why it's the target's *name*) --
+# `sync_transforms_from_positions` below uses it to find which `Position`
+# entry belongs to which entity's `Transform`.
+pub struct ScratchSprite as Component, Debug:
+    string target_id
+
+# Every costume this sprite's own target has, pre-loaded as a real Bevy
+# `Handle<Image>` at Startup (see `setup_scratch_project`'s own spawn
+# loop) -- what makes `looks_switchcostumeto`/`looks_nextcostume`
+# (`LooksState.costume_index`, mutated at runtime) able to swap a
+# sprite's actual rendered image with a plain handle-array index, never
+# re-touching the `.sb3` zip after Startup. Attached to *every*
+# `ScratchSprite` entity uniformly, even a flat-color-placeholder one
+# (raw-JSON test fixtures, or a real costume that failed to extract) --
+# `handles = []` there, so `sync_costume_from_looks_states` below can
+# stay a single, unconditional system with no per-entity "does this one
+# even have costumes" branch to worry about.
+pub struct TargetCostumeHandles as Component, Debug, Clone:
+    [Handle<Image>] handles
+
+# Rotation style ("all around"/"left-right"/"don't rotate") used to live
+# here as its own read-only Component, baked in once at spawn time --
+# correct as long as nothing could ever change it after that. `motion_
+# setrotationstyle` (a real block, landed later) needs the calling
+# script's own instance to change it at runtime, which a plain Component
+# can never do (`exec_simple` has no `Commands`/`Query` access at all) --
+# moved to `SoundQueue.rotation_styles` instead, a genuine per-instance
+# resource `exec_simple` CAN mutate directly, same shape as `volumes`/
+# `pitches`. See that field's own doc comment in `runtime.br` for the
+# full reasoning and `sync_transforms_from_positions`' own doc comment
+# for how rendering reads it now.
+
+# Marker + live lookup key for one sprite's own speech-bubble text entity
+# -- a real `ChildOf` child of its `ScratchSprite` entity (spawned right
+# alongside it, in `setup_scratch_project`/`spawn_pending_clones`), so its
+# `Text2d` visibly sits *above* the sprite instead of sharing its own
+# `Transform` (real Scratch's own bubble is a separate on-screen element,
+# not text drawn on top of the sprite -- see `sync_speech_bubbles`'s own
+# doc comment for the exact vertical-offset formula and why a *child*
+# entity, not a same-entity fix, was the right shape for this). `target_id`
+# is looked up the same flat way every other sync system already matches
+# an entity to its own `Positions`/`LooksStates`/etc entry -- no nested
+# parent/child `Query` needed anywhere in this file; `ChildOf` only needs
+# to exist for Bevy's own transform-propagation to combine this entity's
+# local offset with its parent's world position each frame, nothing this
+# project's own code has to do by hand.
+pub struct SpeechBubbleAnchor as Component, Debug, Clone:
+    string target_id
+
+# Marker + static data for one variable watcher's dedicated entity --
+# `variable_id` for the live lookup, `label` (the variable's human name)
+# baked in at spawn time since it never changes at runtime (see
+# `VariableWatcher`'s own doc comment).
+pub struct VariableWatcherTag as Component, Debug:
+    string variable_id
+    string label
+
+# Marker + static data for one reporter watcher's dedicated entity --
+# `target_id`/`expr` for the live `eval()` each tick, `label` baked in at
+# spawn time (see `ReporterWatcher`'s own doc comment for why none of this
+# ever changes at runtime).
+pub struct ReporterWatcherTag as Component, Debug:
+    string target_id
+    Block expr
+    string label
+
+# Marker + static data for one list watcher's dedicated entity --
+# `list_id` for the live lookup, `label` baked in at spawn time, same
+# reasoning as `VariableWatcherTag`.
+pub struct ListWatcherTag as Component, Debug:
+    string list_id
+    string label
+
+# Marker for `sensing_askandwait`'s own on-screen text-input box -- a
+# single always-present entity (spawned once, hidden by default), toggled
+# visible by `sync_ask_ui` whenever `Vars.is_asking()`, the same "spawn
+# once, toggle `Visibility` every tick" pattern `VariableWatcherTag`'s own
+# entities already established (see `data_showvariable`/`hidevariable`'s
+# own round). No fields -- unlike the watcher tags above, there's nothing
+# static to bake in at spawn time (the question/typed-so-far text both
+# change at runtime, read fresh from `Vars` each tick).
+pub struct AskBoxText as Component, Debug:
+    pass
+
+# Which project to load, set once when `build_app` constructs the `App` --
+# read by `setup_scratch_project` below as a `Res<ProjectPath>`. Its own
+# resource (rather than a `build_app` parameter closed over directly)
+# because Bevy systems only ever receive real system params (Res/ResMut/
+# Commands/Query/...), never arbitrary function arguments.
+pub struct ProjectPath as Resource, Debug, Clone:
+    string path
+
+# Every currently-running `Thread` -- a green-flag click, a keypress hat,
+# an `event_whengreaterthan` hat, and a broadcast receiver all start a new
+# one the same way (`spawn_thread`), and `run_pending_threads` steps every
+# one of them once per `Update` tick (see that system's own doc comment).
+# Kept the name `PendingThreads`/`queue` (not renamed to e.g.
+# `ActiveThreads`/`threads`) even though a `Thread` can now legitimately
+# persist across many ticks rather than always finishing the tick it was
+# queued on -- `queue` still accurately describes how a thread *enters*
+# this resource (green flag/hats/broadcasts all still queue new ones the
+# same way), and keeping the name avoids a mechanical rename across every
+# test file that already imports it, for a change that's purely about
+# what happens to an entry *after* it's queued, not how queuing itself
+# works.
+pub struct PendingThreads as Resource, Debug, Clone:
+    var mut [Thread] queue
+
+pub def spawn_camera(mut Commands commands):
+    commands.spawn(Camera2d)
+    # A single, fixed `SpatialListener` for `sound_seteffectto`'s own PAN
+    # effect -- see `play_queued_sounds`' own doc comment for the full
+    # calibration this pairs with. A tiny ear gap (0.1 world units, NOT
+    # Bevy's own default `4.0`) deliberately -- `SpatialListener::default()`'s
+    # own gap would make even a *centered* (pan=0) sound quiet, since
+    # `rodio`'s own spatial-source formula (confirmed against real source,
+    # `rodio::source::spatial::Spatial::set_positions`) applies an inverse-
+    # square distance falloff past 1 world unit from either ear, and half
+    # of a 4.0 gap (2.0) already exceeds that. This tiny gap, paired with
+    # the emitter offset `play_queued_sounds` uses, keeps every emitter
+    # within that 1-unit no-falloff radius of both ears at every pan value
+    # -- PAN shifts the *balance* between channels without ever silently
+    # dropping the overall loudness of a project that uses it.
+    commands.spawn((Transform.IDENTITY, SpatialListener.new(0.1)))
+
+# Tries the real `.sb3` (zip) loader first, then falls back to the raw-JSON
+# loader -- `setup_scratch_project` (below) needs to accept either shape at
+# the same `ProjectPath`, unlike the Phase 1 test helpers which each commit
+# to one loader because their caller already knows which fixture kind it's
+# passing. A real `.sb3` is what makes `extract_current_costume_to_temp_
+# file` (below) able to find any actual costume bytes at all -- a raw-JSON
+# fixture has none, so it always falls through to the flat-color placeholder
+# regardless of this function's result.
+def Sb3Project? load_project_for_boring(string path):
+    if let p = Sb3Project.load_for_boring(path.clone()):
+        return p
+    # NOT a bare tail-expression call to `load_json_for_boring` here -- a
+    # `T?`-returning function auto-wraps its tail expression in `Some(...)`
+    # without detecting that the expression is *already* an `Option`,
+    # double-wrapping it (a real `boring` bug worked around the same way
+    # elsewhere in this file, e.g. `block_field_id`/`target_find_hat`). The
+    # explicit `if let ... else nil` rewrap avoids that.
+    if let p = Sb3Project.load_json_for_boring(path):
+        p
+    else:
+        nil
+
+# Loads the project named by `ProjectPath`, builds every runtime-state
+# resource (including `Positions`, for Motion), queues its green-flag
+# script(s) to run on the first `Update` tick, and spawns one sprite per
+# target at its saved position -- a real costume image if one can be
+# extracted (see `extract_current_costume_to_temp_file`'s own doc comment
+# for exactly when that succeeds), otherwise the
+# original flat-color placeholder rect. All in one Startup system (rather
+# than split across several, unlike breakout-boring's many small ones)
+# because every piece here is derived from the same loaded `project` value,
+# and Bevy Startup systems have no ordinary way to pass a non-`Resource`
+# value between each other.
+pub def setup_scratch_project(mut Commands commands, Res<ProjectPath> project_path, Res<AssetServer> asset_server):
+    if let project = load_project_for_boring(project_path.path.clone()):
+        let vars = build_vars(project.clone())
+        let lists = build_lists(project.clone())
+        let procs = build_procs(project.clone())
+        let broadcasts = build_broadcasts(project.clone())
+        let positions = build_positions(project.clone())
+        let looks_states = build_looks_states(project.clone())
+        let target_costumes = build_target_costumes(project.clone())
+        let costume_dims = build_target_costume_dims(project_path.path.clone(), project.clone())
+        var layer_orders = build_layer_orders(project.clone())
+        let key_press_hats = build_key_press_hats(project.clone())
+        let click_hats = build_click_hats(project.clone())
+        let greater_than_hats = build_greater_than_hats(project.clone())
+        let touching_object_hats = build_touching_object_hats(project.clone())
+        let backdrop_switch_hats = build_backdrop_switch_hats(project.clone())
+        let initial_backdrop = initial_backdrop_name(project.clone())
+        let start_as_clone_hats = build_start_as_clone_hats(project.clone())
+        let variable_watchers = build_variable_watchers(project.clone())
+        let reporter_watchers = build_reporter_watchers(project.clone())
+        let list_watchers = build_list_watchers(project.clone())
+        let greenflag_scripts = build_greenflag_scripts(project.clone())
+        commands.insert_resource(vars)
+        commands.insert_resource(lists)
+        commands.insert_resource(procs)
+        commands.insert_resource(broadcasts)
+        commands.insert_resource(positions)
+        commands.insert_resource(looks_states)
+        commands.insert_resource(target_costumes)
+        commands.insert_resource(costume_dims)
+        commands.insert_resource(layer_orders)
+        commands.insert_resource(KeyPressHats(hats = key_press_hats))
+        commands.insert_resource(ClickHats(hats = click_hats))
+        commands.insert_resource(GreaterThanHats(hats = greater_than_hats))
+        commands.insert_resource(TouchingObjectHats(hats = touching_object_hats))
+        commands.insert_resource(BackdropSwitchHats(hats = backdrop_switch_hats.clone(), last_backdrop_name = initial_backdrop))
+        commands.insert_resource(start_as_clone_hats)
+        # "Nothing pressed, mouse at origin, timer at zero" -- real values
+        # arrive on the very next tick via `sync_keyboard_state`/
+        # `sync_mouse_state`/`sync_scratch_timer` (all chained before
+        # `run_pending_threads` in `build_app`), same as `Positions`' own
+        # "starts equal to the target's saved x/y" seeding.
+        commands.insert_resource(KeyboardState(pressed_keys = [], any_key_pressed = false))
+        commands.insert_resource(MouseState(x = 0.0, y = 0.0, down = false))
+        commands.insert_resource(DragState(dragging_id = "", offset_x = 0.0, offset_y = 0.0))
+        commands.insert_resource(ScratchTimer(elapsed = 0.0))
+        # Same fixed nonzero seed every run -- see `Rng`'s own doc comment
+        # for why (a real, documented simplification, not real per-run
+        # entropy).
+        commands.insert_resource(Rng(state = 88172645463325252 as uint64))
+        commands.insert_resource(SoundQueue(play_queue = [], stop_all_requested = false, volumes = build_sound_volume_table(project.clone()), pitches = {=}, pans = {=}, rotation_styles = build_target_rotation_styles(project.clone()), sound_durations = build_target_sound_durations(project.clone()), instance_types = build_instance_types_table(project.clone()), next_clone_id = 0, clone_requests = [], despawn_requests = [], live_clone_count = 0, reset_timer_requested = false, backdrop_switch_hats = backdrop_switch_hats.clone(), draggable = build_target_draggable(project.clone()), pen_states = {=}, pen_line_requests = [], pen_clear_requested = false, stamp_requests = [], scene_composite = blank_scene_composite_data()))
+        commands.insert_resource(SpeechBubbles(table = {=}))
+        # Every green-flag hat starts its own thread, project-wide -- real
+        # Scratch runs them all simultaneously, and now that the real
+        # pausable scheduler exists (`PendingThreads` already supports many
+        # concurrent threads, same as broadcasts/hats/clone-spawned ones),
+        # there's no reason left to run only the first one found (see
+        # `build_greenflag_scripts`' own doc comment for the real project
+        # this was confirmed to break -- most of `Coconut clicker`'s own
+        # setup, score-digit clones, and wave animation never ran under the
+        # old "first one only" behavior).
+        mut greenflag_threads = []
+        for script in greenflag_scripts:
+            greenflag_threads.push(spawn_thread(script))
+        commands.insert_resource(PendingThreads(queue = greenflag_threads))
+        for target in project.targets:
+            # Initial placement here still comes straight from the target's
+            # own saved x/y (not `Positions`, which is the *live*, mutable
+            # copy Motion blocks act on) -- both start out equal,
+            # `sync_transforms_from_positions` is what keeps them in sync
+            # as scripts run.
+            let target_name = "{target.name_string()}"
+            let transform = Transform.from_xyz(target.x_or(0.0), target.y_or(0.0), 0.0)
+            # `Text2d.new("")` on every target's own entity (not a separate
+            # bubble entity) -- see `sync_speech_bubbles`' own doc comment
+            # for why this means a bubble currently renders exactly at the
+            # sprite's own anchor point rather than visually offset above
+            # it (a deliberate simplification, not an oversight).
+            if let costume_path = extract_current_costume_to_temp_file(project_path.path.clone(), target_name.clone()):
+                # A real costume was extracted (only possible when
+                # `ProjectPath` names an actual `.sb3` zip, never a
+                # hand-authored raw-JSON fixture -- see that function's own
+                # doc comment) -- no `custom_size` override, so it renders
+                # at the image's native pixel size. Real Scratch's
+                # `bitmapResolution`/per-sprite `size` percent scaling
+                # aren't applied yet -- deliberately deferred, see
+                # README.md's roadmap.
+                #
+                # Every *other* costume this target has gets pre-extracted
+                # and pre-loaded here too, not just the current one --
+                # `TargetCostumeHandles` is what `looks_switchcostumeto`/
+                # `looks_nextcostume` actually swap between at runtime (see
+                # that struct's own doc comment). A costume that fails to
+                # extract on its own falls back to reusing this target's
+                # already-known-good current-costume handle, rather than
+                # leaving a gap in the array that would shift every later
+                # index -- `looks_switchcostumeto`'s own index math assumes
+                # `handles.length == costumes.length` for every target.
+                mut costume_handles = []
+                for i in 0..target.costumes.length:
+                    if let p = extract_costume_at_index_to_temp_file(project_path.path.clone(), target_name.clone(), i):
+                        costume_handles.push(asset_server.load(p.toString()))
+                    else:
+                        costume_handles.push(asset_server.load(costume_path.toString()))
+                mut real_costume_root = commands.spawn((
+                    ScratchSprite(target_id = target_name.clone()),
+                    Sprite.from_image(asset_server.load(costume_path.toString())),
+                    TargetCostumeHandles(handles = costume_handles),
+                    transform))
+                real_costume_root.with_children((parent): drop(parent.spawn((
+                    SpeechBubbleAnchor(target_id = target_name),
+                    Text2d.new(""),
+                    Anchor(Vec2.new(0.0, -1.0)),
+                    Transform.from_xyz(0.0, 0.0, 1.0)))))
+            else:
+                # Fallback placeholder: Stage gets a light backdrop-sized
+                # rect, sprites a small colored square -- unchanged from
+                # before real costume loading existed. No real image to
+                # ever switch between, so `handles = []` (`sync_costume_
+                # from_looks_states` no-ops on an empty array, not a
+                # missing component -- see `TargetCostumeHandles`' own doc
+                # comment for why this stays a plain empty list rather
+                # than skipping the component here).
+                let color = if target.is_stage: Color.srgb(0.9, 0.9, 0.9) else: Color.srgb(0.2, 0.6, 0.9)
+                let size = if target.is_stage: Vec2.new(480.0, 360.0) else: Vec2.new(40.0, 40.0)
+                mut placeholder_root = commands.spawn((
+                    ScratchSprite(target_id = target_name.clone()),
+                    Sprite.from_color(color, size),
+                    TargetCostumeHandles(handles = []),
+                    transform))
+                placeholder_root.with_children((parent): drop(parent.spawn((
+                    SpeechBubbleAnchor(target_id = target_name),
+                    Text2d.new(""),
+                    Anchor(Vec2.new(0.0, -1.0)),
+                    Transform.from_xyz(0.0, 0.0, 1.0)))))
+        for watcher in variable_watchers:
+            # A z of 10.0 (sprites sit at 0.0) so a watcher always renders
+            # above every sprite -- real Scratch draws watchers as a
+            # permanent stage-level overlay, never occluded by sprites.
+            # A real `Visibility` component -- now that `build_variable_
+            # watchers` spawns one of these for *every* Stage variable's
+            # monitor regardless of its initial state (own doc comment),
+            # this needs a starting value here rather than implicitly
+            # defaulting to visible; `sync_variable_watchers` keeps it in
+            # sync with `Vars.watcher_visible` every tick after this.
+            commands.spawn((
+                VariableWatcherTag(variable_id = watcher.variable_id, label = watcher.label),
+                Text2d.new(""),
+                Visibility.Visible,
+                Transform.from_xyz(watcher.x, watcher.y, 10.0)))
+        for watcher in reporter_watchers:
+            # Same "always above every sprite" z=10.0 as a variable
+            # watcher's entity, above.
+            commands.spawn((
+                ReporterWatcherTag(target_id = watcher.target_id, expr = watcher.expr, label = watcher.label),
+                Text2d.new(""),
+                Transform.from_xyz(watcher.x, watcher.y, 10.0)))
+        for watcher in list_watchers:
+            # Same z=10.0 as every other watcher entity, above. A real
+            # `Visibility` component too -- same "spawns one of these for
+            # every list's monitor regardless of its initial state" reason
+            # `VariableWatcherTag`'s own spawn just above already needs
+            # one for, now that `build_list_watchers` no longer gates on
+            # `is_visible()` either; `sync_list_watchers` keeps it in sync
+            # with `Lists.watcher_visible` every tick after this.
+            commands.spawn((
+                ListWatcherTag(list_id = watcher.list_id, label = watcher.label),
+                Text2d.new(""),
+                Visibility.Visible,
+                Transform.from_xyz(watcher.x, watcher.y, 10.0)))
+        # `sensing_askandwait`'s own on-screen box -- one entity, always
+        # present, hidden until a script actually asks something (`sync_
+        # ask_ui` toggles `Visibility` and fills in the real text every
+        # tick). Positioned near the bottom of the stage (`y = -160`, real
+        # Scratch's own 480x360 stage runs `-180..180`), `z = 10.0` so it
+        # renders above sprites, same as every watcher entity above.
+        commands.spawn((
+            AskBoxText(),
+            Text2d.new(""),
+            Visibility.Hidden,
+            Transform.from_xyz(0.0, -160.0, 10.0)))
+
+# Steps every currently-running `Thread` once -- the real per-frame
+# scheduler `step_thread`'s own doc comment describes (`interpreter.br`).
+# A thread that finishes this call is simply dropped from the next tick's
+# queue; one that's still running (yielded at a loop iteration/`wait`/
+# `wait until`) is carried over unchanged; any scripts it started via
+# `Broadcast`/`BroadcastAndWait` this step (`thread.spawned`) become
+# brand-new threads of their own, added to the same next-tick queue --
+# see `Thread`'s own doc comment for why draining `spawned` has to happen
+# here, after every thread's own step, rather than a thread reaching into
+# `PendingThreads` directly mid-step. `spawned` is reset to `[]` right
+# after draining it, every tick, for exactly the same reason `pending.
+# queue` itself used to be reset to `[]` right after being drained in the
+# old run-to-completion version of this system -- a `Thread` that keeps
+# running across many ticks must never re-spawn the same broadcast twice
+# just because its own `spawned` list was never cleared.
+pub def run_pending_threads(mut ResMut<Vars> vars, mut ResMut<Lists> lists, Res<ProcTable> procs, Res<Broadcasts> broadcasts, mut ResMut<Positions> positions, Res<KeyboardState> keyboard, Res<MouseState> mouse, Res<ScratchTimer> timer, mut ResMut<Rng> rng, mut ResMut<LooksStates> looks, mut ResMut<LayerOrders> layer_orders, Res<TargetCostumes> target_costumes, Res<TargetCostumeDims> costume_dims, mut ResMut<SoundQueue> sound_queue, mut ResMut<SpeechBubbles> speech_bubbles, mut ResMut<PendingThreads> pending):
+    let threads = pending.queue.clone()
+    mut still_running = []
+    for thread in threads:
+        var t = thread
+        let done = step_thread(t, vars.pointee, procs.clone(), lists.pointee, broadcasts.clone(), positions.pointee, keyboard.clone(), mouse.clone(), timer.clone(), rng.pointee, looks.pointee, layer_orders.pointee, target_costumes.clone(), costume_dims.clone(), sound_queue.pointee, speech_bubbles.pointee)
+        for script in t.spawned.clone():
+            still_running.push(spawn_thread(script))
+        t.spawned = []
+        if !done:
+            still_running.push(t)
+    pending.queue = still_running
+
+# Marker component for a currently-playing sound entity -- lets
+# `sound_stopallsounds` find and despawn every one of them, real Scratch's
+# own "stop everything, unconditionally" semantics for that block (not
+# scoped to any one target).
+pub struct PlayingSound as Component, Debug:
+    pass
+
+# Drains `SoundQueue` each tick: handles `stop_all_requested` first (despawn
+# every `PlayingSound` entity, matching real Scratch's own ordering --
+# stopping is immediate, not deferred behind any queued plays), then spawns
+# one `AudioPlayer` entity per queued `sound_play` request. `PlaybackSettings.
+# DESPAWN` (not `.ONCE`) -- the entity removes itself once playback finishes,
+# so `PlayingSound`'s own query above only ever reflects sounds *actually
+# still playing*, not stale finished ones. A request whose sound can't be
+# extracted (see `extract_sound_to_temp_file`'s own doc comment -- always
+# true for a raw-JSON fixture, no real asset bytes to extract) is silently
+# dropped, same "rendering/audio nicety, not correctness-critical" rationale
+# as costume loading's own fallback.
+pub def play_queued_sounds(mut Commands commands, Res<ProjectPath> project_path, Res<AssetServer> asset_server, mut ResMut<SoundQueue> sound_queue, Query<(Entity, PlayingSound&)> playing_query):
+    if sound_queue.stop_all_requested:
+        # `Query<(Entity, PlayingSound&)>` (an Entity paired with a real
+        # reference-shaped component), not a bare `Query<Entity, ...>` --
+        # the bare form transpiles its `for` loop to `.iter().cloned()`,
+        # which fails to compile against `Entity` (already `Copy`, not a
+        # reference the way `.cloned()` expects) -- confirmed with a real
+        # `cargo build` before this was written. The tuple shape (same
+        # convention breakout-boring's own `check_for_collisions` already
+        # uses for `Query<(Entity, Transform&, ...), ...>`) sidesteps it.
+        for entity, marker in playing_query:
+            commands.entity(entity).despawn()
+        sound_queue.stop_all_requested = false
+    let requests = sound_queue.play_queue.clone()
+    sound_queue.play_queue = []
+    for request in requests:
+        let volume = request.volume
+        # Real Scratch's own PITCH-to-playback-rate formula (`Scratch3
+        # SoundPlayer`'s `_setPitchShift`, confirmed against real scratch-
+        # audio/Tone.js source, not guessed): `pitch` is in tenths of a
+        # semitone (`SoundQueue.pitches`' own -360..360 range), so semitones
+        # = `pitch / 10`, and a frequency ratio of `2^(semitones/12)` --
+        # combined, `2^(pitch/120)`. `PlaybackSettings.speed` (confirmed via
+        # `bevy_audio`'s own source: "1.0 is normal speed... changes the
+        # play speed of the sound") is exactly this same playback-rate
+        # multiplier, so real Scratch's own naive (non-pitch-preserving)
+        # pitch-shift-via-speed-change maps onto it directly, no
+        # approximation needed.
+        # `as float32` on the whole result, not relying on `pow`'s own
+        # overload resolution to pick the `float32` variant -- confirmed
+        # with a real `cargo build` that `pow(2.0 as float32, ...)` still
+        # resolves to the `float64` overload here (a real `boring`
+        # ambiguity, not something to fight further), leaving a mismatched-
+        # types error against `with_speed`'s own `f32` parameter. Casting
+        # the final result is simpler and works regardless of which
+        # overload actually ran.
+        let rate = pow(2.0, request.pitch / 120.0) as float32
+        if let sound_path = extract_sound_to_temp_file(project_path.path.clone(), request.target_id, request.sound_name):
+            let Handle<AudioSource> handle = asset_server.load(sound_path.toString())
+            # `PlaybackSettings.DESPAWN` bound to its own local first, not
+            # `PlaybackSettings.DESPAWN.with_volume(...)` chained inline --
+            # the transpiler resolves a dotted associated-constant access
+            # followed directly by a method call as one long associated-
+            # item *path* (`PlaybackSettings::DESPAWN::with_volume`, a real
+            # E0223 confirmed with `cargo build`), not "look up the
+            # constant's value, then call a method on it". An intermediate
+            # binding sidesteps it.
+            let base_settings = PlaybackSettings.DESPAWN
+            let with_volume = base_settings.with_volume(Volume.Linear(volume / 100.0))
+            let settings = with_volume.with_speed(rate)
+            # `sound_seteffectto`'s own PAN effect -- `bevy_audio` has no
+            # direct stereo-pan primitive of its own, only spatial audio
+            # ("implemented via simple left-right stereo panning", its own
+            # doc comment), so this repurposes that. Only engaged when
+            # `pan != 0.0` -- the overwhelming majority of real projects
+            # never touch PAN at all, and spatial mode has a real,
+            # documented side effect (below) not worth paying for a
+            # project that never asked for it.
+            if request.pan == 0.0:
+                commands.spawn((PlayingSound(), AudioPlayer(handle), settings))
+            else:
+                var mut spatial_settings = settings
+                spatial_settings.spatial = true
+                # Calibrated against `spawn_camera`'s own 0.1-unit
+                # `SpatialListener` ear gap and `rodio`'s real spatial-
+                # source formula (confirmed against source, `Spatial::
+                # set_positions`): `0.9` keeps the offset (up to +/-0.9 at
+                # full pan) plus the 0.05-unit ear half-gap under the
+                # 1.0-unit no-falloff radius for *both* ears at every pan
+                # value, so PAN shifts the balance between channels
+                # without dropping the sound's overall loudness. The
+                # channel *diff* modifier that formula also applies means
+                # this is an honest, moderate stereo bias (roughly 2:1 at
+                # full pan), not a hard, silence-the-opposite-channel pan
+                # the way a real dedicated `StereoPannerNode` achieves --
+                # `bevy_audio` genuinely has nothing closer to offer.
+                let offset = (request.pan / 100.0) * 0.9
+                commands.spawn((PlayingSound(), AudioPlayer(handle), spatial_settings, Transform.from_xyz(offset, 0.0, 0.0)))
+
+# Drains `SoundQueue.clone_requests`, queued by `control_create_clone_of`'s
+# `exec_simple` case (see that case's own comment, `interpreter.br`, and
+# `CloneRequest`'s own doc comment, `runtime.br`, for why the actual entity
+# spawn is deferred here rather than done inline -- no `Commands`/`Query`
+# access inside `exec_simple`, same reason `sound_play` already defers its
+# own entity spawn to `play_queued_sounds`). Chained right after `run_
+# pending_threads`/`play_queued_sounds`, before every `sync_*_from_*_states`
+# system (`build_app`'s own `.chain()`) -- so a clone's freshly-copied
+# `Positions`/`LooksStates`/etc. entries (already written synchronously by
+# `control_create_clone_of` itself, before this system ever runs) land on
+# its brand-new entity's own `Transform`/`Sprite`/costume the very same
+# tick it's created, not one tick late.
+#
+# A nested `Query` match (walking `sprites` once per queued request to find
+# the *origin*'s own existing entity) -- an untested pattern in this
+# codebase (see `sync_speech_bubbles`'s own doc comment, which deliberately
+# avoided needing exactly this), but the only way to clone the origin's own
+# `TargetCostumeHandles`/`Sprite` onto the new entity: a clone always
+# shares its origin's costume/sound assets, never another clone's (`Target
+# Costumes`/`TargetCostumeDims` stay keyed by origin name only, see
+# `SoundQueue.instance_types`' own doc comment). `Transform` is cloned too,
+# purely as a reasonable starting point -- not load-bearing, since the very
+# next systems in the chain overwrite it from the new entity's own already-
+# seeded `Positions` entry anyway.
+#
+# Also starts the new clone's own `when I start as a clone` thread(s), if
+# its origin has any (`StartAsCloneHats`, built at link time exactly like
+# `Broadcasts`/every other hat-template resource) -- real Scratch's own
+# clone-spawn-time hat, distinct from every other hat kind in that it
+# fires once per *newly created clone*, not on some external event
+# checked every tick. Pushed straight into `PendingThreads.queue` (not
+# `Thread.spawned`, which only exists for threads started *from inside*
+# another thread's own step) since this is a fresh top-level trigger,
+# same as green flag/keypress/click/broadcast.
+pub def spawn_pending_clones(mut Commands commands, mut ResMut<SoundQueue> sound_queue, Res<StartAsCloneHats> start_as_clone_hats, mut ResMut<PendingThreads> pending, Query<(ScratchSprite&, TargetCostumeHandles&, Sprite&, Transform&)> sprites):
+    let requests = sound_queue.clone_requests.clone()
+    sound_queue.clone_requests = []
+    for request in requests:
+        for sprite, handles, spr, transform in sprites:
+            if sprite.target_id == request.origin_name:
+                mut clone_root = commands.spawn((
+                    ScratchSprite(target_id = request.new_id.clone()),
+                    spr.clone(),
+                    handles.clone(),
+                    transform.clone()))
+                clone_root.with_children((parent): drop(parent.spawn((
+                    SpeechBubbleAnchor(target_id = request.new_id.clone()),
+                    Text2d.new(""),
+                    Anchor(Vec2.new(0.0, -1.0)),
+                    Transform.from_xyz(0.0, 0.0, 1.0)))))
+                break
+        # Start one fresh `Thread` per `when I start as a clone` template
+        # this clone's *origin* has (there can be more than one) --
+        # `spawn_thread` already builds a correctly fresh `Frame`/`ExecFrame`
+        # from a `ReceiverScript`, exactly like every other hat-triggered
+        # thread; only the template's own `target_id` needs substituting
+        # from the origin's name to this specific new clone's id first.
+        # Pushed into `pending.queue` directly (not `spawned`, which only
+        # exists for threads spawned *from inside* another thread's own
+        # step) -- same as every other hat-check system, since this is a
+        # brand-new top-level trigger, not a nested broadcast.
+        for template in start_as_clone_hats.get(request.origin_name.clone()):
+            let script = ReceiverScript(target_id = request.new_id.clone(), body = template.body)
+            pending.queue.push(spawn_thread(script))
+
+# Drains `SoundQueue.despawn_requests`, queued by `control_delete_this_
+# clone`'s `step_thread` arm (`interpreter.br`) -- same deferral reasoning
+# as `spawn_pending_clones` above (no `Commands`/`Query` access inside the
+# interpreter). Removes the matching `ScratchSprite` entity and every
+# per-instance resource entry for that instance id -- without this, a
+# project that clones and deletes in a loop would leak one stale entry per
+# clone ever created in `Positions`/`LooksStates`/`LayerOrders`/`SoundQueue.
+# volumes`/`SpeechBubbles`/`SoundQueue.instance_types` forever. No ordering
+# race with a not-yet-stepped new thread is possible: a `CloneRequest`
+# queued during tick N only produces an actual `Thread` in `spawn_pending_
+# clones` (same tick), which only enters `PendingThreads.queue` -- not
+# stepped until tick N+1, the same one-tick lag broadcast-spawned threads
+# already have (`run_pending_threads`'s own doc comment) -- so nothing can
+# ever reference an instance id before `spawn_pending_clones` has created
+# its entity, and nothing can reference it again after this system removes
+# it (the calling thread's own stack was already cleared, synchronously, by
+# the same `step_thread` call that queued the despawn).
+pub def despawn_pending_clones(mut Commands commands, mut ResMut<SoundQueue> sound_queue, mut ResMut<Positions> positions, mut ResMut<LooksStates> looks, mut ResMut<LayerOrders> layer_orders, mut ResMut<SpeechBubbles> speech_bubbles, mut ResMut<Vars> vars, mut ResMut<Lists> lists, Query<(Entity, ScratchSprite&)> sprites):
+    let requests = sound_queue.despawn_requests.clone()
+    sound_queue.despawn_requests = []
+    for instance_id in requests:
+        for entity, sprite in sprites:
+            if sprite.target_id == instance_id:
+                commands.entity(entity).despawn()
+                break
+        positions.remove(instance_id.clone())
+        looks.remove(instance_id.clone())
+        layer_orders.remove(instance_id.clone())
+        sound_queue.remove_volume(instance_id.clone())
+        sound_queue.remove_pitch(instance_id.clone())
+        sound_queue.remove_pan(instance_id.clone())
+        sound_queue.remove_rotation_style(instance_id.clone())
+        sound_queue.remove_draggable(instance_id.clone())
+        sound_queue.remove_pen_state(instance_id.clone())
+        sound_queue.remove_instance_type(instance_id.clone())
+        vars.remove_local(instance_id.clone())
+        lists.remove_local(instance_id.clone())
+        speech_bubbles.remove(instance_id)
+
+# Copies each target's current bubble text (if any) onto its own
+# `SpeechBubbleAnchor` entity's `Text2d` -- a real `ChildOf` child of the
+# sprite's own entity (see that struct's own doc comment for why), so the
+# bubble visibly sits *above* the sprite instead of sharing its own
+# `Transform` and rendering right on top of it. `Text2dWriter` (not direct
+# field assignment) is the same proven mechanism `breakout-boring`'s own
+# `update_scoreboard` already uses for `Text`/`TextUiWriter` --
+# `Text2d`/`Text2dWriter` are the 2D-world equivalent of that same
+# `TextSection`-based API.
+#
+# A direct `Query<(SpeechBubbleAnchor&, mut Text2d&, mut Transform&)>`
+# field write (`.pointee`, using `Text2d`'s own derived
+# `DerefMut<Target=String>`), not `Text2dWriter` -- confirmed with a real
+# test run that `Text2dWriter` needs resources only `TextPlugin`'s
+# font-layout systems insert (panics with "Resource does not exist"
+# without it, the same failure class as an earlier missing
+# `AssetServer`/`Window`), while a plain component field write needs
+# nothing beyond the component itself existing. `Text2d`'s own
+# multi-section/rich-text machinery (what `Text2dWriter` is really for)
+# has no use here -- every bubble is always one plain string.
+#
+# Vertical offset: the anchor's own *local* `Transform.translation.y` (a
+# `ChildOf` child's translation is relative to its parent -- Bevy's own
+# transform propagation combines it with the sprite's real, live position
+# automatically, nothing this system has to track by hand) is set to the
+# sprite's own real half-height (`TargetCostumeDims`, scaled by `LooksState.
+# size`, exactly the same `self_hh` calculation `Touching`'s own AABB math
+# already makes) plus a fixed 10px padding -- not real Scratch's own exact
+# scratch-render pixel math (a whole separate WebGL renderer's own
+# screen-space bubble-shape/tail/clamping logic, not attempted here), but
+# a real, size-aware "sits above the sprite's own top edge" position
+# rather than a fixed, sprite-size-oblivious guess. Combined with the
+# anchor entity's own `Anchor(Vec2.new(0.0, -1.0))` (set once at spawn
+# time, `setup_scratch_project`/`spawn_pending_clones`) -- the text's own
+# BOTTOM edge sits at this translation, so it grows upward from there,
+# never downward back onto the sprite.
+#
+# Origin resolution: `TargetCostumeDims` stays keyed by origin name only,
+# same as every other lookup into it from a live clone -- resolved via
+# `SoundQueue.instance_type_of` first, same established pattern as
+# `sync_costume_from_looks_states`'s own identical need.
+pub def sync_speech_bubbles(Query<(SpeechBubbleAnchor&, mut Text2d&, mut Transform&)> query, Res<SpeechBubbles> speech_bubbles, Res<LooksStates> looks, Res<TargetCostumeDims> costume_dims, Res<SoundQueue> sound_queue):
+    for anchor, text2d, transform in query:
+        let text = speech_bubbles.text_for(anchor.target_id.clone())
+        # `.pointee` inserts exactly one `*` (confirmed with a real `cargo
+        # build`): `*text2d` is a whole `Text2d`, not the inner `String` --
+        # `Text2d`'s own `DerefMut` goes one level further than that, which
+        # `.pointee` doesn't chase automatically. Assigning a freshly built
+        # `Text2d` (via `.new(...)`, the generic-associated-function path,
+        # not the `Text2d(...)` tuple-literal form -- that hits the same
+        # `[external_types]`-whitelist concern `AudioPlayer` needed) is the
+        # correct shape at this exact level, not a workaround.
+        text2d.pointee = Text2d.new("{text}".to_string())
+
+        let s = looks.get(anchor.target_id.clone())
+        let origin = sound_queue.instance_type_of(anchor.target_id.clone())
+        let idx = s.costume_index
+        let dim = costume_dims.get(origin, idx)
+        let scale = s.size / 100.0
+        let hh = (dim.height * scale) / 2.0
+        transform.translation.y = hh + 10.0
+
+# Same direct-field-write shape as `sync_speech_bubbles` (not
+# `Text2dWriter`, same reasoning) -- updates every variable watcher
+# entity's `Text2d` to `"<label>: <current value>"` each tick. Reads
+# `Vars` directly rather than needing a `label` lookup elsewhere: the
+# watcher's `label` was already baked into its own `VariableWatcherTag` at
+# spawn time (see `setup_scratch_project`), so this is a single query, no
+# separate name resolution needed at read time.
+pub def sync_variable_watchers(Query<(VariableWatcherTag&, mut Text2d&, mut Visibility&)> query, Res<Vars> vars):
+    for tag, text2d, visibility in query:
+        # A sprite-local variable's watcher only ever shows the *origin*
+        # sprite's own current value -- clones never get their own
+        # separate watcher UI (watchers are built once from `project.
+        # monitors`, never touched by clone creation, matching real
+        # Scratch). `Vars.owner_of` resolves that live: `""` for a global
+        # (harmless as a `calling_instance_id` there, `get`'s own global
+        # branch ignores it), else the owning sprite's own name -- which
+        # is also its own instance id (identity-seeded, same convention
+        # `SoundQueue.instance_types` established).
+        let value = vars.get(tag.variable_id.clone(), vars.owner_of(tag.variable_id.clone()))
+        text2d.pointee = Text2d.new("{tag.label}: {value}".to_string())
+        # `data_showvariable`/`data_hidevariable`'s own real effect --
+        # same "write the real component every tick" pattern `sync_
+        # visibility_and_size_from_looks_states` already uses for sprites.
+        visibility.pointee = if vars.watcher_shown(tag.variable_id.clone()): Visibility.Visible else: Visibility.Hidden
+
+# Same shape as `sync_variable_watchers`, but re-`eval()`s the watcher's
+# baked-in `Block` every tick instead of a plain `Vars.get` lookup -- a
+# reporter watcher's value (e.g. a sprite's x position) isn't sitting in
+# any resource on its own, it's computed the exact same way any other
+# script's `XPosition`/`YPosition`/`Direction` reporter is. Needs the same
+# full `eval` context `check_greater_than_hats` threads through (every
+# resource `eval` can possibly read, since `Block` is generic and this
+# system doesn't know ahead of time which of the three it holds) even
+# though these three reporters only ever actually touch `positions`.
+pub def sync_reporter_watchers(Query<(ReporterWatcherTag&, mut Text2d&)> query, mut ResMut<Vars> vars, mut ResMut<Lists> lists, Res<ProcTable> procs, Res<Broadcasts> broadcasts, mut ResMut<Positions> positions, Res<KeyboardState> keyboard, Res<MouseState> mouse, Res<ScratchTimer> timer, mut ResMut<Rng> rng, mut ResMut<LooksStates> looks, Res<TargetCostumes> target_costumes, Res<TargetCostumeDims> costume_dims, Res<SoundQueue> sound_queue):
+    for tag, text2d in query:
+        let top_frame = Frame(params = {=}, target_id = tag.target_id.clone())
+        let value = eval(tag.expr.clone(), vars.pointee, top_frame, procs.clone(), lists.pointee, broadcasts.clone(), positions.pointee, keyboard.clone(), mouse.clone(), timer.clone(), rng.pointee, looks.pointee, target_costumes.clone(), costume_dims.clone(), sound_queue.clone())
+        text2d.pointee = Text2d.new("{tag.label}: {value}".to_string())
+
+# List watcher's counterpart -- unlike a variable/reporter watcher's
+# single-line "<label>: <value>", real Scratch's list box shows the
+# label on its own line, above the (possibly multi-line, per
+# `list_watcher_display_string`'s own join rule) contents.
+pub def sync_list_watchers(Query<(ListWatcherTag&, mut Text2d&, mut Visibility&)> query, Res<Lists> lists):
+    for tag, text2d, visibility in query:
+        let contents = list_watcher_display_string(lists.clone(), tag.list_id.clone())
+        # `data_showlist`/`data_hidelist`'s own real effect -- same "write
+        # the real component every tick" pattern `sync_variable_watchers`
+        # already uses.
+        visibility.pointee = if lists.watcher_shown(tag.list_id.clone()): Visibility.Visible else: Visibility.Hidden
+        text2d.pointee = Text2d.new("{tag.label}\n{contents}".to_string())
+
+# Keeps the ask box's real `Visibility`/`Text2d` in sync with `Vars.
+# is_asking()`/`ask_buffer` every tick -- same "write the real component
+# every tick" pattern `sync_visibility_and_size_from_looks_states`/`sync_
+# variable_watchers` already established. A trailing `|` on the typed-so-
+# far line is a plain fixed cursor glyph, not a real blinking caret (no
+# animation/timer wired to it) -- a real, deliberately simple stand-in,
+# not an attempt at a polished text-input widget.
+pub def sync_ask_ui(Query<(AskBoxText&, mut Text2d&, mut Visibility&)> query, Res<Vars> vars):
+    for tag, text2d, visibility in query:
+        if vars.is_asking():
+            visibility.pointee = Visibility.Visible
+            var mut question = ""
+            if let ask = vars.front_ask():
+                question = ask.question
+            text2d.pointee = Text2d.new("{question}\n{vars.ask_buffer}|".to_string())
+        else:
+            visibility.pointee = Visibility.Hidden
+            text2d.pointee = Text2d.new("")
+
+# Drains real keyboard character input into `Vars.ask_buffer`, submitting
+# on Enter -- `sensing_askandwait`'s own text-entry half (the pausing/
+# resuming half lives in `step_thread`'s `WaitingForAnswer` arm,
+# `interpreter.br`). Always reads every `KeyboardInput` event every tick,
+# even while nothing is asking (`Events<T>` auto-expires unread events
+# after two frames regardless, so *not* draining while idle would risk a
+# stray keystroke leaking into the very next ask that starts) -- acting on
+# one only if `vars.is_asking()`.
+#
+# `event.state == ButtonState.Pressed` only -- skips the matching Release
+# event every real keypress also generates (this project's own established
+# edge-triggered-input convention, same as `key_option_just_pressed`'s own
+# `.just_pressed()` calls elsewhere). Checked by physical `key_code`
+# (`KeyCode.Enter`/`KeyCode.Backspace`), not `event.logical_key`'s own
+# `Key` enum -- simpler and reuses an already-proven type this project's
+# own `KeyboardState`/`check_key_press_hats` already compare `KeyCode`
+# values against everywhere. Printable characters come from `event.text`
+# (`Option<SmolStr>`, real Bevy's own "already resolved to real input
+# text, correct across keyboard layouts" field) rather than pattern-
+# matching `Key::Character` out of `logical_key` by hand.
+pub def handle_ask_text_input(mut MessageReader<KeyboardInput> events, mut ResMut<Vars> vars):
+    for event in events.read():
+        if event.state == ButtonState.Pressed and vars.is_asking():
+            if event.key_code == KeyCode.Enter:
+                if let ask = vars.front_ask():
+                    # Computed into a local first, not `vars.set_answer(
+                    # vars.ask_buffer.clone())` inline -- the same
+                    # overlapping-mutable/immutable-borrow shape `SetVar`'s
+                    # own doc comment in `interpreter.br` already
+                    # documents for `vars.set(id, eval(...))`, a real
+                    # `cargo build` E0502 confirmed here too.
+                    let submitted = vars.ask_buffer.clone()
+                    vars.set_answer(submitted)
+                    vars.last_answered_id = ask.ask_id
+                    mut remaining = vars.ask_queue.clone()
+                    remaining.remove(0)
+                    vars.ask_queue = remaining
+                    vars.ask_buffer = ""
+            elif event.key_code == KeyCode.Backspace:
+                # NOT `buf[0..end]` -- confirmed with a real `cargo build`
+                # that string slicing with a *computed* (non-literal)
+                # upper bound transpiles as if slicing a `Vec` (a real
+                # `.to_vec()` call, E0599 against `str`), regardless of an
+                # intermediate `let end = ...` binding. Popping the last
+                # character off `.chars()` (already proven elsewhere in
+                # this codebase, `book.md`'s own `s.chars()`/`arr.pop()`
+                # methods) and rebuilding sidesteps it entirely -- a
+                # no-op, safely, if the buffer's already empty (`Vec::pop`
+                # on an empty vec is itself a safe no-op).
+                mut chars = vars.ask_buffer.chars()
+                chars.pop()
+                var mut rebuilt = ""
+                for c in chars:
+                    rebuilt = "{rebuilt}{c}"
+                vars.ask_buffer = rebuilt
+            else:
+                if let typed = event.text:
+                    vars.ask_buffer = "{vars.ask_buffer}{typed}"
+
+# Maps one Scratch KEY_OPTION string to whether that physical key was
+# *just* pressed this tick -- `event_whenkeypressed`'s own edge-triggered
+# semantics, checked directly against real Bevy input (not through
+# `KeyboardState`, which is level-triggered -- see its own doc comment).
+# Same tracked-key set as `sync_keyboard_state` -- space + 4 arrows + every
+# letter/digit, confirmed against real `scratch-blocks` source
+# (`sensing_keyoptions`'s `field_dropdown` options, `blocks/sensing.ts`)
+# to be the COMPLETE set of individually nameable KEY_OPTION values (no
+# punctuation option exists in the real dropdown at all -- verified, not
+# assumed). `"any"` reads Bevy's own `get_just_pressed()` iterator
+# directly instead of OR-ing the 41 named checks above -- true parity with
+# real Scratch's own "any key at all" semantics (covers every physical key
+# Bevy reports, not just the ones this project can name), same reasoning
+# `KeyboardState.any_key_pressed`'s own doc comment gives for the
+# level-triggered reporter side.
+# Takes a plain `ButtonInput<KeyCode>` (not `Res<...>`) -- `keyboard.clone()`
+# at the one call site (`check_key_press_hats`, needed to call this once per
+# hat in a loop without moving `keyboard` out on the first iteration)
+# resolves to cloning the *inner* `ButtonInput` through `Res`'s `Deref`, not
+# `Res` itself (confirmed with a real `cargo build` before this was
+# written), so this parameter type is what the call site actually produces.
+def bool key_option_just_pressed(ButtonInput<KeyCode> keyboard, string key_option):
+    if key_option == "space":
+        keyboard.just_pressed(KeyCode.Space)
+    elif key_option == "up arrow":
+        keyboard.just_pressed(KeyCode.ArrowUp)
+    elif key_option == "down arrow":
+        keyboard.just_pressed(KeyCode.ArrowDown)
+    elif key_option == "left arrow":
+        keyboard.just_pressed(KeyCode.ArrowLeft)
+    elif key_option == "right arrow":
+        keyboard.just_pressed(KeyCode.ArrowRight)
+    elif key_option == "a":
+        keyboard.just_pressed(KeyCode.KeyA)
+    elif key_option == "b":
+        keyboard.just_pressed(KeyCode.KeyB)
+    elif key_option == "c":
+        keyboard.just_pressed(KeyCode.KeyC)
+    elif key_option == "d":
+        keyboard.just_pressed(KeyCode.KeyD)
+    elif key_option == "e":
+        keyboard.just_pressed(KeyCode.KeyE)
+    elif key_option == "f":
+        keyboard.just_pressed(KeyCode.KeyF)
+    elif key_option == "g":
+        keyboard.just_pressed(KeyCode.KeyG)
+    elif key_option == "h":
+        keyboard.just_pressed(KeyCode.KeyH)
+    elif key_option == "i":
+        keyboard.just_pressed(KeyCode.KeyI)
+    elif key_option == "j":
+        keyboard.just_pressed(KeyCode.KeyJ)
+    elif key_option == "k":
+        keyboard.just_pressed(KeyCode.KeyK)
+    elif key_option == "l":
+        keyboard.just_pressed(KeyCode.KeyL)
+    elif key_option == "m":
+        keyboard.just_pressed(KeyCode.KeyM)
+    elif key_option == "n":
+        keyboard.just_pressed(KeyCode.KeyN)
+    elif key_option == "o":
+        keyboard.just_pressed(KeyCode.KeyO)
+    elif key_option == "p":
+        keyboard.just_pressed(KeyCode.KeyP)
+    elif key_option == "q":
+        keyboard.just_pressed(KeyCode.KeyQ)
+    elif key_option == "r":
+        keyboard.just_pressed(KeyCode.KeyR)
+    elif key_option == "s":
+        keyboard.just_pressed(KeyCode.KeyS)
+    elif key_option == "t":
+        keyboard.just_pressed(KeyCode.KeyT)
+    elif key_option == "u":
+        keyboard.just_pressed(KeyCode.KeyU)
+    elif key_option == "v":
+        keyboard.just_pressed(KeyCode.KeyV)
+    elif key_option == "w":
+        keyboard.just_pressed(KeyCode.KeyW)
+    elif key_option == "x":
+        keyboard.just_pressed(KeyCode.KeyX)
+    elif key_option == "y":
+        keyboard.just_pressed(KeyCode.KeyY)
+    elif key_option == "z":
+        keyboard.just_pressed(KeyCode.KeyZ)
+    elif key_option == "0":
+        keyboard.just_pressed(KeyCode.Digit0)
+    elif key_option == "1":
+        keyboard.just_pressed(KeyCode.Digit1)
+    elif key_option == "2":
+        keyboard.just_pressed(KeyCode.Digit2)
+    elif key_option == "3":
+        keyboard.just_pressed(KeyCode.Digit3)
+    elif key_option == "4":
+        keyboard.just_pressed(KeyCode.Digit4)
+    elif key_option == "5":
+        keyboard.just_pressed(KeyCode.Digit5)
+    elif key_option == "6":
+        keyboard.just_pressed(KeyCode.Digit6)
+    elif key_option == "7":
+        keyboard.just_pressed(KeyCode.Digit7)
+    elif key_option == "8":
+        keyboard.just_pressed(KeyCode.Digit8)
+    elif key_option == "9":
+        keyboard.just_pressed(KeyCode.Digit9)
+    elif key_option == "any":
+        keyboard.get_just_pressed().len() > 0
+    else:
+        false
+
+# Populates `KeyboardState.pressed_keys` from real Bevy input each tick --
+# the level-triggered snapshot `sensing_keypressed` reads inside `eval`.
+# Tracks space + the four arrow keys + every letter/digit (real Scratch's
+# KEY_OPTION dropdown also offers some punctuation keys this project still
+# doesn't track -- a narrower, documented gap than the old "letters/digits
+# missing entirely" one; see README.md's roadmap). Stored key strings are
+# lowercase single letters/plain digit strings, matching real scratch-vm's
+# own KEY_OPTION dropdown values verified against source (`key_option_
+# just_pressed`'s own doc comment).
+pub def sync_keyboard_state(mut ResMut<KeyboardState> state, Res<ButtonInput<KeyCode>> keyboard):
+    mut pressed = []
+    if keyboard.pressed(KeyCode.Space):
+        pressed.push("space")
+    if keyboard.pressed(KeyCode.ArrowUp):
+        pressed.push("up arrow")
+    if keyboard.pressed(KeyCode.ArrowDown):
+        pressed.push("down arrow")
+    if keyboard.pressed(KeyCode.ArrowLeft):
+        pressed.push("left arrow")
+    if keyboard.pressed(KeyCode.ArrowRight):
+        pressed.push("right arrow")
+    if keyboard.pressed(KeyCode.KeyA):
+        pressed.push("a")
+    if keyboard.pressed(KeyCode.KeyB):
+        pressed.push("b")
+    if keyboard.pressed(KeyCode.KeyC):
+        pressed.push("c")
+    if keyboard.pressed(KeyCode.KeyD):
+        pressed.push("d")
+    if keyboard.pressed(KeyCode.KeyE):
+        pressed.push("e")
+    if keyboard.pressed(KeyCode.KeyF):
+        pressed.push("f")
+    if keyboard.pressed(KeyCode.KeyG):
+        pressed.push("g")
+    if keyboard.pressed(KeyCode.KeyH):
+        pressed.push("h")
+    if keyboard.pressed(KeyCode.KeyI):
+        pressed.push("i")
+    if keyboard.pressed(KeyCode.KeyJ):
+        pressed.push("j")
+    if keyboard.pressed(KeyCode.KeyK):
+        pressed.push("k")
+    if keyboard.pressed(KeyCode.KeyL):
+        pressed.push("l")
+    if keyboard.pressed(KeyCode.KeyM):
+        pressed.push("m")
+    if keyboard.pressed(KeyCode.KeyN):
+        pressed.push("n")
+    if keyboard.pressed(KeyCode.KeyO):
+        pressed.push("o")
+    if keyboard.pressed(KeyCode.KeyP):
+        pressed.push("p")
+    if keyboard.pressed(KeyCode.KeyQ):
+        pressed.push("q")
+    if keyboard.pressed(KeyCode.KeyR):
+        pressed.push("r")
+    if keyboard.pressed(KeyCode.KeyS):
+        pressed.push("s")
+    if keyboard.pressed(KeyCode.KeyT):
+        pressed.push("t")
+    if keyboard.pressed(KeyCode.KeyU):
+        pressed.push("u")
+    if keyboard.pressed(KeyCode.KeyV):
+        pressed.push("v")
+    if keyboard.pressed(KeyCode.KeyW):
+        pressed.push("w")
+    if keyboard.pressed(KeyCode.KeyX):
+        pressed.push("x")
+    if keyboard.pressed(KeyCode.KeyY):
+        pressed.push("y")
+    if keyboard.pressed(KeyCode.KeyZ):
+        pressed.push("z")
+    if keyboard.pressed(KeyCode.Digit0):
+        pressed.push("0")
+    if keyboard.pressed(KeyCode.Digit1):
+        pressed.push("1")
+    if keyboard.pressed(KeyCode.Digit2):
+        pressed.push("2")
+    if keyboard.pressed(KeyCode.Digit3):
+        pressed.push("3")
+    if keyboard.pressed(KeyCode.Digit4):
+        pressed.push("4")
+    if keyboard.pressed(KeyCode.Digit5):
+        pressed.push("5")
+    if keyboard.pressed(KeyCode.Digit6):
+        pressed.push("6")
+    if keyboard.pressed(KeyCode.Digit7):
+        pressed.push("7")
+    if keyboard.pressed(KeyCode.Digit8):
+        pressed.push("8")
+    if keyboard.pressed(KeyCode.Digit9):
+        pressed.push("9")
+    state.pressed_keys = pressed
+    state.any_key_pressed = keyboard.get_pressed().len() > 0
+
+# Populates `MouseState` from real Bevy input each tick -- see
+# `MouseState`'s own doc comment for the coordinate-conversion assumption
+# (an unscaled default `Camera2d`, matching what `spawn_camera` actually
+# sets up). `Single<Window&>` (no `With<PrimaryWindow>` filter) is enough
+# since this project never spawns more than one window; a headless test
+# with no `WindowPlugin` at all simply has zero matching entities, which
+# `Single` treats as "skip this system for this tick" rather than a panic
+# (unlike a missing `Res<T>`), so this is safe to run unconditionally.
+pub def sync_mouse_state(mut ResMut<MouseState> state, Single<Window&> window, Res<ButtonInput<MouseButton>> mouse_buttons):
+    state.down = mouse_buttons.pressed(MouseButton.Left)
+    if let pos = window.cursor_position():
+        state.x = pos.x - (window.width() / 2.0)
+        state.y = (window.height() / 2.0) - pos.y
+
+# `time.delta_secs()` -- same accessor `breakout-boring`'s own
+# `apply_velocity` already uses. Real Scratch's timer resets to 0 whenever
+# the green flag is clicked, which is exactly `ScratchTimer`'s own Startup
+# seeding in `setup_scratch_project` -- there's no separate "reset" event
+# to handle here since this project only ever runs one project load per
+# `App` lifetime (`sensing_resettimer` -- a *mid-run* reset -- isn't
+# implemented yet, a real gap, see README.md's roadmap).
+pub def sync_scratch_timer(mut ResMut<ScratchTimer> timer, Res<Time> time, mut ResMut<SoundQueue> sound_queue):
+    # `sensing_resettimer`'s own deferred request (`SoundQueue.reset_
+    # timer_requested`, see its own doc comment for why it's not a direct
+    # write from `exec_simple`) -- checked here, the one place that
+    # already has real `mut ResMut<ScratchTimer>` access. Resets straight
+    # to `0.0` and skips adding this tick's own `delta_secs()` on top --
+    # a deliberate simplification (real Scratch's own reset also lands on
+    # a *slightly* nonzero value by the time anything next reads it,
+    # continuous wall-clock time having no tick boundaries to land
+    # exactly on) rather than a materially different behavior.
+    if sound_queue.reset_timer_requested:
+        timer.elapsed = 0.0
+        sound_queue.reset_timer_requested = false
+    else:
+        timer.elapsed = timer.elapsed + time.delta_secs()
+
+# Checked directly against real Bevy input (via `key_option_just_pressed`),
+# not through `KeyboardState` -- an edge-triggered check, run once per tick,
+# queues each matching hat's script exactly once on the tick its key
+# transitions to pressed (never re-fires while the key stays held, matching
+# real Scratch's own `event_whenkeypressed` semantics).
+#
+# Fanned out to every live instance of each hat's own origin
+# (`instances_of`, `runtime.br`), not just the origin -- real Scratch fires
+# `when key pressed` on every currently-live clone of the sprite that owns
+# it too, not only the original.
+#
+# Skipped entirely while `Vars.is_asking()` -- typing an answer into
+# `sensing_askandwait`'s own on-screen box would otherwise also fire
+# "when space key pressed" every time the answer happens to contain a
+# space (the only tracked key realistically typed into free text), a real
+# false-positive real Scratch's own ask box avoids by capturing keyboard
+# focus while it's open.
+pub def check_key_press_hats(Res<ButtonInput<KeyCode>> keyboard, Res<KeyPressHats> key_press_hats, Res<SoundQueue> sound_queue, Res<Vars> vars, mut ResMut<PendingThreads> pending):
+    if !vars.is_asking():
+        for hat in key_press_hats.hats.clone():
+            # `keyboard.clone()` (an inherent method `Res<T>` provides
+            # specifically for this -- deliberately not the `Clone`
+            # trait, so it doesn't collide with cloning the *inner*
+            # resource through `Res`'s `Deref`) -- needed because passing
+            # `keyboard` itself would move it out on the loop's first
+            # iteration, and every iteration needs it again.
+            if key_option_just_pressed(keyboard.clone(), hat.key_option):
+                for instance_id in instances_of(sound_queue.instance_types.clone(), hat.script.target_id.clone()):
+                    let script = ReceiverScript(target_id = instance_id, body = hat.script.body.clone())
+                    pending.queue.push(spawn_thread(script))
+
+# `event_whenthisspriteclicked` -- edge-triggered against real Bevy input
+# (`ButtonInput<MouseButton>.just_pressed`, the same primitive `check_key_
+# press_hats` uses for keys) *and* an AABB hit test against the hat's own
+# owning target (`touching_point`, `runtime.br` -- the exact same bounding-
+# box math `sensing_touchingobject`'s mouse-touching case already uses).
+# A hidden target is never clickable, matching real Scratch and the same
+# visibility gate `Touching`'s own sprite-to-sprite case already applies.
+# `mouse` (not raw cursor position) since `sync_mouse_state` (chained
+# before this system) already converts real window pixel coordinates into
+# this project's stage-centered, y-up space -- no reason to redo that
+# conversion here.
+#
+# Also handles `event_whenstageclicked` now -- a genuinely separate
+# opcode real Scratch's own editor saves for this exact block dragged
+# onto the Stage (confirmed against real source, `build_click_hats`'s own
+# doc comment in `linker.br`), which used to silently never fire at all.
+# The Stage gets its own special-cased branch below, not the AABB/
+# `TargetCostumeDims` path every sprite hat uses -- the Stage always
+# fills the fixed 480x360 stage rect regardless of its own backdrop's
+# real decoded pixel size, and has no `looks_hide`/`looks_show` concept
+# of its own to gate on.
+#
+# Unlike `check_key_press_hats`/`check_greater_than_hats`, fanning out to
+# live clones isn't just "spawn one more thread per instance" -- the AABB
+# hit test itself has to run *per instance*, since each clone can be
+# positioned differently and clicked independently, not tested once against
+# the origin's own position. `costume_dims.get` still keys off the *origin*
+# name, not the instance id -- costume dimensions are Type-level, shared by
+# every clone of a sprite (see `SoundQueue.instance_types`' own doc
+# comment), never per-instance.
+pub def check_click_hats(Res<ButtonInput<MouseButton>> mouse_buttons, Res<MouseState> mouse, Res<ClickHats> click_hats, Res<Positions> positions, Res<LooksStates> looks, Res<TargetCostumeDims> costume_dims, Res<SoundQueue> sound_queue, mut ResMut<PendingThreads> pending):
+    if mouse_buttons.just_pressed(MouseButton.Left):
+        for hat in click_hats.hats.clone():
+            let origin_name = hat.script.target_id.clone()
+            if origin_name == "Stage":
+                # `event_whenstageclicked` -- the Stage always fills the
+                # whole fixed 480x360 stage rect regardless of its own
+                # current backdrop's real decoded pixel size (unlike a
+                # sprite costume, whose native size determines its own
+                # footprint) -- a plain fixed-bounds check, not the AABB-
+                # via-`TargetCostumeDims` machinery every sprite click hat
+                # below needs. No visibility gate either -- the Stage has
+                # no `looks_hide`/`looks_show` concept of its own.
+                if mouse.x >= -240.0 and mouse.x <= 240.0 and mouse.y >= -180.0 and mouse.y <= 180.0:
+                    let script = ReceiverScript(target_id = "Stage", body = hat.script.body.clone())
+                    pending.queue.push(spawn_thread(script))
+            else:
+                for instance_id in instances_of(sound_queue.instance_types.clone(), origin_name.clone()):
+                    let s = looks.get(instance_id.clone())
+                    if s.visible:
+                        let pos = positions.get(instance_id.clone())
+                        let dim = costume_dims.get(origin_name.clone(), s.costume_index)
+                        let scale = s.size / 100.0
+                        let half_w = (dim.width * scale) / 2.0
+                        let half_h = (dim.height * scale) / 2.0
+                        if touching_point(pos.x, pos.y, half_w, half_h, mouse.x, mouse.y):
+                            let script = ReceiverScript(target_id = instance_id, body = hat.script.body.clone())
+                            pending.queue.push(spawn_thread(script))
+
+# Real click-and-drag mouse interaction, unlocked by `sensing_
+# setdragmode` (`SoundQueue.draggable`, a real per-instance flag a script
+# can toggle -- previously a documented no-op, since no interaction
+# system existed yet to read it). Picks the TOPMOST (highest `LayerOrders`
+# rank) visible, draggable instance whose AABB contains the mouse on the
+# tick the left button is first pressed -- same `touching_point` AABB math
+# `check_click_hats` already uses for its own mouse-hit test, just fanned
+# out across *every* live instance instead of only the ones with a click
+# hat, and z-sorted (real Scratch always picks the front-most sprite under
+# the cursor when several overlap, confirmed against real scratch-gui
+# source's own `onStartDrag`/`renderer.pick`).
+#
+# `offset_x`/`offset_y` (`DragState`'s own doc comment) are captured once
+# at pick time and re-applied every tick the button stays held, so the
+# sprite stays glued to wherever it was actually grabbed rather than
+# snapping its center to the cursor. Re-checks `get_draggable` every tick
+# (not just at pick time) -- if a script calls `set drag mode to [not
+# draggable]` while a sprite is being dragged, or the dragged clone gets
+# deleted (`remove_draggable` on despawn falls back to the same `false`
+# default `get_draggable` already returns for a never-draggable target),
+# the drag stops cleanly instead of continuing to move a sprite that
+# shouldn't be draggable anymore.
+pub def handle_sprite_dragging(Res<ButtonInput<MouseButton>> mouse_buttons, Res<MouseState> mouse, Res<SoundQueue> sound_queue, Res<LooksStates> looks, Res<TargetCostumeDims> costume_dims, Res<LayerOrders> layer_orders, mut ResMut<Positions> positions, mut ResMut<DragState> drag_state):
+    if mouse_buttons.just_pressed(MouseButton.Left):
+        let {string=string} instance_types = sound_queue.instance_types.clone()
+        let {string=bool} draggable_now = sound_queue.draggable.clone()
+        var mut best_id = ""
+        var best_order = 0
+        var found = false
+        for id, origin_name in instance_types:
+            let is_draggable = draggable_now[id.clone()] else false
+            if is_draggable:
+                let s = looks.get(id.clone())
+                if s.visible:
+                    let pos = positions.get(id.clone())
+                    let dim = costume_dims.get(origin_name.clone(), s.costume_index)
+                    let scale = s.size / 100.0
+                    let half_w = (dim.width * scale) / 2.0
+                    let half_h = (dim.height * scale) / 2.0
+                    if touching_point(pos.x, pos.y, half_w, half_h, mouse.x, mouse.y):
+                        let order = layer_orders.get(id.clone())
+                        if !found or order > best_order:
+                            best_id = id
+                            best_order = order
+                            found = true
+        if found:
+            let pos = positions.get(best_id.clone())
+            drag_state.dragging_id = best_id
+            drag_state.offset_x = pos.x - mouse.x
+            drag_state.offset_y = pos.y - mouse.y
+    if drag_state.dragging_id != "":
+        if mouse_buttons.pressed(MouseButton.Left) and sound_queue.get_draggable(drag_state.dragging_id.clone()):
+            let current = positions.get(drag_state.dragging_id.clone())
+            positions.set(drag_state.dragging_id.clone(), Position(x = mouse.x + drag_state.offset_x, y = mouse.y + drag_state.offset_y, direction = current.direction))
+        else:
+            drag_state.dragging_id = ""
+
+# Checked by actually evaluating each hat's VALUE expression against the
+# full runtime state (unlike `check_key_press_hats`, there's no cheap
+# direct-Bevy-resource check available here -- the threshold can be any
+# expression, not just a literal). Both "TIMER" and "LOUDNESS" are
+# supported -- LOUDNESS via `current_loudness()`'s own real `-1` sentinel
+# (see that function's own doc comment), correct for the no-microphone
+# condition this project is always in, not a guess. Any other menu value
+# evaluates `false` rather than crashing.
+# Rebuilds the whole `hats` vec (never an indexed/keyed assignment into an
+# existing element) to update each hat's own `was_true` -- the same
+# whole-collection-replace pattern `PendingThreads`/`SoundQueue` already
+# use for draining, and deliberately avoids probing whether a `[T]`-index
+# assignment through a `var`-parameter hits the same class of transpiler
+# bug already found and worked around for dict fields (see
+# `SpeechBubbles.set`'s own doc comment) -- untested for a plain list
+# index, not worth risking here.
+#
+# The condition itself doesn't depend on which instance is running it (only
+# "TIMER" is supported, a target-agnostic reporter) -- so `was_true`
+# tracking stays once per *template*, but on a true transition, one thread
+# is started per currently-live instance of that template's origin
+# (`instances_of`, `runtime.br`), not just the origin, matching real
+# Scratch's own "every live clone gets its own copy of every hat" semantics.
+pub def check_greater_than_hats(mut ResMut<Vars> vars, mut ResMut<Lists> lists, Res<ProcTable> procs, Res<Broadcasts> broadcasts, mut ResMut<Positions> positions, Res<KeyboardState> keyboard, Res<MouseState> mouse, Res<ScratchTimer> timer, mut ResMut<Rng> rng, mut ResMut<LooksStates> looks, Res<TargetCostumes> target_costumes, Res<TargetCostumeDims> costume_dims, Res<SoundQueue> sound_queue, mut ResMut<GreaterThanHats> greater_than_hats, mut ResMut<PendingThreads> pending):
+    let hats = greater_than_hats.hats.clone()
+    mut new_hats = []
+    for hat in hats:
+        let is_true = if hat.menu == "TIMER":
+            let top_frame = Frame(params = {=}, target_id = hat.script.target_id.clone())
+            let threshold = eval(hat.value_expr.clone(), vars.pointee, top_frame, procs.clone(), lists.pointee, broadcasts.clone(), positions.pointee, keyboard.clone(), mouse.clone(), timer.clone(), rng.pointee, looks.pointee, target_costumes.clone(), costume_dims.clone(), sound_queue.clone()).to_num()
+            ScratchNumber.from_f32(timer.elapsed).gt_owned(threshold)
+        elif hat.menu == "LOUDNESS":
+            # `current_loudness()`'s own doc comment (`runtime.br`) --
+            # always `-1` today (no microphone subsystem), so this is
+            # real, correct behavior for the condition this project is
+            # always in, not a guess: matches whatever `threshold` a
+            # project actually uses, same as real Scratch would.
+            let top_frame = Frame(params = {=}, target_id = hat.script.target_id.clone())
+            let threshold = eval(hat.value_expr.clone(), vars.pointee, top_frame, procs.clone(), lists.pointee, broadcasts.clone(), positions.pointee, keyboard.clone(), mouse.clone(), timer.clone(), rng.pointee, looks.pointee, target_costumes.clone(), costume_dims.clone(), sound_queue.clone()).to_num()
+            ScratchNumber.from_f32(current_loudness()).gt_owned(threshold)
+        else:
+            false
+        if is_true and !hat.was_true:
+            for instance_id in instances_of(sound_queue.instance_types.clone(), hat.script.target_id.clone()):
+                let script = ReceiverScript(target_id = instance_id, body = hat.script.body.clone())
+                pending.queue.push(spawn_thread(script))
+        new_hats.push(GreaterThanHat(menu = hat.menu, value_expr = hat.value_expr, was_true = is_true, script = hat.script))
+    greater_than_hats.hats = new_hats
+
+# `event_whentouchingobject` -- unlike `check_greater_than_hats`' own
+# single template-level `was_true` (its TIMER condition is target-
+# agnostic), touching-status genuinely depends on *which instance* is
+# asking, so this tracks one `was_true` per live instance
+# (`TouchingObjectHat.was_true_by_instance`), fanned out the same
+# `instances_of` way every other hat-template system already does. Each
+# instance's own transition map entry is rebuilt fresh into a new
+# `{=}`-bound local every tick (never index-assigned in place into the
+# old map) -- the same nested-mutable-dict transpiler workaround the
+# sprite-local-variables round already established for this exact shape.
+# `hat.touching_block` is `sensing_touchingobject`'s own already-linked
+# `Block(kind = BlockKind.Touching(...))` -- `eval`-ing it per instance
+# (via a per-instance `Frame`) reuses `Touching`'s own AABB/mouse/edge
+# dispatch wholesale, same as `event_whenthisspriteclicked` already does
+# for its own click-AABB check.
+pub def check_touching_object_hats(mut ResMut<Vars> vars, mut ResMut<Lists> lists, Res<ProcTable> procs, Res<Broadcasts> broadcasts, mut ResMut<Positions> positions, Res<KeyboardState> keyboard, Res<MouseState> mouse, Res<ScratchTimer> timer, mut ResMut<Rng> rng, mut ResMut<LooksStates> looks, Res<TargetCostumes> target_costumes, Res<TargetCostumeDims> costume_dims, Res<SoundQueue> sound_queue, mut ResMut<TouchingObjectHats> touching_hats, mut ResMut<PendingThreads> pending):
+    let hats = touching_hats.hats.clone()
+    mut new_hats = []
+    for hat in hats:
+        mut new_was_true = {=}
+        let {string=bool} was_true_by_instance = hat.was_true_by_instance.clone()
+        for instance_id in instances_of(sound_queue.instance_types.clone(), hat.script.target_id.clone()):
+            let top_frame = Frame(params = {=}, target_id = instance_id.clone())
+            let is_touching = eval(hat.touching_block.clone(), vars.pointee, top_frame, procs.clone(), lists.pointee, broadcasts.clone(), positions.pointee, keyboard.clone(), mouse.clone(), timer.clone(), rng.pointee, looks.pointee, target_costumes.clone(), costume_dims.clone(), sound_queue.clone()).truthy()
+            let was_true = was_true_by_instance[instance_id.clone()] else false
+            if is_touching and !was_true:
+                let script = ReceiverScript(target_id = instance_id.clone(), body = hat.script.body.clone())
+                pending.queue.push(spawn_thread(script))
+            new_was_true[instance_id] = is_touching
+        new_hats.push(TouchingObjectHat(touching_block = hat.touching_block, was_true_by_instance = new_was_true, script = hat.script))
+    touching_hats.hats = new_hats
+
+# `event_whenbackdropswitchesto` -- edge-detected against the Stage's own
+# current backdrop name, not re-checked as a level condition the way
+# `check_greater_than_hats` is (see `BackdropSwitchHats.last_backdrop_
+# name`'s own doc comment for why this project needs to detect the switch
+# this way at all, unlike real scratch-vm's own direct `startHats` call
+# from inside `switchBackdrop`). Fans out to every live clone of a hat's
+# own origin sprite, same `instances_of` pattern `check_greater_than_
+# hats`/`check_key_press_hats` already use -- a backdrop switch is
+# project-wide, so any clone with a matching hat should fire too, not
+# just the original.
+pub def check_backdrop_switch_hats(mut ResMut<BackdropSwitchHats> backdrop_hats, Res<LooksStates> looks, Res<TargetCostumes> target_costumes, Res<SoundQueue> sound_queue, mut ResMut<PendingThreads> pending):
+    let idx = looks.get("Stage").costume_index
+    let names = target_costumes.get("Stage")
+    let current_name = if idx >= 0 and idx < names.length: names[idx] else: ""
+    if current_name != backdrop_hats.last_backdrop_name:
+        backdrop_hats.last_backdrop_name = current_name.clone()
+        # `.clone()`'d into a local first, not iterated straight off the
+        # `ResMut`-wrapped field -- same "can't move out of a `ResMut`
+        # dereference" shape `check_greater_than_hats`' own `let hats =
+        # greater_than_hats.hats.clone()` already works around.
+        let hats = backdrop_hats.hats.clone()
+        for hat in hats:
+            if hat.backdrop_name == current_name:
+                for instance_id in instances_of(sound_queue.instance_types.clone(), hat.script.target_id.clone()):
+                    let script = ReceiverScript(target_id = instance_id, body = hat.script.body.clone())
+                    pending.queue.push(spawn_thread(script))
+
+# Copies each target's `Positions` entry onto its `ScratchSprite` entity's
+# `Transform` once per tick, *after* `run_pending_threads` (see `build_app`'s
+# `.chain()`) -- Motion blocks mutate the plain `Positions` resource, not a
+# live `Transform` directly, keeping the interpreter itself Bevy-free (see
+# `Positions`' own doc comment); this system is the one and only place that
+# bridges the two.
+#
+# Also applies real Scratch's own three rotation styles, ported from
+# `RenderedTarget._getRenderedDirectionAndScale` (`rendered-target.js`),
+# not guessed:
+#
+# - "all around": the sprite's `Transform.rotation` tracks `direction`
+#   directly. Real Scratch's own rendering convention treats `direction =
+#   90` (facing right) as the costume's own *unrotated* pose (confirmed by
+#   `_getRenderedDirectionAndScale` forcing `finalDirection = 90` for the
+#   other two styles below, i.e. "no visual rotation" -- 90 IS the zero
+#   point), so the visual rotation *clockwise* from that pose is `direction
+#   - 90` degrees. Bevy's `Quat::from_rotation_z` is counter-clockwise-
+#   positive (standard math convention, Z pointing out of the screen), so
+#   this negates that: `(90 - direction)` degrees, converted to radians.
+#   Sanity-checked by hand: direction=90 (right) -> 0 rotation (matches the
+#   zero point); direction=0 (up) -> +90 degrees CCW from "facing right" ->
+#   faces up, correct; direction=180 (down) -> -90 degrees (CW) -> faces
+#   down, correct.
+# - "left-right": no rotation matrix at all (forced to the same "facing
+#   right" zero point as "don't rotate" below) -- instead, `Sprite.flip_x`
+#   mirrors the costume horizontally whenever `direction < 0` (real
+#   Scratch's own condition, `(-180, 180]` range, exactly matching this
+#   project's own `normalize_direction`'s range).
+# - "don't rotate": no rotation, no flip, ever -- the sprite always renders
+#   in its costume's own native orientation regardless of `direction`.
+pub def sync_transforms_from_positions(Query<(mut Transform&, mut Sprite&, ScratchSprite&)> query, Res<Positions> positions, Res<SoundQueue> sound_queue):
+    for transform, sprite, scratch_sprite in query:
+        let p = positions.get(scratch_sprite.target_id.clone())
+        transform.translation.x = p.x
+        transform.translation.y = p.y
+        let style = sound_queue.get_rotation_style(scratch_sprite.target_id.clone())
+        if style == "all around":
+            let radians = (90.0 - p.direction) * 0.017453292
+            transform.rotation = Quat.from_rotation_z(radians)
+            sprite.flip_x = false
+        else:
+            transform.rotation = Quat.from_rotation_z(0.0)
+            if style == "left-right":
+                sprite.flip_x = p.direction < 0.0
+            else:
+                sprite.flip_x = false
+
+# Same shape as `sync_transforms_from_positions`, for Looks' non-Motion
+# visual state instead: `looks_show`/`looks_hide` toggle a real Bevy
+# `Visibility` (so a hidden sprite genuinely doesn't render, not just a
+# flag this project tracks and ignores), `looks_setsizeto`/
+# `looks_changesizeby` scale the same `Transform` Motion already writes
+# to (real Scratch's own `size` is a percent of the costume's original
+# dimensions -- `100.0` is always "no scaling", matching `LooksState`'s
+# own default).
+pub def sync_visibility_and_size_from_looks_states(Query<(mut Visibility&, mut Transform&, ScratchSprite&)> query, Res<LooksStates> looks):
+    for visibility, transform, sprite in query:
+        let s = looks.get(sprite.target_id.clone())
+        visibility.pointee = if s.visible: Visibility.Visible else: Visibility.Hidden
+        let scale = s.size / 100.0
+        transform.scale.x = scale
+        transform.scale.y = scale
+
+# `looks_switchcostumeto`/`looks_nextcostume` only ever mutate
+# `LooksState.costume_index` (a plain integer, no Bevy types involved --
+# see `interpreter.br`'s own `SwitchCostumeTo`/`NextCostume` cases); this
+# is the one system that turns that back into something actually visible,
+# by swapping which pre-loaded `Handle<Image>` (`TargetCostumeHandles`,
+# built once at Startup) the sprite's own `Sprite` component currently
+# points at. `% handles.length` (not a bare index) tolerates
+# `costume_index` values `wrap_costume_index` already keeps in range for
+# a real project, but stays safe even if `handles` and the linked
+# project's own costume count ever disagreed for some other reason --
+# indexing out of bounds would panic the whole game over a rendering
+# nicety, exactly the failure mode every other costume-loading path in
+# this file already avoids.
+pub def sync_costume_from_looks_states(Query<(mut Sprite&, TargetCostumeHandles&, ScratchSprite&)> query, Res<LooksStates> looks, Res<TargetCostumeDims> costume_dims, Res<SoundQueue> sound_queue):
+    for sprite, costumes, tag in query:
+        if costumes.handles.length > 0:
+            let s = looks.get(tag.target_id.clone())
+            let idx = wrap_costume_index(s.costume_index, costumes.handles.length)
+            sprite.image = costumes.handles[idx].clone()
+            # `TargetCostumeDims` already reports a bitmap costume's real
+            # *logical* size (its raw decoded PNG pixel size divided by
+            # its own saved `bitmapResolution` -- `build_target_costume_
+            # dims`' own doc comment in `assets.br`) -- an SVG costume's
+            # own resolution is always 1, so this is a real no-op there,
+            # matching the native pixel size Bevy would render at anyway
+            # without `custom_size` set at all. Setting it explicitly
+            # here (rather than leaving it `None`, native-pixel-size) is
+            # what makes a retina-authored bitmap costume finally render
+            # at its *intended* on-screen size instead of twice as large.
+            #
+            # `TargetCostumeDims` stays keyed by *origin* name only, same
+            # as `TargetCostumes` -- resolve the entity's own target id
+            # (a live clone's unique id, for a cloned entity) through
+            # `instance_type_of` first, same established pattern
+            # `SwitchCostumeTo`/`Touching` already use, or a clone with a
+            # real (non-40x40-default) costume would render at the wrong
+            # size here.
+            let origin = sound_queue.instance_type_of(tag.target_id.clone())
+            let dim = costume_dims.get(origin, idx)
+            # Workaround for a real boring transpiler gap (originally
+            # filed as task_470fa44b; the fix that landed upstream,
+            # commit e0247ff, only covers a Boring-*declared* struct's
+            # own T? field via `struct_fields` -- `Sprite` is an
+            # *external* (Bevy) type, a different code path entirely,
+            # confirmed still broken by a real build; re-filed narrower
+            # as task_ff23e8cb): a direct `sprite.custom_size = Vec2.new(
+            # ...)` assignment doesn't auto-wrap in `Some(...)` for an
+            # external struct's own `Option<T>` field. Binding an
+            # explicit `Vec2?`-typed local first still triggers the
+            # correct wrap.
+            let Vec2? new_size = Vec2.new(dim.width, dim.height)
+            sprite.custom_size = new_size
+
+# `LooksState.ghost` (0-100, real Scratch's own range) onto `Sprite.
+# color`'s real alpha channel -- the one graphic effect this project
+# renders (see that field's own doc comment in `runtime.br` for why the
+# other six aren't). A separate system from `sync_visibility_and_size_
+# from_looks_states` even though both read `LooksStates` and touch the
+# sprite's own rendering -- same "one system per concern" split as
+# `sync_costume_from_looks_states` already being its own system rather
+# than folded into that one.
+pub def sync_ghost_effect_from_looks_states(Query<(mut Sprite&, ScratchSprite&)> query, Res<LooksStates> looks):
+    for sprite, tag in query:
+        let s = looks.get(tag.target_id.clone())
+        let alpha = 1.0 - (s.ghost / 100.0)
+        sprite.color = sprite.color.with_alpha(alpha)
+
+# `LayerOrders`' own per-target rank onto `Transform.translation.z` --
+# no conversion needed (`LayerOrders`' own doc comment: higher already
+# means "draws in front" on both sides, real Scratch's own convention
+# and a 2D camera's own "higher z on top" rule).
+pub def sync_z_from_layer_orders(Query<(mut Transform&, ScratchSprite&)> query, Res<LayerOrders> layer_orders):
+    for transform, tag in query:
+        let order = layer_orders.get(tag.target_id.clone())
+        transform.translation.z = order as float32
+
+pub def App build_app(string project_path):
+    mut app = App.new()
+    app.add_plugins(DefaultPlugins)
+    app.insert_resource(ProjectPath(path = project_path))
+    app.add_systems(Startup, (spawn_camera, spawn_pen_canvas, setup_scratch_project))
+    # sync_keyboard_state/sync_mouse_state/check_key_press_hats all need to
+    # run *before* run_pending_threads, so a script that reads Sensing
+    # input (or a key-press hat that just queued a script) sees this same
+    # tick's real values -- same ordering reason sync_transforms_from_
+    # positions runs *after* it (Motion writes need to land before the
+    # sprite's Transform is synced for rendering).
+    # Two nested `.chain()`'d groups, not one flat 21-element tuple --
+    # `sensing_askandwait`'s own two new systems pushed this past Bevy's
+    # `IntoScheduleConfigs` tuple-arity ceiling (20, same family of hard
+    # tuple-impl limit as the 16-parameter `SystemParam` one, already
+    # flagged as a "next feature needs to restructure this" risk when
+    # `spawn_pending_clones`/`despawn_pending_clones` brought this chain
+    # to 19). A `.chain()`'d tuple only orders *within* itself -- nesting
+    # two of them inside an outer tuple and `.chain()`ing that too orders
+    # group-against-group (every system in group 1 before every system in
+    # group 2) while still preserving each group's own internal order,
+    # which is what a single flat chain was doing before. `handle_ask_
+    # text_input` sits right before `run_pending_threads` (an Enter
+    # pressed this tick should unblock the waiting thread the same tick,
+    # not one tick late, same reasoning `check_key_press_hats`'s own
+    # placement already established); `sync_ask_ui` sits with every other
+    # `sync_*` system, after `run_pending_threads` has run.
+    app.add_systems(Update, (
+        (sync_keyboard_state, sync_mouse_state, sync_scratch_timer, check_key_press_hats, check_greater_than_hats, check_touching_object_hats, check_click_hats, check_backdrop_switch_hats, handle_ask_text_input, run_pending_threads, handle_sprite_dragging, draw_pen_marks, draw_stamps, play_queued_sounds, spawn_pending_clones, despawn_pending_clones).chain(),
+        (sync_transforms_from_positions, sync_visibility_and_size_from_looks_states, sync_costume_from_looks_states, sync_ghost_effect_from_looks_states, sync_z_from_layer_orders, sync_speech_bubbles, sync_variable_watchers, sync_reporter_watchers, sync_list_watchers, sync_ask_ui).chain(),
+        # Rebuilds `SceneComposite` (`sensing_touchingcolor`'s own real
+        # data source) last, once every position/costume mutation for
+        # this tick has already settled -- see that resource's own doc
+        # comment (`runtime.br`) for why this timing is correct, not just
+        # convenient.
+        compose_scene_for_touching
+    ).chain())
+    app
+
+pub def run_game(string project_path):
+    build_app(project_path).run()
+
+# The real crate entry point -- see breakout-boring's own identical comment
+# for why a plain top-level statement here (not a hand-written src/main.rs)
+# is what makes `boring`'s auto-appended `fn main()` the real `[[bin]]`
+# entry point. `assets/Fibonacci_1.sb3` (a real `.sb3`, not a hand-authored
+# raw-JSON fixture) is the default demo project -- switched from
+# `assets/broadcasts.json` once real costume loading landed, since a raw
+# JSON fixture has no actual asset bytes to ever show off (see
+# `extract_current_costume_to_temp_file`'s own doc comment) and this is the
+# only fixture with any. A real project picker is
+# still out of scope for this vertical slice.
+def main():
+    # `args()` -- a real Boring builtin (`docs/book.md`'s own "Global
+    # functions" list) -- confirmed via the generated Rust that it maps onto
+    # plain `std::env::args()`, argv[0]-style: `argv[0]` is this binary's own
+    # invoked path (not a user argument), so the `.sb3` path -- if given -- is
+    # `argv[1]`. (This project used to read `argv[0]` directly, back when
+    # `args()` excluded the binary's own path; that off-by-one bug is gone
+    # now that the convention changed, not reintroduced by this comment.)
+    # Falls back to `assets/Fibonacci_1.sb3` (the only checked-in fixture
+    # with real costume/sound assets) when none is given, same default this
+    # project always had before this was a real, runtime-configurable choice
+    # rather than a hardcoded literal.
+    let argv = args()
+    let path = if argv.length > 1: argv[1] else: "assets/Fibonacci_1.sb3"
+    run_game(path)
+
+# ECS-test convenience: resolve a Stage variable's id by name (same lookup
+# `run_project_and_report` does) but read it out of an already-populated
+# `Vars` instead of building a fresh one -- lets `tests/ecs_integration.rs`
+# assert on runtime state reached through the real Bevy `Update` system
+# (`setup_scratch_project`/`run_pending_threads`), the same way
+# `tests/broadcasts.rs` asserts on state reached through a direct
+# `run_script` call. Re-loading the project just to resolve the name->id
+# mapping is a little wasteful but simple and correct -- this is test-only
+# plumbing, not part of the runtime's own API.
+pub def string stage_var_value(string path, Vars vars, string var_name):
+    if let project = Sb3Project.load_json_for_boring(path):
+        let var_id = find_stage_var_id(project, var_name)
+        let value = vars.get(var_id, "")
+        "{value}"
+    else:
+        ""
+
+# Same ECS-test convenience as `stage_var_value`, but for a target's
+# `Position` -- no project re-load needed here at all, unlike `Vars`/
+# `Lists` (which are keyed by opaque ids resolved from a human name via the
+# project), `Positions` is already keyed directly by target name.
+pub def string position_value(Positions positions, string target_name, string axis):
+    let p = positions.get(target_name)
+    if axis == "x":
+        "{p.x}"
+    elif axis == "y":
+        "{p.y}"
+    else:
+        "{p.direction}"
+
+# ECS-test convenience, the write-side counterpart to `position_value` --
+# `Position` itself isn't `pub` (it's a plain internal runtime value, never
+# constructed from outside `runtime.br`/`interpreter.br`), so a test driving
+# a target's position directly across ticks (rather than through a scripted
+# Motion block, the way `tests/touching_object_hat.rs` needs for its own
+# edge-triggered-hat check) has no other way to build one.
+pub def set_position_value(var Positions positions, string target_name, float32 x, float32 y):
+    let current = positions.get(target_name)
+    positions.set(target_name, Position(x = x, y = y, direction = current.direction))
+

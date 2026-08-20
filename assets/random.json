@@ -1,0 +1,287 @@
+{
+  "targets": [
+    {
+      "isStage": true,
+      "name": "Stage",
+      "variables": {
+        "var_equal": [
+          "equal_result",
+          0
+        ],
+        "var_reversed": [
+          "reversed_result",
+          0
+        ],
+        "var_float": [
+          "float_result",
+          0
+        ]
+      },
+      "lists": {
+        "list_rolls": [
+          "rolls",
+          []
+        ]
+      },
+      "broadcasts": {},
+      "blocks": {},
+      "comments": {},
+      "currentCostume": 0,
+      "costumes": [
+        {
+          "name": "backdrop1",
+          "dataFormat": "svg",
+          "assetId": "a",
+          "md5ext": "a.svg",
+          "rotationCenterX": 0,
+          "rotationCenterY": 0
+        }
+      ],
+      "sounds": [],
+      "volume": 100,
+      "layerOrder": 0,
+      "tempo": 60,
+      "videoTransparency": 50,
+      "videoState": "on",
+      "textToSpeechLanguage": null
+    },
+    {
+      "isStage": false,
+      "name": "Sprite1",
+      "variables": {},
+      "lists": {},
+      "broadcasts": {},
+      "blocks": {
+        "random_1_6": {
+          "opcode": "operator_random",
+          "next": null,
+          "parent": "add_roll",
+          "inputs": {
+            "FROM": [
+              1,
+              [
+                4,
+                "1"
+              ]
+            ],
+            "TO": [
+              1,
+              [
+                4,
+                "6"
+              ]
+            ]
+          },
+          "fields": {},
+          "shadow": false,
+          "topLevel": false
+        },
+        "add_roll": {
+          "opcode": "data_addtolist",
+          "next": null,
+          "parent": "repeat1",
+          "inputs": {
+            "ITEM": [
+              1,
+              "random_1_6"
+            ]
+          },
+          "fields": {
+            "LIST": [
+              "rolls",
+              "list_rolls"
+            ]
+          },
+          "shadow": false,
+          "topLevel": false
+        },
+        "repeat1": {
+          "opcode": "control_repeat",
+          "next": "set_equal",
+          "parent": "hat1",
+          "inputs": {
+            "TIMES": [
+              1,
+              [
+                4,
+                "30"
+              ]
+            ],
+            "SUBSTACK": [
+              2,
+              "add_roll"
+            ]
+          },
+          "fields": {},
+          "shadow": false,
+          "topLevel": false
+        },
+        "set_equal": {
+          "opcode": "data_setvariableto",
+          "next": "set_reversed",
+          "parent": "repeat1",
+          "inputs": {
+            "VALUE": [
+              1,
+              "expr_equal"
+            ]
+          },
+          "fields": {
+            "VARIABLE": [
+              "equal_result",
+              "var_equal"
+            ]
+          },
+          "shadow": false,
+          "topLevel": false
+        },
+        "expr_equal": {
+          "opcode": "operator_random",
+          "next": null,
+          "parent": "set_equal",
+          "inputs": {
+            "FROM": [
+              1,
+              [
+                4,
+                "5"
+              ]
+            ],
+            "TO": [
+              1,
+              [
+                4,
+                "5"
+              ]
+            ]
+          },
+          "fields": {},
+          "shadow": false,
+          "topLevel": false
+        },
+        "set_reversed": {
+          "opcode": "data_setvariableto",
+          "next": "set_float",
+          "parent": "set_equal",
+          "inputs": {
+            "VALUE": [
+              1,
+              "expr_reversed"
+            ]
+          },
+          "fields": {
+            "VARIABLE": [
+              "reversed_result",
+              "var_reversed"
+            ]
+          },
+          "shadow": false,
+          "topLevel": false
+        },
+        "expr_reversed": {
+          "opcode": "operator_random",
+          "next": null,
+          "parent": "set_reversed",
+          "inputs": {
+            "FROM": [
+              1,
+              [
+                4,
+                "10"
+              ]
+            ],
+            "TO": [
+              1,
+              [
+                4,
+                "1"
+              ]
+            ]
+          },
+          "fields": {},
+          "shadow": false,
+          "topLevel": false
+        },
+        "set_float": {
+          "opcode": "data_setvariableto",
+          "next": null,
+          "parent": "set_reversed",
+          "inputs": {
+            "VALUE": [
+              1,
+              "expr_float"
+            ]
+          },
+          "fields": {
+            "VARIABLE": [
+              "float_result",
+              "var_float"
+            ]
+          },
+          "shadow": false,
+          "topLevel": false
+        },
+        "expr_float": {
+          "opcode": "operator_random",
+          "next": null,
+          "parent": "set_float",
+          "inputs": {
+            "FROM": [
+              1,
+              [
+                4,
+                "1.0"
+              ]
+            ],
+            "TO": [
+              1,
+              [
+                4,
+                "2.0"
+              ]
+            ]
+          },
+          "fields": {},
+          "shadow": false,
+          "topLevel": false
+        },
+        "hat1": {
+          "opcode": "event_whenflagclicked",
+          "next": "repeat1",
+          "parent": null,
+          "inputs": {},
+          "fields": {},
+          "shadow": false,
+          "topLevel": true,
+          "x": 0,
+          "y": 0
+        }
+      },
+      "comments": {},
+      "currentCostume": 0,
+      "costumes": [
+        {
+          "name": "costume1",
+          "dataFormat": "svg",
+          "assetId": "b",
+          "md5ext": "b.svg",
+          "rotationCenterX": 0,
+          "rotationCenterY": 0
+        }
+      ],
+      "sounds": [],
+      "volume": 100,
+      "layerOrder": 1,
+      "visible": true,
+      "x": 0,
+      "y": 0,
+      "size": 100,
+      "direction": 90,
+      "draggable": false,
+      "rotationStyle": "all around"
+    }
+  ],
+  "monitors": [],
+  "extensions": [],
+  "meta": {}
+}

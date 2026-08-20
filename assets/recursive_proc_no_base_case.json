@@ -1,0 +1,134 @@
+{
+  "targets": [
+    {
+      "isStage": true,
+      "name": "Stage",
+      "variables": {
+        "varRuns": ["runs", 0]
+      },
+      "lists": {},
+      "broadcasts": {},
+      "blocks": {},
+      "comments": {},
+      "currentCostume": 0,
+      "costumes": [
+        {"name": "backdrop1", "dataFormat": "svg", "assetId": "a", "md5ext": "a.svg", "rotationCenterX": 0, "rotationCenterY": 0}
+      ],
+      "sounds": [],
+      "volume": 100,
+      "layerOrder": 0,
+      "tempo": 60,
+      "videoTransparency": 50,
+      "videoState": "on",
+      "textToSpeechLanguage": null
+    },
+    {
+      "isStage": false,
+      "name": "Sprite1",
+      "variables": {},
+      "lists": {},
+      "broadcasts": {},
+      "blocks": {
+        "hat1": {
+          "opcode": "event_whenflagclicked",
+          "next": "callLoop",
+          "parent": null,
+          "inputs": {},
+          "fields": {},
+          "shadow": false,
+          "topLevel": true,
+          "x": 0,
+          "y": 0
+        },
+        "callLoop": {
+          "opcode": "procedures_call",
+          "next": null,
+          "parent": "hat1",
+          "inputs": {},
+          "fields": {},
+          "shadow": false,
+          "topLevel": false,
+          "mutation": {
+            "tagName": "mutation",
+            "children": [],
+            "proccode": "loopy",
+            "argumentids": "[]",
+            "warp": "false"
+          }
+        },
+        "def1": {
+          "opcode": "procedures_definition",
+          "next": "changeRuns",
+          "parent": null,
+          "inputs": {"custom_block": [1, "proto1"]},
+          "fields": {},
+          "shadow": false,
+          "topLevel": true,
+          "x": 0,
+          "y": 200
+        },
+        "proto1": {
+          "opcode": "procedures_prototype",
+          "next": null,
+          "parent": "def1",
+          "inputs": {},
+          "fields": {},
+          "shadow": true,
+          "topLevel": false,
+          "mutation": {
+            "tagName": "mutation",
+            "children": [],
+            "proccode": "loopy",
+            "argumentids": "[]",
+            "argumentnames": "[]",
+            "argumentdefaults": "[]",
+            "warp": "false"
+          }
+        },
+        "changeRuns": {
+          "opcode": "data_changevariableby",
+          "next": "callSelf",
+          "parent": "def1",
+          "inputs": {"VALUE": [1, [4, "1"]]},
+          "fields": {"VARIABLE": ["runs", "varRuns"]},
+          "shadow": false,
+          "topLevel": false
+        },
+        "callSelf": {
+          "opcode": "procedures_call",
+          "next": null,
+          "parent": "changeRuns",
+          "inputs": {},
+          "fields": {},
+          "shadow": false,
+          "topLevel": false,
+          "mutation": {
+            "tagName": "mutation",
+            "children": [],
+            "proccode": "loopy",
+            "argumentids": "[]",
+            "warp": "false"
+          }
+        }
+      },
+      "comments": {},
+      "currentCostume": 0,
+      "costumes": [
+        {"name": "costume1", "dataFormat": "svg", "assetId": "b", "md5ext": "b.svg", "rotationCenterX": 0, "rotationCenterY": 0}
+      ],
+      "sounds": [],
+      "volume": 100,
+      "layerOrder": 1,
+      "visible": true,
+      "x": 0,
+      "y": 0,
+      "size": 100,
+      "direction": 90,
+      "draggable": false,
+      "rotationStyle": "all around"
+    }
+  ],
+  "monitors": [],
+  "extensions": [],
+  "meta": {}
+}

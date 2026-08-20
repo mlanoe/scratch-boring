@@ -1,0 +1,230 @@
+{
+  "targets": [
+    {
+      "isStage": true,
+      "name": "Stage",
+      "variables": {
+        "var_letter_hat": [
+          "letterHat",
+          0
+        ],
+        "var_digit_hat": [
+          "digitHat",
+          0
+        ],
+        "var_letter_reporter": [
+          "letterReporter",
+          0
+        ],
+        "var_digit_reporter": [
+          "digitReporter",
+          0
+        ]
+      },
+      "lists": {},
+      "broadcasts": {},
+      "blocks": {},
+      "comments": {},
+      "currentCostume": 0,
+      "costumes": [
+        {
+          "name": "backdrop1",
+          "dataFormat": "svg",
+          "assetId": "bg",
+          "md5ext": "bg.svg",
+          "rotationCenterX": 0,
+          "rotationCenterY": 0
+        }
+      ],
+      "sounds": [],
+      "volume": 100,
+      "layerOrder": 0,
+      "tempo": 60,
+      "videoTransparency": 50,
+      "videoState": "on",
+      "textToSpeechLanguage": null
+    },
+    {
+      "isStage": false,
+      "name": "Sprite1",
+      "variables": {},
+      "lists": {},
+      "broadcasts": {},
+      "blocks": {
+        "hatLetter": {
+          "opcode": "event_whenkeypressed",
+          "next": "setLetter",
+          "parent": null,
+          "inputs": {},
+          "fields": {
+            "KEY_OPTION": [
+              "a",
+              null
+            ]
+          },
+          "shadow": false,
+          "topLevel": true,
+          "x": 0,
+          "y": 0
+        },
+        "letterReporterExpr": {
+          "opcode": "sensing_keypressed",
+          "next": null,
+          "parent": "setLetter",
+          "inputs": {
+            "KEY_OPTION": [
+              1,
+              [
+                10,
+                "a"
+              ]
+            ]
+          },
+          "fields": {},
+          "shadow": false,
+          "topLevel": false
+        },
+        "setLetter": {
+          "opcode": "data_setvariableto",
+          "next": "setLetterReporter",
+          "parent": "hatLetter",
+          "inputs": {
+            "VALUE": [
+              1,
+              [
+                10,
+                "true"
+              ]
+            ]
+          },
+          "fields": {
+            "VARIABLE": [
+              "letterHat",
+              "var_letter_hat"
+            ]
+          },
+          "shadow": false,
+          "topLevel": false
+        },
+        "setLetterReporter": {
+          "opcode": "data_setvariableto",
+          "next": null,
+          "parent": "setLetter",
+          "inputs": {
+            "VALUE": [
+              1,
+              "letterReporterExpr"
+            ]
+          },
+          "fields": {
+            "VARIABLE": [
+              "letterReporter",
+              "var_letter_reporter"
+            ]
+          },
+          "shadow": false,
+          "topLevel": false
+        },
+        "hatDigit": {
+          "opcode": "event_whenkeypressed",
+          "next": "setDigit",
+          "parent": null,
+          "inputs": {},
+          "fields": {
+            "KEY_OPTION": [
+              "5",
+              null
+            ]
+          },
+          "shadow": false,
+          "topLevel": true,
+          "x": 0,
+          "y": 100
+        },
+        "digitReporterExpr": {
+          "opcode": "sensing_keypressed",
+          "next": null,
+          "parent": "setDigit",
+          "inputs": {
+            "KEY_OPTION": [
+              1,
+              [
+                10,
+                "5"
+              ]
+            ]
+          },
+          "fields": {},
+          "shadow": false,
+          "topLevel": false
+        },
+        "setDigit": {
+          "opcode": "data_setvariableto",
+          "next": "setDigitReporter",
+          "parent": "hatDigit",
+          "inputs": {
+            "VALUE": [
+              1,
+              [
+                10,
+                "true"
+              ]
+            ]
+          },
+          "fields": {
+            "VARIABLE": [
+              "digitHat",
+              "var_digit_hat"
+            ]
+          },
+          "shadow": false,
+          "topLevel": false
+        },
+        "setDigitReporter": {
+          "opcode": "data_setvariableto",
+          "next": null,
+          "parent": "setDigit",
+          "inputs": {
+            "VALUE": [
+              1,
+              "digitReporterExpr"
+            ]
+          },
+          "fields": {
+            "VARIABLE": [
+              "digitReporter",
+              "var_digit_reporter"
+            ]
+          },
+          "shadow": false,
+          "topLevel": false
+        }
+      },
+      "comments": {},
+      "currentCostume": 0,
+      "costumes": [
+        {
+          "name": "a",
+          "dataFormat": "svg",
+          "assetId": "cA",
+          "md5ext": "cA.svg",
+          "rotationCenterX": 0,
+          "rotationCenterY": 0
+        }
+      ],
+      "sounds": [],
+      "volume": 100,
+      "layerOrder": 1,
+      "visible": true,
+      "x": 0,
+      "y": 0,
+      "size": 100,
+      "direction": 90,
+      "draggable": false,
+      "rotationStyle": "all around"
+    }
+  ],
+  "monitors": [],
+  "extensions": [],
+  "meta": {}
+}

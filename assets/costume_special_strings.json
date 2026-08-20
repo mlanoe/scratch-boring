@@ -1,0 +1,611 @@
+{
+  "targets": [
+    {
+      "isStage": true,
+      "name": "Stage",
+      "variables": {
+        "var_result_bd_next": [
+          "result_bd_next",
+          0
+        ],
+        "var_result_bd_prev": [
+          "result_bd_prev",
+          0
+        ],
+        "var_result_bd_rand": [
+          "result_bd_rand",
+          0
+        ],
+        "var_result_bd_name": [
+          "result_bd_name",
+          0
+        ],
+        "var_result_sensing_costume_name": [
+          "result_sensing_costume_name",
+          0
+        ],
+        "var_result_sensing_backdrop_name": [
+          "result_sensing_backdrop_name",
+          0
+        ],
+        "var_result1": [
+          "result1",
+          0
+        ],
+        "var_result2": [
+          "result2",
+          0
+        ],
+        "var_result3": [
+          "result3",
+          0
+        ],
+        "var_result_name": [
+          "result_name",
+          0
+        ]
+      },
+      "lists": {},
+      "broadcasts": {},
+      "blocks": {},
+      "comments": {},
+      "currentCostume": 0,
+      "costumes": [
+        {
+          "name": "x",
+          "dataFormat": "svg",
+          "assetId": "bg_x",
+          "md5ext": "bg_x.svg",
+          "rotationCenterX": 0,
+          "rotationCenterY": 0
+        },
+        {
+          "name": "y",
+          "dataFormat": "svg",
+          "assetId": "bg_y",
+          "md5ext": "bg_y.svg",
+          "rotationCenterX": 0,
+          "rotationCenterY": 0
+        }
+      ],
+      "sounds": [],
+      "volume": 100,
+      "layerOrder": 0,
+      "tempo": 60,
+      "videoTransparency": 50,
+      "videoState": "on",
+      "textToSpeechLanguage": null
+    },
+    {
+      "isStage": false,
+      "name": "Sprite1",
+      "variables": {},
+      "lists": {},
+      "broadcasts": {},
+      "blocks": {
+        "hat1": {
+          "opcode": "event_whenflagclicked",
+          "next": "sw1",
+          "parent": null,
+          "inputs": {},
+          "fields": {},
+          "shadow": false,
+          "topLevel": true,
+          "x": 0,
+          "y": 0
+        },
+        "sw1": {
+          "opcode": "looks_switchcostumeto",
+          "next": "set_r1",
+          "parent": "hat1",
+          "inputs": {
+            "COSTUME": [
+              1,
+              [
+                10,
+                "next costume"
+              ]
+            ]
+          },
+          "fields": {},
+          "shadow": false,
+          "topLevel": false
+        },
+        "expr_r1": {
+          "opcode": "looks_costumenumbername",
+          "next": null,
+          "parent": "set_r1",
+          "inputs": {},
+          "fields": {
+            "NUMBER_NAME": [
+              "number",
+              null
+            ]
+          },
+          "shadow": false,
+          "topLevel": false
+        },
+        "set_r1": {
+          "opcode": "data_setvariableto",
+          "next": "sw2",
+          "parent": "sw1",
+          "inputs": {
+            "VALUE": [
+              1,
+              "expr_r1"
+            ]
+          },
+          "fields": {
+            "VARIABLE": [
+              "result1",
+              "var_result1"
+            ]
+          },
+          "shadow": false,
+          "topLevel": false
+        },
+        "sw2": {
+          "opcode": "looks_switchcostumeto",
+          "next": "set_r2",
+          "parent": "set_r1",
+          "inputs": {
+            "COSTUME": [
+              1,
+              [
+                10,
+                "next costume"
+              ]
+            ]
+          },
+          "fields": {},
+          "shadow": false,
+          "topLevel": false
+        },
+        "expr_r2": {
+          "opcode": "looks_costumenumbername",
+          "next": null,
+          "parent": "set_r2",
+          "inputs": {},
+          "fields": {
+            "NUMBER_NAME": [
+              "number",
+              null
+            ]
+          },
+          "shadow": false,
+          "topLevel": false
+        },
+        "set_r2": {
+          "opcode": "data_setvariableto",
+          "next": "sw3",
+          "parent": "sw2",
+          "inputs": {
+            "VALUE": [
+              1,
+              "expr_r2"
+            ]
+          },
+          "fields": {
+            "VARIABLE": [
+              "result2",
+              "var_result2"
+            ]
+          },
+          "shadow": false,
+          "topLevel": false
+        },
+        "sw3": {
+          "opcode": "looks_switchcostumeto",
+          "next": "set_r3",
+          "parent": "set_r2",
+          "inputs": {
+            "COSTUME": [
+              1,
+              [
+                10,
+                "previous costume"
+              ]
+            ]
+          },
+          "fields": {},
+          "shadow": false,
+          "topLevel": false
+        },
+        "expr_r3": {
+          "opcode": "looks_costumenumbername",
+          "next": null,
+          "parent": "set_r3",
+          "inputs": {},
+          "fields": {
+            "NUMBER_NAME": [
+              "number",
+              null
+            ]
+          },
+          "shadow": false,
+          "topLevel": false
+        },
+        "set_r3": {
+          "opcode": "data_setvariableto",
+          "next": "set_rname",
+          "parent": "sw3",
+          "inputs": {
+            "VALUE": [
+              1,
+              "expr_r3"
+            ]
+          },
+          "fields": {
+            "VARIABLE": [
+              "result3",
+              "var_result3"
+            ]
+          },
+          "shadow": false,
+          "topLevel": false
+        },
+        "expr_rname": {
+          "opcode": "looks_costumenumbername",
+          "next": null,
+          "parent": "set_rname",
+          "inputs": {},
+          "fields": {
+            "NUMBER_NAME": [
+              "name",
+              null
+            ]
+          },
+          "shadow": false,
+          "topLevel": false
+        },
+        "set_rname": {
+          "opcode": "data_setvariableto",
+          "next": "bsw1",
+          "parent": "set_r3",
+          "inputs": {
+            "VALUE": [
+              1,
+              "expr_rname"
+            ]
+          },
+          "fields": {
+            "VARIABLE": [
+              "result_name",
+              "var_result_name"
+            ]
+          },
+          "shadow": false,
+          "topLevel": false
+        },
+        "bsw1": {
+          "opcode": "looks_switchbackdropto",
+          "next": "set_bd1",
+          "parent": "set_rname",
+          "inputs": {
+            "BACKDROP": [
+              1,
+              [
+                10,
+                "next backdrop"
+              ]
+            ]
+          },
+          "fields": {},
+          "shadow": false,
+          "topLevel": false
+        },
+        "expr_bd1": {
+          "opcode": "looks_backdropnumbername",
+          "next": null,
+          "parent": "set_bd1",
+          "inputs": {},
+          "fields": {
+            "NUMBER_NAME": [
+              "number",
+              null
+            ]
+          },
+          "shadow": false,
+          "topLevel": false
+        },
+        "set_bd1": {
+          "opcode": "data_setvariableto",
+          "next": "bsw2",
+          "parent": "bsw1",
+          "inputs": {
+            "VALUE": [
+              1,
+              "expr_bd1"
+            ]
+          },
+          "fields": {
+            "VARIABLE": [
+              "result_bd_next",
+              "var_result_bd_next"
+            ]
+          },
+          "shadow": false,
+          "topLevel": false
+        },
+        "bsw2": {
+          "opcode": "looks_switchbackdropto",
+          "next": "set_bd2",
+          "parent": "set_bd1",
+          "inputs": {
+            "BACKDROP": [
+              1,
+              [
+                10,
+                "previous backdrop"
+              ]
+            ]
+          },
+          "fields": {},
+          "shadow": false,
+          "topLevel": false
+        },
+        "expr_bd2": {
+          "opcode": "looks_backdropnumbername",
+          "next": null,
+          "parent": "set_bd2",
+          "inputs": {},
+          "fields": {
+            "NUMBER_NAME": [
+              "number",
+              null
+            ]
+          },
+          "shadow": false,
+          "topLevel": false
+        },
+        "set_bd2": {
+          "opcode": "data_setvariableto",
+          "next": "bsw3",
+          "parent": "bsw2",
+          "inputs": {
+            "VALUE": [
+              1,
+              "expr_bd2"
+            ]
+          },
+          "fields": {
+            "VARIABLE": [
+              "result_bd_prev",
+              "var_result_bd_prev"
+            ]
+          },
+          "shadow": false,
+          "topLevel": false
+        },
+        "bsw3": {
+          "opcode": "looks_switchbackdropto",
+          "next": "set_bd3",
+          "parent": "set_bd2",
+          "inputs": {
+            "BACKDROP": [
+              1,
+              [
+                10,
+                "random backdrop"
+              ]
+            ]
+          },
+          "fields": {},
+          "shadow": false,
+          "topLevel": false
+        },
+        "expr_bd3": {
+          "opcode": "looks_backdropnumbername",
+          "next": null,
+          "parent": "set_bd3",
+          "inputs": {},
+          "fields": {
+            "NUMBER_NAME": [
+              "number",
+              null
+            ]
+          },
+          "shadow": false,
+          "topLevel": false
+        },
+        "set_bd3": {
+          "opcode": "data_setvariableto",
+          "next": "set_bdname",
+          "parent": "bsw3",
+          "inputs": {
+            "VALUE": [
+              1,
+              "expr_bd3"
+            ]
+          },
+          "fields": {
+            "VARIABLE": [
+              "result_bd_rand",
+              "var_result_bd_rand"
+            ]
+          },
+          "shadow": false,
+          "topLevel": false
+        },
+        "expr_bdname": {
+          "opcode": "looks_backdropnumbername",
+          "next": null,
+          "parent": "set_bdname",
+          "inputs": {},
+          "fields": {
+            "NUMBER_NAME": [
+              "name",
+              null
+            ]
+          },
+          "shadow": false,
+          "topLevel": false
+        },
+        "set_bdname": {
+          "opcode": "data_setvariableto",
+          "next": "set_sensing_costume",
+          "parent": "set_bd3",
+          "inputs": {
+            "VALUE": [
+              1,
+              "expr_bdname"
+            ]
+          },
+          "fields": {
+            "VARIABLE": [
+              "result_bd_name",
+              "var_result_bd_name"
+            ]
+          },
+          "shadow": false,
+          "topLevel": false
+        },
+        "menu_sprite1": {
+          "opcode": "sensing_of_object_menu",
+          "next": null,
+          "parent": "expr_sensing_costume",
+          "inputs": {},
+          "fields": {
+            "OBJECT": [
+              "Sprite1",
+              null
+            ]
+          },
+          "shadow": true,
+          "topLevel": false
+        },
+        "expr_sensing_costume": {
+          "opcode": "sensing_of",
+          "next": null,
+          "parent": "set_sensing_costume",
+          "inputs": {
+            "OBJECT": [
+              1,
+              "menu_sprite1"
+            ]
+          },
+          "fields": {
+            "PROPERTY": [
+              "costume name",
+              null
+            ]
+          },
+          "shadow": false,
+          "topLevel": false
+        },
+        "set_sensing_costume": {
+          "opcode": "data_setvariableto",
+          "next": "set_sensing_backdrop",
+          "parent": "set_bdname",
+          "inputs": {
+            "VALUE": [
+              1,
+              "expr_sensing_costume"
+            ]
+          },
+          "fields": {
+            "VARIABLE": [
+              "result_sensing_costume_name",
+              "var_result_sensing_costume_name"
+            ]
+          },
+          "shadow": false,
+          "topLevel": false
+        },
+        "menu_stage": {
+          "opcode": "sensing_of_object_menu",
+          "next": null,
+          "parent": "expr_sensing_backdrop",
+          "inputs": {},
+          "fields": {
+            "OBJECT": [
+              "_stage_",
+              null
+            ]
+          },
+          "shadow": true,
+          "topLevel": false
+        },
+        "expr_sensing_backdrop": {
+          "opcode": "sensing_of",
+          "next": null,
+          "parent": "set_sensing_backdrop",
+          "inputs": {
+            "OBJECT": [
+              1,
+              "menu_stage"
+            ]
+          },
+          "fields": {
+            "PROPERTY": [
+              "backdrop name",
+              null
+            ]
+          },
+          "shadow": false,
+          "topLevel": false
+        },
+        "set_sensing_backdrop": {
+          "opcode": "data_setvariableto",
+          "next": null,
+          "parent": "set_sensing_costume",
+          "inputs": {
+            "VALUE": [
+              1,
+              "expr_sensing_backdrop"
+            ]
+          },
+          "fields": {
+            "VARIABLE": [
+              "result_sensing_backdrop_name",
+              "var_result_sensing_backdrop_name"
+            ]
+          },
+          "shadow": false,
+          "topLevel": false
+        }
+      },
+      "comments": {},
+      "currentCostume": 1,
+      "costumes": [
+        {
+          "name": "a",
+          "dataFormat": "svg",
+          "assetId": "cA",
+          "md5ext": "cA.svg",
+          "rotationCenterX": 0,
+          "rotationCenterY": 0
+        },
+        {
+          "name": "b",
+          "dataFormat": "svg",
+          "assetId": "cB",
+          "md5ext": "cB.svg",
+          "rotationCenterX": 0,
+          "rotationCenterY": 0
+        },
+        {
+          "name": "c",
+          "dataFormat": "svg",
+          "assetId": "cC",
+          "md5ext": "cC.svg",
+          "rotationCenterX": 0,
+          "rotationCenterY": 0
+        }
+      ],
+      "sounds": [],
+      "volume": 100,
+      "layerOrder": 1,
+      "visible": true,
+      "x": 0,
+      "y": 0,
+      "size": 100,
+      "direction": 90,
+      "draggable": false,
+      "rotationStyle": "all around"
+    }
+  ],
+  "monitors": [],
+  "extensions": [],
+  "meta": {}
+}

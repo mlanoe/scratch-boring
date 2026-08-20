@@ -1,0 +1,2724 @@
+# Scratch's runtime state -- the Block AST (`Block`/`BlockKind`),
+# `StopSignal` (the `exec` early-return signal), and every plain Bevy
+# `Resource`/plain-struct piece of mutable runtime state the interpreter
+# and its ECS wiring read/write each tick: `ProcTable`/`Frame`, `Vars`,
+# `Lists`, `Positions`, `KeyboardState`/`MouseState`/`ScratchTimer`,
+# `KeyPressHats`/`GreaterThanHats`, `SoundQueue`/`SpeechBubbles`, the
+# on-stage watcher structs (`VariableWatcher`/`ReporterWatcher`), and
+# `Broadcasts`/`ReceiverScript`. Also `resolve_list_index`, a small pure
+# helper `exec`'s list blocks need.
+#
+# Sibling file to `scratch.br`, pulled in via a bare `use runtime` there --
+# same mechanism as `values.br`/`sb3_loader.br` (see either file's own
+# header comment). Split out once `scratch.br` grew past ~3100 lines --
+# this is "the shape of everything the interpreter operates on", as
+# distinct from `interpreter.br` (the actual `eval`/`exec` tree-walking
+# logic that operates on this shape) and `linker.br` (the code that first
+# *builds* these resources from a loaded `Sb3Project`).
+
+# The block AST. One variant per opcode this phase supports -- see
+# README.md's roadmap for what's not here yet. Reporters (value-producing)
+# and stack blocks (side-effecting) share one enum, same as jscratch's
+# unified `Block` interface (`eval()` vs `execute()`), because Scratch's own
+# block shapes overlap the same way (a C-block's substack is just `[Block]`,
+# a reporter slot is just `Block` evaluated for its value).
+#
+# Wrapped in a one-field struct (`Block.kind: BlockKind`) rather than a
+# directly self-referential enum (`enum Block: Add(Block, Block), ...`) --
+# mirrors `boring/interpreter/ast.br`'s own `Expr`/`ExprKind` split in this
+# same repo. Confirmed empirically (a throwaway repro) that this isn't just
+# style: a *directly* self-referential enum auto-boxes each recursive field
+# in its *type* (`Add(Box<Block>, Box<Block>)`) but the transpiler doesn't
+# insert the matching `Box::new(...)` at *construction* sites (`Add(l, r)`
+# fails to compile, "expected Box<Block>, found Block") -- matching/
+# destructuring already worked fine either way. Once the recursion is
+# mediated through a wrapper struct instead, the struct itself is what gets
+# boxed (`Block.kind: Box<BlockKind>`), so `BlockKind`'s own variant fields
+# are plain, already-finite-size `Block`s -- no `Box::new()` needed anywhere,
+# construction included, exactly like `ast.br`'s
+# `Expr(kind= ExprKind.BinOp(op, left, right), line= line)`.
+struct Block:
+    BlockKind kind
+
+enum BlockKind:
+    # reporters
+    Literal(ScratchValue)
+    VarGet(string)                    # variable id
+    ArgGet(string)                    # procedure parameter name (argument_reporter_*)
+    Add(Block, Block)
+    Sub(Block, Block)
+    Equals(Block, Block)
+    Gt(Block, Block)
+    Lt(Block, Block)
+    # Operators, round 2 -- multiply/divide/mod (numeric), and/or/not
+    # (boolean), join/letter-of/length/contains (string). Added once a
+    # real scratch.mit.edu project (fetched to validate this project end to
+    # end) showed these are among the single most common reporters in any
+    # real-world project, far more so than anything Motion/Looks-specific.
+    Mul(Block, Block)
+    Div(Block, Block)
+    Mod(Block, Block)                 # floored, matching real Scratch -- see `scratch_mod`'s own doc comment
+    And(Block, Block)
+    Or(Block, Block)
+    Not(Block)
+    Join(Block, Block)
+    LetterOf(Block, Block)            # 1-based letter index expr, string expr
+    StringLength(Block)               # string expr -- character count (operator_length, NOT data_lengthoflist)
+    Contains(Block, Block)            # haystack expr, needle expr -- case-insensitive, matching real Scratch
+    MathOp(string, Block)             # OPERATOR field verbatim ("abs"/"floor"/"sqrt"/"sin"/...), num expr
+    Random(Block, Block)              # operator_random: from expr, to expr -- see `Rng`'s own doc comment
+    # stack blocks
+    SetVar(string, Block)             # variable id, value expr
+    Repeat(Block, [Block])            # count expr, body
+    RepeatUntil(Block, [Block])       # condition expr, body
+    Seq([Block])
+    ProcCall(string, [Block])         # proccode, positional argument expressions
+    If(Block, [Block])                # condition expr, then-body
+    IfElse(Block, [Block], [Block])   # condition expr, then-body, else-body
+    Stop(string)                      # STOP_OPTION field verbatim ("all"/"this script"/"other scripts in sprite")
+    # Data: lists. Reporters first, then stack blocks -- see `Lists`' own
+    # doc comment for the 1-based/"last"-aware index resolution shared by
+    # all of these (`resolve_list_index`).
+    ListItemAt(string, Block)          # reporter: list id, index expr
+    ListItemNum(string, Block)         # reporter: list id, item expr (1-based, 0 if absent)
+    ListLength(string)                 # reporter: list id
+    ListContains(string, Block)        # reporter: list id, item expr
+    ListAdd(string, Block)             # list id, item expr
+    ListDeleteAt(string, Block)        # list id, index expr
+    ListDeleteAll(string)              # list id
+    ListInsertAt(string, Block, Block) # list id, index expr, item expr
+    ListReplaceAt(string, Block, Block) # list id, index expr, item expr
+    ChangeVar(string, Block)           # variable id, delta expr (data_changevariableby)
+    # `data_showvariable`/`data_hidevariable` -- VARIABLE is a real
+    # *field* (resolved to a variable id at link time, same shape as
+    # `SetVar`'s own VARIABLE field just above), no expr to evaluate at
+    # runtime. See `Vars.watcher_visible`'s own doc comment for where the
+    # resulting state actually lives.
+    ShowVariable(string)                # variable id (data_showvariable)
+    HideVariable(string)                # variable id (data_hidevariable)
+    # Same shape as `ShowVariable`/`HideVariable` just above, but for a
+    # list's own on-stage watcher -- LIST is a real field id, same
+    # resolution (`block_field_id`) as `data_addtolist`'s own LIST field.
+    # See `Lists.watcher_visible`'s own doc comment for where the
+    # resulting state lives.
+    ShowList(string)                    # list id (data_showlist)
+    HideList(string)                    # list id (data_hidelist)
+    # Event: broadcasts. Both take the *message-name expression* (evaluated
+    # at runtime, not resolved at link time) -- see `Broadcasts`' own doc
+    # comment for why `Broadcast` and `BroadcastAndWait` behave identically
+    # in this phase despite real Scratch treating them very differently.
+    Broadcast(Block)
+    BroadcastAndWait(Block)
+    # Motion. All scoped to "the target running this script" via
+    # `Frame.target_id` (see its own doc comment) rather than any explicit
+    # id in the AST itself -- every Motion block in real Scratch always
+    # acts on the executing sprite, never a named other one (that's
+    # `motion_pointtowards`/`motion_goto`'s target-picker menu, both
+    # deliberately out of scope for this pass, see `Positions`' doc
+    # comment). Reporters first, then stack blocks.
+    XPosition                          # reporter
+    YPosition                          # reporter
+    Direction                          # reporter
+    MoveSteps(Block)                   # steps expr
+    TurnRight(Block)                   # degrees expr
+    TurnLeft(Block)                    # degrees expr
+    PointInDirection(Block)            # direction expr
+    GotoXY(Block, Block)               # x expr, y expr
+    ChangeXBy(Block)                   # dx expr
+    SetX(Block)                        # x expr
+    ChangeYBy(Block)                   # dy expr
+    SetY(Block)                        # y expr
+    # `motion_goto`'s TO expr -- "_mouse_"/"_random_"/a sprite name, the
+    # exact same menu-shadow shape `sensing_touchingobject`'s TOUCHINGOBJECTMENU
+    # already established (and reuses `MouseState`/`Positions`/`Rng`
+    # wholesale, no new state needed). See `exec_simple`'s own `GoTo` case
+    # for real scratch-vm's exact semantics for all three cases.
+    GoTo(Block)                        # motion_goto
+    # `motion_pointtowards`'s TOWARDS expr -- "_mouse_"/"_random_"/a
+    # sprite name, same menu-shadow shape as `GoTo`'s own TO (no
+    # "_edge_" case here either) -- but "_random_" means something
+    # different for this opcode: a genuinely random *direction*, not a
+    # random *position* the way `GoTo`'s own "_random_" is. See `exec_
+    # simple`'s own `PointTowards` case for the exact formula.
+    PointTowards(Block)
+    # `motion_glidesecstoxy` -- unlike every other Motion stack block above
+    # (instant, resolved in `exec_simple`), a real *tween*: the sprite
+    # visibly moves from its current position to (X, Y) over SECS seconds,
+    # not an instant jump. Needs the same "park a frame, resume across
+    # many ticks" shape `Wait`/`SayForSecs` already established -- see
+    # `FrameKind::Gliding`'s own doc comment for the actual interpolation.
+    # SECS/X/Y are all plain numeric exprs, no menu shadow (unlike `GoTo`'s
+    # own TO).
+    GlideSecsToXY(Block, Block, Block)  # secs expr, x expr, y expr
+    # `motion_glideto` -- same real tween as `GlideSecsToXY` just above
+    # (reuses `FrameKind::Gliding` unchanged), but the target position
+    # comes from a TO menu-shadow expr instead of raw X/Y exprs -- the
+    # exact same "_mouse_"/"_random_"/a sprite name dispatch `GoTo`'s own
+    # `exec_simple` case already established (`getTargetXY`, real
+    # scratch-vm's own shared helper both `goTo` and `glideTo` call).
+    # Real scratch-vm resolves the target position *once*, at the moment
+    # the glide starts, not per-tick -- confirmed against source: `glideTo`
+    # calls `getTargetXY` a single time and hands the result straight to
+    # the same `glide()` a fixed-X/Y glide uses, so a moving mouse/sprite
+    # during the glide is never chased.
+    GlideTo(Block, Block)  # secs expr, TO expr
+    # `motion_ifonedgebounce` -- no expr/field at all, purely reads the
+    # calling instance's own `Positions`/`LooksStates`/costume size and
+    # (conditionally) writes both `direction` and `x`/`y`. Ported from real
+    # scratch-vm's own `ifOnEdgeBounce` (`Scratch3MotionBlocks`) --
+    # see `exec_simple`'s own case for the full algorithm and the AABB
+    # simplification this makes (same "unrotated bounding box" trade
+    # `sensing_touchingobject`'s own `Touching` case already makes, not a
+    # new one introduced here).
+    IfOnEdgeBounce
+    # `motion_setrotationstyle` -- STYLE field verbatim ("all around"/
+    # "left-right"/"don't rotate", the exact same three values `Sb3Target.
+    # rotation_style_or_default` already reads at link time -- see
+    # `RotationStyles`' own doc comment for why this needed a real
+    # resource, not the read-only `SpriteRotationStyle` Component an
+    # earlier round modeled rotation style as). Real scratch-vm's own
+    # `RenderedTarget.setRotationStyle` silently ignores any value other
+    # than these three exact strings -- confirmed against real source, not
+    # guessed -- so an unrecognized STYLE is a real, matching no-op here
+    # too (`exec_simple`'s own case only writes when it recognizes one).
+    SetRotationStyle(string)
+    # Sensing: keyboard/mouse. All reporters -- `event_whenkeypressed` (the
+    # one *hat* this pass adds) is checked directly against real Bevy input
+    # by a dedicated Update system (`check_key_press_hats`, in the Bevy ECS
+    # section below), not through the block AST at all, since a hat has no
+    # reporter/stack-block position to occupy in the first place.
+    KeyPressed(Block)                  # KEY_OPTION expr (a menu shadow input, resolves to a string literal at runtime -- see dispatch_reporter's own comment)
+    MouseX
+    MouseY
+    MouseDown
+    # `sensing_loudness`/`sensing_loud` -- see `current_loudness`'s own
+    # doc comment (above) for the real `-1` sentinel this project reports
+    # (matching real Scratch's own defined behavior with no audio engine
+    # available, not a guess). No fields on either -- neither opcode takes
+    # an input.
+    Loudness
+    IsLoud
+    Timer                              # sensing_timer reporter -- see ScratchTimer's own doc comment for the naming note
+    ResetTimer                         # sensing_resettimer -- sets ScratchTimer.elapsed back to 0.0, no fields
+    Answer                             # sensing_answer -- reads Vars.answer, see that field's own doc comment
+    # `sensing_current` -- CURRENTMENU field verbatim, real Scratch's own
+    # uppercase dropdown values ("YEAR"/"MONTH"/"DATE"/"DAYOFWEEK"/"HOUR"/
+    # "MINUTE"/"SECOND", confirmed against a real scratch-vm fixture
+    # rather than assumed -- see `eval`'s own `CurrentDateTime` case for
+    # the real local-wall-clock read (`chrono::Local::now()`, this
+    # project's first-ever genuine OS time access -- `ScratchTimer` is
+    # always synthetic). An unrecognized menu value reports `0`, matching
+    # real Scratch's own `current()` switch/default.
+    CurrentDateTime(string)
+    # `sensing_dayssince2000` -- a real reporter, no fields (no menu, no
+    # input, unlike `CurrentDateTime`'s own CURRENTMENU). See `eval`'s own
+    # `DaysSince2000` case for the formula (verified by hand-worked algebra
+    # against real scratch-vm source, not guessed) and why it needs no
+    # local-timezone read at all despite the source it's ported from
+    # looking timezone-dependent.
+    DaysSince2000
+    # `sensing_setdragmode` -- DRAG_MODE is a plain field ("draggable"/"not
+    # draggable", same shape as `WHENGREATERTHANMENU`), resolved once at
+    # link time to a bool (`linker.br`'s own dispatch case). Writes `Sound
+    # Queue.draggable[frame.target_id]` directly in `exec_simple` (own
+    # case, `interpreter.br`) -- a plain per-instance flag, no `Commands`/
+    # deferral needed, unlike `CloneRequest`/`SoundRequest`. Read by the
+    # new `handle_sprite_dragging` Update system (`scratch.br`) to gate
+    # which sprites can actually be picked up by a real click-and-drag
+    # interaction -- see that system's own doc comment for the real
+    # mouse-drag feature this unlocks (previously a documented no-op,
+    # since no drag interaction existed at all to toggle).
+    SetDragMode(bool)
+    # Phase 4 -- the Pen extension, the first one this project implements.
+    # Real network-dependent extensions (`text2speech`, calling a live
+    # proprietary Scratch Team API) are explicitly out of scope; Pen is
+    # entirely local, confirmed against real `scratch3_pen` source. See
+    # `SoundQueue.pen_states`/`PenState`'s own doc comment for the per-
+    # instance state model, and `draw_pen_marks` (`pen.br`) for the actual
+    # canvas rendering these blocks feed into.
+    PenClear                            # pen_clear
+    PenDown                             # pen_penDown -- also draws an
+                                         # immediate dot, real Scratch's
+                                         # own behavior even if the sprite
+                                         # never moves again afterward
+    PenUp                                # pen_penUp
+    SetPenColorToColor(Block)           # pen_setPenColorToColor -- COLOR, a real `colour_picker` shadow (see `dispatch_reporter`'s own new case)
+    ChangePenColorParamBy(string, Block) # pen_changePenColorParamBy -- COLOR_PARAM field + VALUE expr
+    SetPenColorParamTo(string, Block)   # pen_setPenColorParamTo
+    ChangePenSizeBy(Block)              # pen_changePenSizeBy
+    SetPenSizeTo(Block)                 # pen_setPenSizeTo
+    # The four legacy (Scratch 2.0-compat) pen-color blocks --
+    # `hideFromPalette: true` in real `getInfo()` (no modern editor can
+    # generate these), landed anyway because real scratch-vm keeps them
+    # fully *functional*, not just hidden -- a hand-edited/imported
+    # Scratch 2.0 project can still contain and run them. See `PenState.
+    # shade`/`legacy_update_pen_color`'s own doc comments (`interpreter.br`)
+    # for the real, ported-verbatim math.
+    SetPenHueToNumber(Block)             # pen_setPenHueToNumber -- HUE expr
+    ChangePenHueBy(Block)                # pen_changePenHueBy -- HUE expr
+    SetPenShadeToNumber(Block)           # pen_setPenShadeToNumber -- SHADE expr
+    ChangePenShadeBy(Block)              # pen_changePenShadeBy -- SHADE expr
+    # pen_stamp -- no inputs at all (real scratch-vm's own `stamp` takes
+    # nothing but `util.target`). Deferred the same way `PenClear`/
+    # `PenDown` are: `exec_simple` has no `Assets<Image>`/ECS `Query`
+    # access, so this only queues `SoundQueue.stamp_requests` -- the real
+    # compositing happens in `draw_stamps` (`pen.br`).
+    Stamp
+    # Sensing round 2 -- sensing_touchingobject, the single largest opcode
+    # left after costume switching landed (same opcode-histogram check
+    # that's driven every round since the scheduler). See `TargetCostumeDims`'
+    # own doc comment (below) and `aabb_overlap`/`touching_point`/
+    # `touching_stage_edge`'s own doc comments (further below) for the real
+    # simplification this makes: axis-aligned bounding-box overlap, not
+    # real Scratch's pixel-perfect alpha-channel test -- an honest trade,
+    # not a wrong shortcut, since this project doesn't apply sprite
+    # rotation to its own rendering yet either (see `sync_transforms_from_
+    # positions`' own doc comment in scratch.br), so there's no rotated
+    # bounding box this AABB approximation is *failing* to account for.
+    Touching(Block)                     # TOUCHINGOBJECTMENU expr -- "_mouse_"/"_edge_"/a sprite name (sensing_touchingobject)
+    # sensing_touchingcolor -- COLOR, a real `colour_picker` shadow (same
+    # shape `SetPenColorToColor` already established). Unlike `Touching`
+    # above (a pure AABB check, no rendered-pixel data needed at all),
+    # this genuinely needs to know what color is actually on screen --
+    # see `SceneComposite`'s own doc comment (`runtime.br`) for why that
+    # needs a whole new once-per-tick software-composited resource
+    # rather than a real GPU readback, and `eval`'s own new `SceneComposite`
+    # parameter for how this reaches it.
+    TouchingColor(Block)
+    # `sensing_distanceto` (real Scratch's own opcode -- not `sensing_
+    # distancetoobject`, confirmed against real scratch-vm/scratch-blocks
+    # source, not assumed from the block's own display name) -- a near-
+    # free follow-up once `sensing_touchingobject` already built the
+    # AABB/menu-shadow machinery this reuses: same DISTANCETOMENU shape as
+    # TOUCHINGOBJECTMENU ("_mouse_" or a sprite name, no "_edge_" case
+    # here), straight-line distance via `Positions`/`MouseState`, no new
+    # state needed at all.
+    DistanceTo(Block)                   # DISTANCETOMENU expr -- "_mouse_"/a sprite name (sensing_distanceto)
+    # `sensing_of` -- OBJECT expr ("_stage_" or a sprite name, via its own
+    # `sensing_of_object_menu` shadow, same real-block-not-always-inlined
+    # shape as every other menu shadow this session) plus PROPERTY, a
+    # plain link-time field (not an expr -- it's a dropdown, `fields` not
+    # `inputs`, same as `CostumeNumberName`'s NUMBER_NAME). PROPERTY is
+    # either one of Scratch's own fixed builtin property names for that
+    # object kind ("x position", "backdrop #", "volume", ...) or --
+    # confirmed via real project data, not guessed -- a Stage/global
+    # variable's own name, resolved through `Vars.id_for_name` at eval
+    # time. `SoundQueue` is threaded through `eval` now (alongside
+    # `TargetCostumes`, needed for "costume name"/"backdrop name", and
+    # `CostumeNumberName`'s own "name" variant -- see that variant's own
+    # doc comment below), closing "volume"'s own former gap too.
+    SensingOf(Block, string)
+    # Sound. Stack blocks only -- `sound_play`/`sound_stopallsounds` are the
+    # only two Sound opcodes this pass implements (see `SoundQueue`'s own
+    # doc comment and README.md's roadmap for what's deliberately deferred:
+    # `sound_playuntildone` needs the real pausable scheduler, volume/
+    # effects need real audio-mixing work with no test fixture to justify
+    # it yet).
+    PlaySound(Block)                   # SOUND_MENU expr (same menu-shadow shape as KeyPressed's KEY_OPTION)
+    # `sound_playuntildone` -- same SOUND_MENU expr shape as `PlaySound`
+    # just above, but the calling script actually *waits* for it: real
+    # scratch-vm's own implementation starts playback then parks the
+    # thread until it finishes. Needs the pausable scheduler (a `Thread`/
+    # stack frame to park on), so lives in `step_thread`, not `exec_
+    # simple` -- reuses the plain `FrameKind::WaitingUntil` frame kind
+    # unchanged (no new frame kind needed at all: this is a fixed-
+    # duration wait computed once up front from `SoundQueue.sound_
+    # durations`, exactly like `Wait`'s own `timer.elapsed + secs`, not a
+    # per-tick interpolation like `motion_glidesecstoxy`'s own `Gliding`
+    # needed).
+    PlayUntilDone(Block)
+    StopAllSounds
+    # Sound, round 2 -- volume only. `sound_seteffectto`'s PITCH/PAN
+    # effects followed in round 3 (see that variant's own doc comment
+    # below) once a verified conversion formula existed for pitch and
+    # pan was confirmed to need its own separate spike.
+    SetVolumeTo(Block)                  # VOLUME expr (sound_setvolumeto)
+    ChangeVolumeBy(Block)               # VOLUME expr (sound_changevolumeby)
+    # Sound, round 3 -- PITCH only, real Scratch's own PAN effect (-100 to
+    # 100, hard left to hard right) stays a documented gap: `bevy_audio`
+    # has no direct pan knob on `PlaybackSettings`, only `spatial: bool`
+    # 3D-position-based audio that its own doc comment says degrades to
+    # "simple left-right stereo panning" -- a real, achievable primitive
+    # in principle, but calibrating a `SpatialListener`/source position to
+    # match Scratch's own -100..100 range is a real, separate spike this
+    # pass doesn't attempt, not a quick add-on. `EFFECT` is a real field
+    # (a dropdown, "PITCH"/"PAN", confirmed against a real tracked
+    # project's own raw JSON -- not a plugged-in input), same resolved-at-
+    # link-time-to-a-plain-string shape as `SetGraphicEffectTo`'s own
+    # EFFECT field -- so the branch on which effect this actually is lives
+    # in `exec_simple` itself, not spread across per-effect variants. See
+    # `SoundQueue.pitch`'s own doc comment for why only pitch is tracked
+    # -- real Scratch has no reporter for either sound effect's current
+    # value either, matching graphic effects' own `ghost`-only reasoning.
+    SetSoundEffectTo(string, Block)      # EFFECT field, VALUE expr (sound_seteffectto)
+    ChangeSoundEffectBy(string, Block)   # EFFECT field, VALUE expr (sound_changeeffectby -- confirmed against real scratch-vm/scratch-blocks source: this one's own input is also named VALUE, not CHANGE, unlike looks_changeeffectby's own CHANGE input)
+    ClearSoundEffects                    # sound_cleareffects
+    # `sound_volume` -- the Sound category's own dedicated reporter for
+    # the calling instance's current volume (distinct from `sensing_of`'s
+    # "volume" property, which reads the exact same underlying `SoundQueue.
+    # volumes` state but through a different opcode/dropdown -- both are
+    # real, separate blocks in real Scratch's own palette, confirmed
+    # against source, not a duplicate). No fields/inputs at all -- found
+    # via a full scratch-vm source audit across every remaining category
+    # (same technique that closed out Motion), real and visible in the
+    # palette (unlike its sibling `sound_beats_menu`/`sound_effects_menu`
+    # entries in the same source file, which correspond to no real block
+    # this project has ever needed a shadow for).
+    Volume
+    # Looks: say/think bubbles. Stack blocks only. `looks_sayforsecs`/
+    # `looks_thinkforsecs` (needs real timing/the pausable scheduler --
+    # same rationale as `sound_playuntildone`) and every graphic-effect/
+    # show-hide/layering opcode are deliberately not implemented -- see
+    # `SpeechBubbles`' own doc comment and README.md's roadmap.
+    Say(Block)                          # MESSAGE expr
+    Think(Block)                        # MESSAGE expr
+    # `looks_sayforsecs`/`looks_thinkforsecs` -- unlike `Say`/`Think`
+    # above, these span a tick boundary (the real pausable scheduler
+    # makes this buildable for real, the reason it was deferred when
+    # `Say`/`Think` first landed) so they're handled directly in
+    # `step_thread`, not `exec_simple` -- see `FrameKind::
+    # WaitingUntilThenClearBubble`'s own doc comment for how the "clear
+    # the bubble once the wait finishes" half works.
+    SayForSecs(Block, Block)            # MESSAGE expr, SECS expr (looks_sayforsecs)
+    ThinkForSecs(Block, Block)          # MESSAGE expr, SECS expr (looks_thinkforsecs)
+    # Graphic effects -- EFFECT is a real Scratch *field* (a dropdown,
+    # not a plugged-in input), resolved to a plain string at link time
+    # the same way `looks_costumenumbername`'s NUMBER_NAME field is --
+    # so the branch on which effect this actually is lives in `exec_
+    # simple` itself (`effect == "ghost"` vs. everything else), not
+    # spread across a family of per-effect `BlockKind` variants. See
+    # `LooksState.ghost`'s own doc comment for why only `ghost` is
+    # rendered.
+    SetGraphicEffectTo(string, Block)   # EFFECT field, VALUE expr (looks_seteffectto)
+    ChangeGraphicEffectBy(string, Block) # EFFECT field, CHANGE expr (looks_changeeffectby)
+    ClearGraphicEffects                 # looks_cleargraphiceffects
+    # Layering -- FRONT_BACK is a real Scratch *field* ("front"/"back"),
+    # same resolved-at-link-time-to-a-plain-string shape as graphic
+    # effects' own EFFECT field just above. See `LayerOrders`' own doc
+    # comment for the real semantics ("above/below every *other* sprite
+    # currently on stage", not a fixed z value).
+    GoToFrontBack(string)                # FRONT_BACK field (looks_gotofrontback)
+    # `looks_goforwardbackwardlayers` -- NUM expr, FORWARD_BACKWARD field
+    # ("forward"/"backward", plain field not an expr, same shape as
+    # `GoToFrontBack`'s own FRONT_BACK). See `LayerOrders.go_forward_
+    # backward`'s own doc comment for the real "move N *positions*, not
+    # add N to my own order value" semantics.
+    GoForwardBackwardLayers(Block, string)
+    # Looks, round 2 -- show/hide and size, driven by the same real-project
+    # opcode-histogram check that motivated Operators round 2 and
+    # `operator_random`: once the scheduler landed, these (plus costume
+    # switching, not yet done -- see `LooksState`'s own doc comment) became
+    # the single largest remaining real-world gap.
+    Show
+    Hide
+    SetSizeTo(Block)                    # percent expr (looks_setsizeto)
+    ChangeSizeBy(Block)                 # delta expr (looks_changesizeby)
+    SizePercent                         # reporter (looks_size)
+    SwitchCostumeTo(Block)              # name-or-number expr (looks_switchcostumeto)
+    # `looks_switchbackdropto` -- any sprite's script can switch the
+    # *Stage's* backdrop (a project-wide effect, unlike every other Looks
+    # block above, which always acts on `frame.target_id`), so this
+    # doesn't need a target id in the AST at all -- `exec_simple`'s own
+    # case hardcodes the literal string `"Stage"`, real Scratch's own
+    # non-configurable, format-guaranteed name for the stage target (the
+    # editor doesn't let a project rename it, confirmed by every fixture
+    # this project has ever authored already assuming it). Otherwise
+    # identical machinery to `SwitchCostumeTo` -- the Stage's own
+    # `costumes` array *is* its backdrops in the on-disk sb3 format, no
+    # separate "backdrops" list exists.
+    SwitchBackdropTo(Block)             # name-or-number expr (looks_switchbackdropto)
+    # `looks_switchbackdroptoandwait` -- real scratch-vm's own
+    # `switchBackdropAndWait` switches the backdrop (which synchronously
+    # `startHats`s every `event_whenbackdropswitchesto` hat matching the
+    # new name) then waits for those newly-started threads to finish
+    # before moving on. Same real "drive to completion" semantics
+    # `BroadcastAndWait` established for `event_broadcastandwait` -- see
+    # `exec_simple`'s own `SwitchBackdropToAndWait` case and `SoundQueue.
+    # backdrop_switch_hats`' own doc comment for how the hat lookup itself
+    # reaches `exec_simple` without a new resource parameter.
+    SwitchBackdropToAndWait(Block)      # name-or-number expr (looks_switchbackdroptoandwait)
+    NextCostume                         # looks_nextcostume
+    # `looks_nextbackdrop` -- the Stage's own equivalent of `NextCostume`,
+    # same "hardcoded to the literal target id Stage" convention
+    # `SwitchBackdropTo` already established. Found via the same
+    # full-category scratch-vm source audit as `sound_volume`/
+    # `event_whenstageclicked` -- real and visible in the palette, unlike
+    # its sibling legacy no-op entries in the same source file
+    # (`looks_hideallsprites`/`looks_changestretchby`/`looks_setstretchto`,
+    # each explicitly commented "legacy no-op block(s)" in real source).
+    NextBackdrop                        # looks_nextbackdrop
+    # looks_costumenumbername's reporter: NUMBER_NAME field verbatim
+    # ("number"/"name"). Both variants implemented -- "name" reads the
+    # costume's real name out of `TargetCostumes` (threaded through
+    # `eval` -- every one of its ~85 recursive call sites, plus the two
+    # external callers in scratch.br, `sync_reporter_watchers`/`check_
+    # greater_than_hats` -- for this and several other real, previously-
+    # documented gaps that all needed the same resource: `BackdropNumberName`'s
+    # own "name" variant just below, `SensingOf`'s "costume name"/
+    # "backdrop name" branches, and `Touching`'s own `costume_dims.get`
+    # -- see that case's own doc comment in `interpreter.br`). A live
+    # CLONE's own script reading its own "name" now correctly resolves
+    # its origin via `SoundQueue.instance_type_of` too (`eval` gained
+    # `SoundQueue` access in the same round `TargetCostumes` itself did,
+    # a bit later this session -- `TargetCostumes` stays keyed by origin
+    # name only, same root cause as every gap listed above). "number" was
+    # never affected either way (`LooksState.costume_index` is genuinely
+    # per-instance already).
+    CostumeNumberName(string)
+    # `looks_backdropnumbername` -- the Stage's own equivalent of
+    # `CostumeNumberName`, same NUMBER_NAME field, same "number" vs
+    # "name" split, both variants implemented the same way now. Sampled
+    # against five real projects using this opcode 62 times total, every
+    # single one used "number", zero used "name" -- so this specific
+    # "name" branch is genuinely untested against real project data, only
+    # against the same `TargetCostumes` machinery `CostumeNumberName`'s
+    # own "name" variant already exercises. Hardcoded to the literal
+    # target id `"Stage"`, same convention `SwitchBackdropTo`'s own doc
+    # comment already established -- a project-wide reporter, not scoped
+    # to whichever sprite's script happens to read it.
+    BackdropNumberName(string)
+    # Control: the real pausable scheduler's three new stack blocks --
+    # `Wait`/`Forever`/`WaitUntil` are the whole reason a script can now
+    # legitimately still be mid-execution when a tick ends (every other
+    # stack block above still always finishes within the tick it starts).
+    # See `Thread`/`FrameKind`'s own doc comments for how `step_thread`
+    # actually executes these -- unlike every block above, these three
+    # aren't run by a simple one-shot `match` arm.
+    Wait(Block)                          # seconds expr (control_wait)
+    Forever([Block])                     # body, looped until control_stop (control_forever)
+    WaitUntil(Block)                     # condition expr, re-checked every tick, no body (control_wait_until)
+    # `sensing_askandwait` -- real Scratch's own Sensing category, but
+    # handled in `step_thread` alongside `Wait`/`WaitUntil` above (not
+    # `exec_simple`) for the identical reason: it's a fourth genuinely
+    # yielding block, pausing *only the calling thread* (every other
+    # script keeps running) until the on-screen text input it shows gets
+    # submitted -- see `FrameKind::WaitingForAnswer`'s own doc comment for
+    # how the pause/resume actually works.
+    AskAndWait(Block)                    # QUESTION expr (sensing_askandwait)
+    # Cloning -- the Type/Instance model's own two entry points. `CreateCloneOf`'s
+    # CLONE_OPTION is a menu-shadow input, same shape as `motion_goto`'s TO
+    # ("_myself_" or a named sprite -- see `exec_simple`'s own case for real
+    # scratch-vm's exact "_myself_ clones the calling instance, a named
+    # sprite always clones that sprite's own *original*, never a currently-
+    # running clone of it" semantics). `DeleteThisClone` has no field/input
+    # at all (real Scratch's `control_delete_this_clone` always means "this
+    # script's own running instance") -- handled directly in `step_thread`,
+    # not `exec_simple`, since it needs to clear the calling thread's own
+    # stack the same way `Stop` does (see that arm's own doc comment there).
+    CreateCloneOf(Block)                 # CLONE_OPTION expr (control_create_clone_of)
+    DeleteThisClone                      # control_delete_this_clone
+
+# One nested level of a running `Thread`'s explicit call/loop stack --
+# `(sequence: [Block], index)` plus which *kind* of body this is (a plain
+# sequence, or a loop that needs to know whether/how to go around again
+# once `index` reaches the end), matching this project's own README.md
+# "Scheduler" design section precisely (written before this landed, not
+# reverse-justified after). Replaces `exec`'s old *native Rust call stack*
+# recursion entirely -- the previous `exec(stmt, ...)` calling itself for
+# nested bodies relied on the Rust call stack unwinding naturally when a
+# script finished; that's exactly what can no longer work once a script
+# can legitimately still be mid-body when a tick ends (nothing can "pause"
+# a real Rust call stack across two separate system-call invocations).
+# `scope` is this level's own `Frame` (params/target_id) -- copied
+# unchanged from the parent frame for a plain control-flow push (`If`/
+# `Forever`/`Repeat`/..., matching real Scratch: control-flow blocks never
+# introduce a new variable scope), but a *fresh* one for a `ProcCall` push
+# (the callee's own bound parameters) -- see `step_thread`'s own `ProcCall`
+# case for why carrying `scope` per-frame (rather than a second parallel
+# stack) is what makes that work with no extra plumbing.
+struct ExecFrame:
+    [Block] body
+    int index
+    FrameKind kind
+    Frame scope
+
+# What happens when an `ExecFrame`'s `index` reaches the end of its own
+# `body` -- i.e. what "falling off the end" means for this particular
+# kind of frame. Real Scratch's own yield points (see README.md's
+# "Scheduler" section) are exactly the loop kinds here reaching the end of
+# one iteration (`RepeatN`/`RepeatUntilCond`/`Forever`) plus `WaitingUntil`
+# re-checking each tick -- `TopLevel`/`ProcCallFrame` never yield on their
+# own, they just pop (a plain sequence or a finished procedure call has
+# nothing left to wait for).
+enum FrameKind:
+    TopLevel
+    # `bool`: whether the procedure this call invoked is itself `warp`-
+    # flagged (`Proc.warp`) -- `thread_in_warp` (`interpreter.br`) scans
+    # the whole frame stack for a `ProcCallFrame(true)` to decide whether
+    # any currently-active loop should skip its own per-iteration yield,
+    # matching real Scratch's own "Run without screen refresh" semantics:
+    # once inside *any* warp call, every loop beneath it -- including one
+    # inside a further-nested call that isn't itself warp-flagged, real
+    # scratch-vm's own `thread.warp` counter is "contagious downward" and
+    # never reset early by a non-warp nested call -- runs without
+    # yielding until the outermost warp call it's nested in returns.
+    ProcCallFrame(bool)
+    RepeatN(int)                # remaining iterations *after* this one
+    RepeatUntilCond(Block)      # condition, re-checked at the end of each iteration
+    Forever
+    WaitingUntil(float32)       # `ScratchTimer.elapsed` threshold to resume at (control_wait)
+    WaitingUntilCond(Block)     # condition, re-checked every tick, no body in between (control_wait_until)
+    # Same polling shape as plain `WaitingUntil` (a `ScratchTimer.elapsed`
+    # threshold to resume at), but for `looks_sayforsecs`/`looks_
+    # thinkforsecs`: the bubble itself was already set (a leaf side
+    # effect) at the moment this frame was pushed, so all this frame's
+    # own resolution needs to do differently from plain `WaitingUntil` is
+    # clear it again once the wait finishes -- via `frame.scope.
+    # target_id`, no separate target-id field needed here, the same way
+    # every other frame kind already reaches its own target through
+    # `scope` rather than duplicating it into the `FrameKind` itself.
+    WaitingUntilThenClearBubble(float32)
+    # `sensing_askandwait` -- resumes once `AskQueue.last_answered_id`
+    # reaches this frame's own `ask_id` (assigned when `AskAndWait` pushed
+    # this frame, `AskQueue.next_ask_id` at that moment). `AskQueue.queue`
+    # is a real, strict FIFO -- only its own front entry is ever shown/
+    # captures input (`sync_ask_ui`/`handle_ask_text_input`, `scratch.br`),
+    # so a monotonic "highest id answered so far" counter is enough to
+    # know whether *this* frame's own ask has been dequeued yet; no need
+    # to re-scan the queue itself every tick. Unlike `WaitingUntil`(Cond)`,
+    # this can't resume based on anything `step_thread` already has access
+    # to on its own (a real Bevy keyboard-text-input event, not a
+    # `ScratchTimer`/pure-`Block`-condition check) -- see `AskQueue`'s own
+    # doc comment for the full two-phase (`exec_simple` queues, a real
+    # Bevy system answers) split, the same shape `CloneRequest`/
+    # `SoundRequest` already established for anything needing `Commands`/
+    # real input this project's interpreter itself stays free of.
+    WaitingForAnswer(int)
+    # `motion_glidesecstoxy` -- ported from real scratch-vm's own `glide`:
+    # a `Timer`-based tween from `(start_x, start_y)` to `(end_x, end_y)`
+    # over `duration` seconds, linearly interpolated every tick rather
+    # than resolved as a single boolean "done yet?" check the way plain
+    # `WaitingUntil` is -- `step_thread` writes a fresh interpolated
+    # `Position` on every tick this frame is still on top, not just once
+    # at the end, so the sprite's motion is actually visible frame to
+    # frame (not a same-tick-invisible instant jump at the *end* of the
+    # wait, which is all a plain `WaitingUntil`-style frame could give).
+    # `start_time` is `ScratchTimer.elapsed` at the moment `GlideSecsToXY`
+    # was first executed (not 0 -- glides can start mid-project, same
+    # reasoning `Wait`'s own `target = timer.elapsed + secs` already
+    # uses). Real Scratch itself skips this frame entirely for a
+    # `duration <= 0` glide (moves instantly, no yield at all) -- see
+    # `step_thread`'s own `GlideSecsToXY` case for where that's handled,
+    # this frame kind is only ever pushed for a genuinely positive
+    # duration.
+    Gliding(float32, float32, float32, float32, float32, float32)  # start_time, duration, start_x, start_y, end_x, end_y
+
+# One running script "thread" -- real Scratch's own terminology (`scratch-
+# vm`'s `Thread`/`sequencer.js`). `stack` is this thread's entire paused-or-
+# running state: everything `step_thread` needs to pick back up exactly
+# where it left off on the next call, with no other state living anywhere
+# else. A green-flag click, a keypress hat firing, a `when I receive` hat,
+# and an `event_whengreaterthan` hat all start a brand-new `Thread` the
+# same way (see `spawn_thread`) -- `target_id`/the top frame's `scope` are
+# fixed at creation, matching `ReceiverScript`'s own "tagged with its
+# owning target" reasoning (Motion needs it immediately, every frame this
+# thread ever pushes inherits it via `scope` unless a `ProcCall` overrides
+# it).
+#
+# `spawned`: broadcast-receiver scripts this thread's own step just
+# started (`Broadcast`/`BroadcastAndWait`, both still exactly-identical
+# "fire and forget" in this phase -- see `Broadcasts`' own doc comment for
+# why that's *no longer* exact fidelity now that `wait`/`forever` exist,
+# a real, documented follow-up gap, not silently dropped). A thread can't
+# reach into `ActiveThreads.threads` directly to push new ones mid-step
+# (that resource is what's iterating over this very thread right now) --
+# `advance_threads` drains this field into real new `Thread`s once every
+# thread this tick has finished its own step, avoiding a mutate-while-
+# iterating conflict entirely rather than working around one.
+struct Thread:
+    string target_id
+    var mut [ExecFrame] stack
+    var mut [ReceiverScript] spawned
+
+# Builds a fresh single-frame `Thread` ready to run `script.body` from the
+# top -- the one shared entry point every hat (green flag, keypress,
+# broadcast receive, `event_whengreaterthan`) uses to start a new thread,
+# so "how a thread begins" only has one real implementation to keep
+# correct.
+def Thread spawn_thread(ReceiverScript script):
+    let top_frame = Frame(params = {=}, target_id = script.target_id.clone())
+    Thread(target_id = script.target_id, stack = [ExecFrame(body = script.body, index = 0, kind = FrameKind.TopLevel, scope = top_frame)], spawned = [])
+
+# One custom block ("My Block") definition: its parameters' names, in the
+# same order the definition's own `procedures_prototype` declared them (see
+# `build_procs`), and its already-linked body. Resolved by `proccode` at
+# *execution* time (a `{string=Proc}` lookup in `exec`'s `ProcCall` arm),
+# not inlined at link time -- inlining a call site's body directly would
+# infinitely expand a recursive procedure (a proc calling itself); a runtime
+# name lookup is what actually supports recursion (and mutual recursion
+# between two procedures), the same way any real interpreter's function
+# calls do.
+struct Proc:
+    [string] param_names
+    [Block] body
+    # Real Scratch's own "Run without screen refresh" flag, straight from
+    # the defining `procedures_prototype`'s own mutation (`build_procs`,
+    # `Sb3Block.mutation_warp()`) -- `step_thread`'s `ProcCall` case reads
+    # this when pushing a `ProcCallFrame`, so `thread_in_warp` can tell a
+    # warp call apart from an ordinary one on the frame stack.
+    bool warp
+
+# A bare `{string=Proc}` dict can't itself carry an `as Resource` header --
+# only a named struct/enum declaration can -- so this one-field wrapper is
+# what makes the procedure registry usable as a Bevy `Resource` in Phase 2's
+# ECS wiring, the same reason `Vars`/`Lists`/`Broadcasts` are already
+# one-field-wrapped structs rather than bare dicts passed around directly.
+pub struct ProcTable as Resource, Debug, Clone:
+    {string=Proc} table
+
+# A procedure call's parameter bindings, active only while executing that
+# call's body -- `argument_reporter_string_number`/`argument_reporter_
+# boolean` blocks (`ArgGet`) read from this, never from `Vars` (parameters
+# are not Scratch variables; they're purely lexically scoped to the call).
+# Passed as a plain (non-`var`) parameter through `eval`/`exec`: each
+# `ProcCall` constructs a *new* `Frame` for the callee and passes it only
+# into that nested call tree -- once the nested `exec` calls return, the
+# caller's own `frame` binding (an ordinary Rust local, restored by the call
+# stack) is exactly as it was, which is what makes nested/recursive calls
+# keep each call's own parameters straight without any explicit stack.
+#
+# `target_id` (added for Phase 2's Motion category) rides along for exactly
+# the same reason: it's constant for the whole lifetime of one running
+# script (which target's `Positions` entry Motion blocks read/write), and a
+# `ProcCall`'s fresh `Frame` for the callee copies the *caller's*
+# `target_id` unchanged -- My Blocks execute in the calling sprite's
+# context, never the defining sprite's, matching real Scratch.
+struct Frame:
+    {string=ScratchValue} params
+    string target_id
+
+    req ScratchValue get(string name):
+        params[name] else ScratchValue.Num(ScratchNumber.from_i64(0))
+
+# The runtime variable table for Phase 1's vertical slice: a flat map from
+# variable id to its current value. Real Scratch scopes variables per
+# sprite/Stage with per-clone instances sharing a shape (jscratch's
+# Type/Instance slot-array design, see README.md) -- deliberately not built
+# yet. Every variable this phase's linker resolves is a Stage (global)
+# variable, which is all jscratch's own Fibonacci fixtures use (confirmed:
+# both scripts run on a sprite but read/write only Stage-scoped variables,
+# so a single flat table is enough to validate load->link->run end to end;
+# per-sprite locals + clones are a real follow-up, not a shortcut taken by
+# accident).
+pub struct Vars as Resource, Debug, Clone:
+    var mut {string=ScratchValue} table
+    # Sprite-local variable support -- real Scratch scopes a variable
+    # either to the Stage (global, `table` above) or to one specific
+    # sprite (local, per-*clone-instance*: each clone gets its own
+    # independent copy at creation time, mutated independently
+    # thereafter -- same "per-instance state" shape `SoundQueue.volumes`/
+    # `.pitches`/`Positions`/`LooksStates` already established for the
+    # Type/Instance model). `var_owner` -- var id -> owning origin sprite
+    # name, or `""` if global/Stage -- is the single source of truth for
+    # which storage a given id resolves through; ids are real sb3 hash
+    # strings, globally unique across the whole project, so a local and a
+    # global id can never collide and this never needs disambiguating by
+    # anything but a plain lookup.
+    var mut {string=string} var_owner
+    # instance id -> {var id -> value}. A nested dict, same shape as the
+    # already-proven `SoundQueue.sound_durations` -- any intermediate
+    # binding off this needs the identical explicit-type-annotation
+    # workaround that field's own doc comment documents (a real `boring`
+    # transpiler quirk: a bare/`if let`-wrapped nested dict-index tail
+    # binding can lose its own type inference without one).
+    var mut {string={string=ScratchValue}} local_table
+    # `data_showvariable`/`data_hidevariable`'s own state -- whether each
+    # variable's on-stage watcher is currently shown, keyed by the same
+    # variable id `table` uses. Lives here, not its own resource, for the
+    # same reason `SoundQueue.volumes` lives on `SoundQueue` instead of a
+    # standalone `SoundVolumes` (that struct's own doc comment,
+    # runtime.br): `run_pending_threads` (`scratch.br`) is already at
+    # Bevy's hard 16-parameter `SystemParam` limit, so a genuinely new
+    # top-level resource isn't free. Arguably a *better* fit here than
+    # `SoundQueue.volumes` was for its own case, though, not just a place
+    # to hide it -- "is this variable's watcher shown" is a real property
+    # *of* a variable, keyed identically to `table` itself, not a
+    # cross-cutting concern borrowing space in an unrelated resource.
+    # Seeded once at link time (`build_vars`) from each variable's own
+    # saved monitor visibility, same as `LooksState.visible`'s own
+    # `target.visible_or(true)` seeding.
+    var mut {string=bool} watcher_visible
+    # See `get_answer`/`set_answer`'s own doc comment below.
+    var mut string answer
+    # `sensing_of`'s own name -> id lookup -- Stage/global variable *name*
+    # to `table`'s own id key, built once at link time (`build_vars`) from
+    # each Stage variable's own `Sb3Variable.name`/`.id`. Needed because
+    # `sensing_of`'s PROPERTY field, when it doesn't match one of the
+    # fixed builtin properties ("x position"/"volume"/etc), is a genuine
+    # *variable name* in real projects -- confirmed via real project data
+    # (694/1255-series projects sampled this session), not guessed: real
+    # PROPERTY values like "Parallax"/"SOUND" are project-specific global
+    # variable names, not builtins. Only Stage/global variables are ever
+    # resolvable this way -- this project has no sprite-local variables at
+    # all (a real, documented, pre-existing gap), so a `sensing_of` whose
+    # PROPERTY is actually a sprite-local name has nowhere to resolve to
+    # and falls back to `""` same as any other unrecognized PROPERTY.
+    var mut {string=string} var_name_lookup
+    # `sensing_of`'s own name -> id lookup for a *sprite-local* variable,
+    # scoped by owning origin sprite name: {origin = {var name = var id}}.
+    # A nested dict, not a `"{origin}:{name}"` composite string key --
+    # neither sprite names nor variable names are `:`-free in the sb3
+    # format (arbitrary Unicode is legal there), so a composite key risks
+    # a genuine, silent cross-scope collision; the nested form costs
+    # nothing extra since this is always a single point lookup, never
+    # bulk-enumerated. `var_name_lookup` above stays global-only,
+    # unchanged.
+    var mut {string={string=string}} local_var_name_lookup
+
+    # `calling_instance_id` is whichever instance's script is doing the
+    # reading -- `frame.target_id`/`scope.target_id` at every real call
+    # site. Global (`var_owner[id] == ""`) resolves through `table`
+    # exactly as before; anything else resolves through this specific
+    # instance's own `local_table` entry -- a clone's local variables are
+    # never shared with its origin or with sibling clones.
+    req ScratchValue get(string id, string calling_instance_id):
+        let owner = var_owner[id] else ""
+        if owner == "":
+            table[id] else ScratchValue.Num(ScratchNumber.from_i64(0))
+        else:
+            let {string=ScratchValue} by_var = local_table[calling_instance_id] else {=}
+            by_var[id] else ScratchValue.Num(ScratchNumber.from_i64(0))
+
+    def set(string id, string calling_instance_id, ScratchValue v):
+        let owner = var_owner[id] else ""
+        if owner == "":
+            table[id] = v
+        else:
+            # Not `mut by_var = local_table[calling_instance_id] else {=}`
+            # followed by `by_var[id] = v` -- a real, freshly-found
+            # `boring` transpiler bug: index-*assignment* into a `mut`
+            # local bound from a `dict[key] else default` expression
+            # mis-transpiles to broken array-style `[key as usize]`
+            # codegen, even with an explicit type annotation on the
+            # binding (which *does* fix the read-only shape, see `get`
+            # above) -- confirmed empirically, not assumed, by trying
+            # exactly that shape first and hitting the same class of
+            # error already documented elsewhere in this file. A `mut`
+            # local bound to a *bare* `{=}` literal doesn't have this
+            # problem (confirmed working precedent: `build_target_sound_
+            # durations`'s own `by_name[s.name] = dur`), so this copies
+            # into a freshly-`{=}`-bound local instead of mutating the
+            # dict-index-derived one directly.
+            let {string=ScratchValue} existing = local_table[calling_instance_id] else {=}
+            mut by_var = {=}
+            for k, val in existing:
+                by_var[k] = val
+            by_var[id] = v
+            local_table[calling_instance_id] = by_var
+
+    # `""` (never a real variable id) if no Stage/global variable has this
+    # exact name -- a safe-default sentinel, not `string?`, matching this
+    # project's own established convention for "maybe missing" lookups
+    # (`Positions.get`/`LooksStates.get`/`SoundQueue.get_volume` all
+    # default rather than return `Option`) -- also sidesteps a real,
+    # freshly-found `boring` transpiler bug: a `T?`-returning method whose
+    # body is a bare (or `if let`-wrapped) dict-index tail expression
+    # mis-transpiles to array-style `[(key) as usize]` indexing plus a
+    # double `Some(...)` wrap, unlike the identical `dict[key] else
+    # default` shape (`instance_type_of` above, `watcher_shown` below),
+    # which transpiles correctly via `.get(&*key).cloned().unwrap_or_else`.
+    # Real Scratch variable names are unique per-target-scope by
+    # construction (the editor won't let you create two with the same
+    # name), so no ambiguity here for the one scope this project tracks.
+    # `scope` is an origin sprite name (try that sprite's own locals
+    # first, falling back to global) or `""` (global only, the Stage
+    # branch's own case -- the Stage has no locals of its own).
+    req string id_for_name(string var_name, string scope):
+        if scope != "":
+            let {string=string} by_name = local_var_name_lookup[scope] else {=}
+            let found = by_name[var_name] else ""
+            if found != "":
+                return found
+        var_name_lookup[var_name] else ""
+
+    # Which origin sprite owns `var_id`, or `""` if it's global/Stage --
+    # used by `sync_variable_watchers` (`scratch.br`) to resolve the
+    # right `calling_instance_id` for `get` above: a watcher only ever
+    # shows the *origin*'s own current value (clones never get their own
+    # separate watcher UI, matching real Scratch), and the origin's own
+    # instance id already equals its own name (see `SoundQueue.instance_
+    # types`'s own doc comment for that established convention).
+    req string owner_of(string var_id):
+        var_owner[var_id] else ""
+
+    # `control_create_clone_of`'s own per-instance-state copy, for sprite-
+    # local variables -- real Scratch semantics: cloning a clone carries
+    # forward that clone's own *current* mutated values (`source_id`, the
+    # actual instance being cloned), never the original sprite's *initial*
+    # ones, matching every other per-instance field `CreateCloneOf`'s own
+    # `exec_simple` case already copies from `source_id` this same way
+    # (`positions`/`looks`/`layer_orders`/`SoundQueue` volume+pitch). Reads
+    # through the same explicit-type-annotation local `get`'s own doc
+    # comment already documents before assigning into `local_table[new_id]`
+    # directly (a plain top-level field index-assignment -- the same shape
+    # `build_target_sound_durations`'s own `table[target_id] = by_name`
+    # already proves safe, unlike index-assignment *into* an intermediate
+    # local, which `set` above works around for a different reason).
+    def copy_local(string source_id, string new_id):
+        let {string=ScratchValue} src = local_table[source_id] else {=}
+        local_table[new_id] = src
+
+    # `despawn_pending_clones`'s own cleanup -- same reason/shape as
+    # `Positions.remove`/`LooksStates.remove`/etc: without this, a project
+    # that clones and deletes in a loop would leak one stale `local_table`
+    # entry per clone ever created.
+    def remove_local(string instance_id):
+        local_table.remove(instance_id)
+
+    # `false` (not shown) for a variable with no saved monitor entry at
+    # all -- rare in practice (real Scratch's own project.json format
+    # always includes one per variable, shown or not, so the variable
+    # palette's own checkbox has somewhere to persist), but a defensible
+    # default: a variable nobody has ever interacted with in the editor
+    # shouldn't suddenly appear on stage.
+    req bool watcher_shown(string id):
+        watcher_visible[id] else false
+
+    def set_watcher_visible(string id, bool shown):
+        watcher_visible[id] = shown
+
+    # `sensing_answer`'s own live state -- real Scratch's `answer` is a
+    # single project-wide value (not per-sprite/per-instance the way user
+    # variables are, and not even keyed by anything), set by `sensing_
+    # askandwait` once its own on-screen text input is submitted. Lives on
+    # `Vars` rather than a dedicated resource for the same "already
+    # threaded everywhere this needs to reach, `run_pending_threads` is
+    # already at Bevy's hard 16-parameter `SystemParam` limit" reasoning
+    # as `watcher_visible` above -- and a real conceptual fit too: `answer`
+    # is Scratch's own de-facto "hidden global variable", read by `eval`
+    # exactly like any other reporter.
+    req string get_answer():
+        answer
+
+    def set_answer(string a):
+        answer = a
+
+    # `sensing_askandwait`'s own runtime state -- a real, strict FIFO
+    # queue (real Scratch itself queues concurrent asks from different
+    # scripts one at a time, rather than clobbering or deadlocking), since
+    # `AskAndWait` pauses only its *own* calling thread, so more than one
+    # script can legitimately be mid-ask at once. `step_thread` pushes new
+    # entries directly (plain data, safe there); only the *front* of the
+    # queue is ever shown/captures input, both handled by real Bevy
+    # systems in `scratch.br` (`sync_ask_ui`/`handle_ask_text_input`) --
+    # the same two-phase split `CloneRequest`/`SoundRequest` already
+    # established for anything needing `Commands`/real input this
+    # project's interpreter itself stays free of.
+    #
+    # Lives on `Vars`, not its own resource -- `run_pending_threads` is
+    # already at Bevy's hard 16-parameter `SystemParam` ceiling, so any
+    # *new* resource `step_thread` needs read/write access to (it's the
+    # one function `run_pending_threads` actually calls) costs a 17th
+    # param it doesn't have, the same constraint that already drove
+    # `watcher_visible`/`answer` onto this same struct. `Vars` was the
+    # natural choice over `SoundQueue` (this session's usual fallback) --
+    # `answer` already lives here, and an ask queue is conceptually
+    # "answer, but not resolved yet" rather than anything sound-related.
+    var mut [PendingAsk] ask_queue
+    # What's been typed so far for the *front* of `ask_queue` -- reset to
+    # `""` once that entry is answered and the next one (if any) becomes
+    # the new front.
+    var mut string ask_buffer
+    var mut int next_ask_id
+    # Starts at `-1` (no real `ask_id` is ever negative) so a thread whose
+    # own `ask_id` happens to be `0` isn't accidentally treated as already
+    # answered before anything has been.
+    var mut int last_answered_id
+
+    req bool is_asking():
+        ask_queue.length > 0
+
+    req PendingAsk? front_ask():
+        if ask_queue.length > 0:
+            ask_queue[0]
+        else:
+            nil
+
+# Every Scratch list, keyed by id, alongside `Vars` -- kept as its own table
+# rather than a `List` variant on `ScratchValue` (which would need every
+# arithmetic/coercion method on `ScratchValue` to grow a list case for no
+# benefit) and rather than folded into `Vars.table` (real Scratch keeps
+# variables and lists as visibly separate concepts -- the Data category's
+# own two panels -- and jscratch's `VariableType`/list-as-a-variable design
+# was explicitly not carried over here for that reason). Same Stage-only
+# scoping simplification as `Vars` -- see its doc comment.
+#
+# `table[id]` always returns an owned copy of the list (Boring's dict
+# indexing, like Rust's `HashMap::get(...).cloned()`), so every mutating
+# method here follows the same fetch-mutate-restore shape: pull the current
+# `[ScratchValue]` out (or `[]` if absent), mutate the local copy, store it
+# back under the same id. There's no way to get a live mutable reference
+# into the dict's value from Boring, so this is the only correct pattern,
+# not just a style choice.
+pub struct Lists as Resource, Debug, Clone:
+    var mut {string=[ScratchValue]} table
+    # `data_showlist`/`data_hidelist`'s own state -- same shape and same
+    # reasoning as `Vars.watcher_visible`: whether each list's on-stage
+    # watcher is currently shown, keyed by the same list id `table` uses.
+    # Seeded once at link time (`build_lists`) from each list's own saved
+    # monitor visibility, same as `Vars.watcher_visible`'s own seeding.
+    # `build_list_watchers` no longer gates on a monitor's *initial*
+    # visibility either (own doc comment) -- an entity is spawned for
+    # every list watcher regardless, with the real, dynamic on/off state
+    # read from here every tick (`sync_list_watchers`), the same upgrade
+    # `data_showvariable`/`data_hidevariable` already drove for `Vars`.
+    var mut {string=bool} watcher_visible
+    # Sprite-local list support -- same shape and reasoning as `Vars.
+    # var_owner`/`.local_table` (see their own doc comments): a sprite-
+    # local list is per-*clone-instance*, `list_owner` is list id -> owning
+    # origin sprite name (or `""` for global/Stage), `local_table` is
+    # instance id -> {list id -> items}. No name-lookup field here, unlike
+    # `Vars.local_var_name_lookup` -- real Scratch has no "list of
+    # [sprite]" cross-sprite reporter (unlike `sensing_of` for variables),
+    # so there's no scoped-name-resolution story for lists at all.
+    var mut {string=string} list_owner
+    var mut {string={string=[ScratchValue]}} local_table
+
+    # `calling_instance_id` is whichever instance's script is doing the
+    # reading/writing -- `frame.target_id`/`scope.target_id` at every real
+    # call site, same convention `Vars.get`/`.set` already established.
+    # Every other method below is written in terms of this and `set_items`,
+    # rather than repeating the same global-vs-local branch ten times.
+    req [ScratchValue] get(string id, string calling_instance_id):
+        let owner = list_owner[id] else ""
+        if owner == "":
+            table[id] else []
+        else:
+            let {string=[ScratchValue]} by_list = local_table[calling_instance_id] else {=}
+            by_list[id] else []
+
+    def set_items(string id, string calling_instance_id, [ScratchValue] items):
+        let owner = list_owner[id] else ""
+        if owner == "":
+            table[id] = items
+        else:
+            # Copies into a freshly-`{=}`-bound local rather than index-
+            # assigning into one derived from `local_table[...] else {=}`
+            # -- see `Vars.set`'s own doc comment for the real `boring`
+            # transpiler quirk this works around (confirmed to apply
+            # identically here, same nested-dict-of-non-scalar shape).
+            let {string=[ScratchValue]} existing = local_table[calling_instance_id] else {=}
+            mut by_list = {=}
+            for k, val in existing:
+                by_list[k] = val
+            by_list[id] = items
+            local_table[calling_instance_id] = by_list
+
+    req bool watcher_shown(string id):
+        watcher_visible[id] else false
+
+    def set_watcher_visible(string id, bool shown):
+        watcher_visible[id] = shown
+
+    # `list_owner[list_id]`, or `""` if global/Stage -- same role as
+    # `Vars.owner_of`, used by `sync_list_watchers` to resolve the right
+    # `calling_instance_id` for `get` above.
+    req string owner_of(string list_id):
+        list_owner[list_id] else ""
+
+    # `control_create_clone_of`'s own per-instance-state copy -- same
+    # shape and reasoning as `Vars.copy_local`.
+    def copy_local(string source_id, string new_id):
+        let {string=[ScratchValue]} src = local_table[source_id] else {=}
+        local_table[new_id] = src
+
+    # `despawn_pending_clones`'s own cleanup -- same reason/shape as
+    # `Vars.remove_local`.
+    def remove_local(string instance_id):
+        local_table.remove(instance_id)
+
+    req int length(string id, string calling_instance_id):
+        let items = self.get(id, calling_instance_id)
+        items.length
+
+    def add(string id, string calling_instance_id, ScratchValue item):
+        mut items = self.get(id, calling_instance_id)
+        items.push(item)
+        self.set_items(id, calling_instance_id, items)
+
+    def delete_at(string id, string calling_instance_id, int index0):
+        mut items = self.get(id, calling_instance_id)
+        if index0 >= 0 and index0 < items.length:
+            items.remove(index0)
+        self.set_items(id, calling_instance_id, items)
+
+    def delete_all(string id, string calling_instance_id):
+        self.set_items(id, calling_instance_id, [])
+
+    def insert_at(string id, string calling_instance_id, int index0, ScratchValue item):
+        mut items = self.get(id, calling_instance_id)
+        # `<=` (not `<`): inserting exactly at position `length` is a valid
+        # "append at the end", the same as real Scratch's own "insert at
+        # last + 1" behavior.
+        if index0 >= 0 and index0 <= items.length:
+            items.insert(index0, item)
+        self.set_items(id, calling_instance_id, items)
+
+    def replace_at(string id, string calling_instance_id, int index0, ScratchValue item):
+        mut items = self.get(id, calling_instance_id)
+        if index0 >= 0 and index0 < items.length:
+            items[index0] = item
+        self.set_items(id, calling_instance_id, items)
+
+    req ScratchValue item_at(string id, string calling_instance_id, int index0):
+        let items = self.get(id, calling_instance_id)
+        if index0 >= 0 and index0 < items.length:
+            items[index0]
+        else:
+            # Real Scratch's `item # of list` reports an empty string for
+            # an out-of-range index rather than erroring.
+            ScratchValue.Str("")
+
+    # Named `has_item`, not `contains` (which is what `data_listcontainsitem`
+    # actually means) -- the transpiler special-cases any `.contains(x)` call
+    # as the builtin `Vec`/`HashSet`/`str` method (which takes `x` *by
+    # reference*), the same name-based false-positive class already fixed
+    # once for `.position()`/`.count` in breakout-boring's history but not
+    # for `.contains()`: calling a user-declared `contains(&self, item:
+    # ScratchValue)` here got emitted as `.contains(&list_id, &item)`, which
+    # doesn't type-check against an owned-`ScratchValue` parameter. Renaming
+    # sidesteps it entirely.
+    req bool has_item(string id, string calling_instance_id, ScratchValue item):
+        let items = self.get(id, calling_instance_id)
+        var found = false
+        for existing in items:
+            if existing.loosely_equals(item.clone()):
+                found = true
+        found
+
+    # 1-based, matching real Scratch's `item # of thing in list` -- `0` if
+    # not found (also matching real Scratch, not a sentinel invented here).
+    req int index_of(string id, string calling_instance_id, ScratchValue item):
+        let items = self.get(id, calling_instance_id)
+        var i = 0
+        var result = 0
+        for existing in items:
+            if result == 0 and existing.loosely_equals(item.clone()):
+                result = i + 1
+            i += 1
+        result
+
+# One target's Motion state: stage position + facing direction. Real
+# Scratch's direction convention: 0 = up, 90 = right, 180/-180 = down, -90 =
+# left, clockwise-increasing (matches `motion_movesteps`' own
+# `sin`/`cos`-based math below) -- NOT the standard math convention
+# (0 = right, counterclockwise). Default direction 90 (facing right) is
+# real Scratch's own default for a newly-created sprite.
+struct Position:
+    float32 x
+    float32 y
+    float32 direction
+
+    # `sin(rad)`/`cos(rad)` on a plain `float32` *local* (e.g. inside
+    # `exec`'s `MoveSteps` arm) hit an open `boring` transpiler bug: the
+    # builtin emits `(rad as f64).sin()` (an f64 result) even though `rad`
+    # is declared `float32`, breaking float32 arithmetic around it
+    # (E0308/E0277, confirmed with a real `cargo build` before writing this
+    # workaround). The already-fixed case (`boring/spikes/sqrt_trig.br`,
+    # task_b09eda59) only covers *implicit self-field* access inside a
+    # method body (`req float32 len(): sqrt(x * x + y * y)`) -- this is
+    # that same shape, deliberately, to stay on the known-working path
+    # rather than the still-broken one. Filed as a follow-up task to fix
+    # the general (non-self) case upstream; not worked around by trying
+    # to guess a fix in `boring` itself here.
+    req float32 move_dx(float32 steps):
+        steps * sin(direction * 0.017453292)
+
+    req float32 move_dy(float32 steps):
+        steps * cos(direction * 0.017453292)
+
+# Every target's Motion state, keyed by target name (sb3 targets have no
+# separate "id" field the way blocks/variables/lists do -- `name` is the
+# only project-unique identifier available, same reasoning as
+# `ScratchSprite.target_id` in the Bevy ECS section below). Only sprites
+# have a meaningful position (the Stage doesn't move); `build_positions`
+# still seeds an entry for the Stage for lookup-safety, real Scratch's own
+# "Stage has no x/y" simply never gets asked for via any Motion block in a
+# well-formed project.
+#
+# Deliberately NOT synced from/to a live Bevy `Transform` inside `eval`/
+# `exec` themselves -- the interpreter has no Bevy dependency and stays
+# exactly as headless-testable as Phase 1 (see `tests/motion.rs`); a
+# separate Update system (`sync_transforms_from_positions`, in the Bevy ECS
+# section below) copies this resource's values onto each `ScratchSprite`
+# entity's `Transform` once per tick, after scripts have run.
+pub struct Positions as Resource, Debug, Clone:
+    var mut {string=Position} table
+
+    req Position get(string target_id):
+        table[target_id] else Position(x = 0.0, y = 0.0, direction = 90.0)
+
+    def set(string target_id, Position p):
+        table[target_id] = p
+
+    # For `despawn_pending_clones` (a deleted clone's entries must not
+    # linger forever -- a project that clones and deletes in a loop would
+    # otherwise leak one entry per clone ever created) -- a real method,
+    # not `positions.table.remove(id)` at the call site, for the same
+    # "dict mutation through a `var` parameter" reason `.set()`'s own doc
+    # comment documents.
+    #
+    # This briefly had to be named `forget` (not `remove`), with a body
+    # that rebuilt the dict via iterate-and-filter instead of calling
+    # `.remove()` at all -- two real `boring` transpiler bugs, both now
+    # fixed upstream and confirmed reverted with a real `cargo build`:
+    # `.remove(...)` on a bare struct receiver got special-cased list-
+    # remove-by-index codegen regardless of a same-named user-defined dict
+    # method (`boring@ff7d29b`), and calling this method through a
+    # `Res<T>`/`ResMut<T>`-wrapped Bevy system parameter (exactly `despawn_
+    # pending_clones`'s own call sites) hit the identical bug even after
+    # the first fix landed, since that fix's own receiver-type check never
+    # unwrapped `Res`/`ResMut` (`boring@538d340`).
+    def remove(string target_id):
+        table.remove(target_id)
+
+# One target's non-Motion Looks state: whether it's currently shown, its
+# size as a percent of its original costume dimensions (100.0 = real
+# Scratch's own default, matching a target's saved `size` field), and its
+# current costume as a 0-based index into that target's own costume list
+# (matching `Sb3Target.current_costume`'s own 0-based convention, real
+# Scratch's on-disk representation, even though `looks_switchcostumeto`'s
+# own numeric-index argument is 1-based -- see `wrap_costume_index`'s own
+# doc comment in `linker.br` for where that conversion happens). Kept
+# separate from `Position` even though both are "per-target visual state"
+# -- Motion and Looks are genuinely different Scratch categories with
+# their own opcodes, and every other resource in this file already splits
+# along exactly this kind of category line (`SoundQueue`/`SpeechBubbles`
+# aren't folded into one "misc effects" resource either).
+# `ghost`: real Scratch's ghost graphic effect, 0-100 (0 = fully opaque,
+# real Scratch's own default; 100 = fully invisible) -- the *only* one of
+# Scratch's seven graphic effects (`color`/`fisheye`/`whirl`/`pixelate`/
+# `mosaic`/`brightness`/`ghost`) this project renders. A deliberate,
+# narrow scope, not a partial job pretending to be a full one: real
+# Scratch has no reporter block for *any* graphic effect's current value
+# (`looks_seteffectto`/`looks_changeeffectby` are write-only), so the
+# other six have no observable state to even get wrong by omitting --
+# `ghost` alone maps directly onto a real, cheap Bevy primitive (`Sprite.
+# color`'s alpha channel), where the other six would need actual shader/
+# image-distortion work this project has no rendering pipeline for yet.
+# See `BlockKind::SetGraphicEffectTo`'s own doc comment for where the
+# effect-name branch actually lives.
+struct LooksState:
+    bool visible
+    float32 size
+    int costume_index
+    float32 ghost
+
+pub struct LooksStates as Resource, Debug, Clone:
+    var mut {string=LooksState} table
+
+    req LooksState get(string target_id):
+        table[target_id] else LooksState(visible = true, size = 100.0, costume_index = 0, ghost = 0.0)
+
+    def set(string target_id, LooksState s):
+        table[target_id] = s
+
+    # See `Positions.remove`'s own doc comment -- same reason, same shape.
+    def remove(string target_id):
+        table.remove(target_id)
+
+# Every target's current draw-order rank, seeded at link time from each
+# target's own saved `layerOrder` (`build_layer_orders`, `linker.br`,
+# `Sb3Target.layer_order`) -- higher draws in front, matching real
+# Scratch's own convention and `Transform`'s own "higher z draws on top"
+# rule for a 2D camera, so `sync_z_from_layer_orders` (`scratch.br`) can
+# write it straight onto `Transform.translation.z` with no inversion.
+# `looks_gotofrontback`'s real semantics aren't "set to a fixed z" --
+# it's "move above/below every *other* sprite currently on stage" (real
+# scratch-vm's own `setExecutableTarget`/`goToFrontBack` walks the
+# runtime's live executable-target list) -- `go_to_front`/`go_to_back`
+# below compute that relative to this resource's own current state each
+# time, not a value baked in at link time (a sprite that's since had
+# *another* sprite go further front/back needs the *next* front/back
+# call to still end up above/below everything, including that change).
+pub struct LayerOrders as Resource, Debug, Clone:
+    var mut {string=int} table
+
+    req int get(string target_id):
+        table[target_id] else 0
+
+    def set(string target_id, int order):
+        table[target_id] = order
+
+    # See `Positions.remove`'s own doc comment -- same reason, same shape.
+    def remove(string target_id):
+        table.remove(target_id)
+
+    # Deliberately does NOT exclude `target_id`'s own current entry from
+    # the max/min scan (unlike a naive port of real scratch-vm's own
+    # "every *other* executable target" wording might suggest) -- and
+    # doesn't need to: if this target is already the highest, computing
+    # the max *including* its own old value and adding 1 still ends up
+    # strictly above every other target (since that old value was
+    # already >= all of them); the "exclude self" case only matters when
+    # self ISN'T already the extreme, where including it is a no-op
+    # (some other entry is the real max/min either way). Used to iterate
+    # `table.values()` (not `for id, v in table:` id/value destructuring)
+    # to sidestep a real `boring` transpiler bug: a *content-mutable*
+    # (`var mut {K=V}`, as `table` is) dict field's 2-var destructuring,
+    # iterated from inside its own struct's method body, mis-transpiled
+    # through the array-style auto-enumerate path (`v` bound to the whole
+    # `(id, v)` tuple instead of just the value -- confirmed with a real
+    # `cargo build` E0308) even though the general, non-`mut` case of the
+    # same shape was already fixed. Fixed upstream now (`iterable_yields_
+    # tuples`'s dict-shape check wasn't stripping the `Mut` wrapper before
+    # matching `Type::Dict`, so a content-mutable dict field never
+    # registered as tuple-shaped -- see boring's docs/self-field-loop-
+    # match-borrow-bug.md, repro 2b), so this reverted back to the direct
+    # `for id, v in table:` form -- `id` stays unused (per the "doesn't
+    # need to exclude self" reasoning above), kept only to exercise the
+    # exact 2-variable destructuring shape the bug was in.
+    # No starting sentinel value (not e.g. `int.MIN`) -- a project can
+    # genuinely have negative `layerOrder`s after enough `go to back`s,
+    # so there's no safe fixed bound to compare against; the first value
+    # seen just becomes the initial candidate instead.
+    def go_to_front(string target_id):
+        var mut max_order = 0
+        var mut found = false
+        for id, v in table:
+            if !found or v > max_order:
+                max_order = v
+                found = true
+        table[target_id] = max_order + 1
+
+    def go_to_back(string target_id):
+        var mut min_order = 0
+        var mut found = false
+        for id, v in table:
+            if !found or v < min_order:
+                min_order = v
+                found = true
+        table[target_id] = min_order - 1
+
+    # `looks_goforwardbackwardlayers` -- ported from real scratch-vm's own
+    # `goForwardBackwardLayers`/renderer `setDrawableOrder(relative=true)`:
+    # not "add/subtract `delta` from my own order value" (which would be
+    # wrong whenever orders have gaps, e.g. after a `go_to_front`/`go_to_
+    # back` bump elsewhere), but "move `delta` *positions* within the
+    # current front-to-back ranking of every target, shifting everyone in
+    # between by exactly one slot" -- the same splice-based reorder real
+    # Scratch's own renderer does. `delta` is already signed here (positive
+    # = toward front/higher rank, negative = toward back/lower) -- see
+    # `exec_simple`'s own `GoForwardBackwardLayers` case for where
+    # `FORWARD_BACKWARD` gets turned into that sign.
+    def go_forward_backward(string target_id, int delta):
+        if delta == 0:
+            return
+        # Collect into parallel arrays (not an array of structs -- `boring`
+        # has no `sort_by`, only a plain `arr.sort()` on `Ord` element
+        # types, so a small manual selection sort on parallel `ids`/
+        # `orders` arrays is simpler than reaching for `Ord` on a wrapper
+        # struct just to sort by one field). `n` is always small in
+        # practice (a project's own sprite/Stage count), so an O(n^2) sort
+        # here is a non-issue.
+        mut ids = []
+        mut orders = []
+        for id, v in table:
+            ids.push(id)
+            orders.push(v)
+        let n = ids.length
+        var mut i = 0
+        while i < n:
+            var mut min_idx = i
+            var mut j = i + 1
+            while j < n:
+                if orders[j] < orders[min_idx]:
+                    min_idx = j
+                j += 1
+            if min_idx != i:
+                let tmp_order = orders[i]
+                orders[i] = orders[min_idx]
+                orders[min_idx] = tmp_order
+                let tmp_id = ids[i]
+                ids[i] = ids[min_idx]
+                ids[min_idx] = tmp_id
+            i += 1
+        # Find target_id's own current rank in the now-sorted list.
+        var mut rank = -1
+        var mut k = 0
+        while k < n:
+            if ids[k] == target_id:
+                rank = k
+            k += 1
+        if rank < 0:
+            # Not tracked at all (shouldn't happen for a real target, every
+            # one is seeded at link time) -- a safe no-op rather than a
+            # crash, same defensive posture every other lookup here takes.
+            return
+        let new_rank = clamp(rank + delta, 0, n - 1)
+        if new_rank == rank:
+            return
+        # Remove-then-insert on the `ids` list mirrors real scratch-vm's
+        # own splice-based reorder exactly: everyone strictly between the
+        # old and new rank shifts by one slot, nobody else moves.
+        ids.remove(rank)
+        ids.insert(new_rank, target_id)
+        # Re-normalize every id's own order to its now-current dense
+        # index -- keeps `table` simple (a plain 0..n-1 ranking) after
+        # this call. Safe to mix with `go_to_front`/`go_to_back`'s own
+        # sparser max+1/min-1 bumping: neither one depends on the other's
+        # values being dense, this just keeps the common case tidy rather
+        # than drifting arbitrarily far apart over many calls.
+        var mut m = 0
+        while m < ids.length:
+            table[ids[m]] = m
+            m += 1
+
+    # Every tracked target id, back-to-front (ascending rank -- "higher
+    # draws in front", this struct's own established convention). What
+    # `compose_scene_for_touching` (`pen.br`) needs to composite every
+    # visible sprite in the right z-order -- same parallel-arrays
+    # selection sort `go_forward_backward` already uses just above (`n`
+    # is always small in practice, a project's own sprite/Stage count).
+    req [string] sorted_target_ids():
+        mut ids = []
+        mut orders = []
+        for id, v in table:
+            ids.push(id)
+            orders.push(v)
+        let n = ids.length
+        var mut i = 0
+        while i < n:
+            var mut min_idx = i
+            var mut j = i + 1
+            while j < n:
+                if orders[j] < orders[min_idx]:
+                    min_idx = j
+                j += 1
+            if min_idx != i:
+                let tmp_order = orders[i]
+                orders[i] = orders[min_idx]
+                orders[min_idx] = tmp_order
+                let tmp_id = ids[i]
+                ids[i] = ids[min_idx]
+                ids[min_idx] = tmp_id
+            i += 1
+        ids
+
+# Every target's costume *names*, in on-disk order (`build_target_costumes`,
+# `linker.br`) -- built once at link time, read-only afterward, same "no
+# `var` threading needed anywhere" reasoning as `VariableWatcher`. This is
+# what lets `looks_switchcostumeto`/`looks_nextcostume` resolve a name or
+# wrap an index at runtime without ever needing the whole `Sb3Project`
+# threaded through `eval`/`exec_simple`/`step_thread` -- every other
+# runtime resource in this file is built the same way, a small pre-
+# extracted slice of the loaded project rather than the project itself.
+pub struct TargetCostumes as Resource, Debug, Clone:
+    {string=[string]} table
+
+    req [string] get(string target_id):
+        table[target_id] else []
+
+    # 1-based, matching real Scratch's own "item # of thing in list"
+    # convention (`Lists.index_of`'s own doc comment) -- `0` if not found
+    # (not `-1`), for the exact same reason: a real Scratch project never
+    # needs to distinguish "not found" from "found at a negative position"
+    # the way some languages' `indexOf` does.
+    req int index_of(string target_id, string name):
+        let names = table[target_id] else []
+        var mut i = 0
+        for n in names:
+            if n == name:
+                return i + 1
+            i += 1
+        0
+
+# One costume's real pixel dimensions (`build_target_costume_dims`,
+# `assets.br`) -- SVG costumes get their exact rasterized size (the same
+# numbers `rasterize_svg_to_png` already computes), real bitmap (PNG)
+# costumes get their real decoded size (`png_dimensions`, a small pure-
+# Boring PNG-header parse -- no new external crate needed, since every
+# costume this project ever writes to its own on-disk cache is *already*
+# either a real PNG or a SVG-rasterized-to-PNG, per `extract_costume_
+# bytes_to_temp_file`'s own two branches). A costume this project can't
+# extract at all (a raw-JSON test fixture with no real asset bytes, or a
+# genuinely corrupt/unsupported asset) has no entry -- see
+# `TargetCostumeDims.get`'s own fallback below for what that degrades to.
+struct CostumeDim:
+    float32 width
+    float32 height
+
+# Every target's costume *pixel dimensions*, in the same on-disk order as
+# `TargetCostumes` -- built once at link time by `build_target_costume_
+# dims` (`assets.br`, the one function in this file with real zip/SVG
+# access), read-only afterward. What `sensing_touchingobject`'s AABB math
+# (`Touching`'s own `eval` case, `interpreter.br`) actually needs: a
+# sprite's on-screen footprint is its costume's native pixel size scaled
+# by `LooksState.size` (the same percent `sync_visibility_and_size_from_
+# looks_states` already applies to `Transform.scale`), centered on its
+# `Position`.
+pub struct TargetCostumeDims as Resource, Debug, Clone:
+    {string=[CostumeDim]} table
+
+    # `(40.0, 40.0)` for an out-of-range index or a target with no entry
+    # at all -- matches the flat-color placeholder sprite's own size
+    # (`setup_scratch_project`'s fallback `Vec2.new(40.0, 40.0)`,
+    # `scratch.br`), so a project with no real costume assets (every
+    # hand-authored raw-JSON test fixture) still gets a defensible,
+    # consistent footprint for touching checks rather than a degenerate
+    # zero-size box that could never touch anything.
+    req CostumeDim get(string target_id, int idx):
+        let [CostumeDim] dims = table[target_id] else []
+        if idx >= 0 and idx < dims.length:
+            dims[idx]
+        else:
+            CostumeDim(width = 40.0, height = 40.0)
+
+# `sensing_touchingobject`'s own AABB math (`Touching`'s `eval` case,
+# `interpreter.br`) -- axis-aligned bounding-box overlap, real Scratch's
+# own stage-centered/y-up coordinate convention throughout (matching
+# every other Motion/Looks reporter in this file), all three ported
+# directly from real scratch-vm's `RenderedTarget` (`isTouchingSprite`/
+# `isTouchingPoint`/`isTouchingEdge`) at the *bounding-box* level -- the
+# one real simplification is skipping that source's final pixel-alpha
+# test, not any of its actual geometry (see `Touching`'s own doc comment
+# in `BlockKind` for why that's an honest trade for this project today).
+# Manual `if`-based absolute value (not a builtin `abs()` call) --
+# `abs()`'s only confirmed-working call site in this project so far
+# (`MathOp`, `interpreter.br`) is always on a plain `f64` local, and
+# hasn't been verified against a `float32`; this sidesteps needing to
+# find out.
+def bool aabb_overlap(float32 x1, float32 y1, float32 half_w1, float32 half_h1, float32 x2, float32 y2, float32 half_w2, float32 half_h2):
+    let dx = if x1 > x2: x1 - x2 else: x2 - x1
+    let dy = if y1 > y2: y1 - y2 else: y2 - y1
+    dx < (half_w1 + half_w2) and dy < (half_h1 + half_h2)
+
+def bool touching_point(float32 x, float32 y, float32 half_w, float32 half_h, float32 px, float32 py):
+    px >= (x - half_w) and px <= (x + half_w) and py >= (y - half_h) and py <= (y + half_h)
+
+# Real Scratch's fixed 480x360 stage, centered/y-up (`-240..240` x
+# `-180..180`) -- the same convention `Sb3Target.x_or`/`y_or` and every
+# monitor-position conversion in this file already assume.
+def bool touching_stage_edge(float32 x, float32 y, float32 half_w, float32 half_h):
+    (x - half_w) < -240.0 or (x + half_w) > 240.0 or (y + half_h) > 180.0 or (y - half_h) < -180.0
+
+# `sensing_loudness`/`sensing_loud`'s own shared reading -- this project
+# has no real microphone-capture subsystem (a genuinely new OS-level
+# dependency, unlike `sensing_setdragmode`'s own reclassification from
+# "blocked" to "just needed an interaction system" -- see README.md's
+# roadmap for why this one stays a real, honest gap). Rather than fake a
+# plausible-looking number, this returns exactly what real scratch-vm's
+# own `getLoudness()` returns under the identical condition this project
+# is *always* in (`typeof this.runtime.audioEngine === 'undefined'`, real
+# source confirmed): a fixed sentinel `-1`. Not a guess or an
+# approximation -- real Scratch itself defines `-1` as "no loudness
+# reading available" for exactly this case, so `sensing_loudness` reports
+# it correctly today (a real, if permanently degenerate, answer), and
+# `sensing_loud`'s own real formula (`getLoudness() > 10`) computed
+# against this shared value is correct both now (always `false`, since
+# `-1` is never `> 10`) and automatically once real microphone capture is
+# ever added here (a one-line change to this function alone, no caller
+# needs touching).
+def float32 current_loudness():
+    -1.0
+
+# A per-tick snapshot of which tracked keys are currently *held* --
+# level-triggered, matching `sensing_keypressed`'s own real-Scratch
+# semantics ("is this key down right now"), as opposed to
+# `event_whenkeypressed`'s edge-triggered "just pressed this tick" (checked
+# directly against real Bevy input by `check_key_press_hats`, below, not
+# through this resource). Populated each `Update` tick by
+# `sync_keyboard_state` from the real `Res<ButtonInput<KeyCode>>` -- kept as
+# its own plain-data resource (not read directly from Bevy's own input
+# resource inside `eval`) for the same reason `Positions` is: `eval`/`exec`
+# have no Bevy dependency and stay exactly as headless-testable as Phase 1,
+# a real `Res<T>` can't be constructed at all outside a live `World`.
+#
+# Tracks space + the four arrow keys + every letter/digit -- confirmed
+# against real `scratch-blocks` source (`sensing_keyoptions`'s own
+# `field_dropdown` options, `src/blocks/sensing.ts`) that these 41 keys
+# are the COMPLETE KEY_OPTION dropdown, not an approximation of a larger
+# real set -- real Scratch's own editor offers no punctuation keys at all
+# (an earlier round's own doc comment here guessed otherwise; corrected
+# once actually checked, not left as an assumption). So every individually
+# *nameable* key this project could ever be asked about is covered.
+#
+# `any_key_pressed` is the one place real "any key at all" still exceeds
+# these 41 -- real Scratch's own `getKeyIsDown('any')` means literally any
+# physical key (`this._keysPressed.length > 0`, populated from every raw
+# keydown/keyup, not scoped to nameable keys), so a plain `pressed_keys.
+# length > 0` here would silently under-report "any" for punctuation/
+# modifier/etc keys nothing above tracks by name. Populated directly by
+# `sync_keyboard_state` from Bevy's own `ButtonInput::get_pressed()`
+# (every currently-held key, regardless of name) -- true parity with real
+# Scratch's own "any" semantics, not just "any of the 41 covered above".
+pub struct KeyboardState as Resource, Debug, Clone:
+    var mut [string] pressed_keys
+    var mut bool any_key_pressed
+
+    req bool is_pressed(string key_option):
+        if key_option == "any":
+            any_key_pressed
+        else:
+            pressed_keys.contains(key_option)
+
+# Mouse position (in Scratch's own stage-centered, y-up coordinate system --
+# same conversion rationale as `Sb3Target.x_or`/`y_or`) and left-button
+# state, synced each tick by `sync_mouse_state`. The position conversion
+# below assumes the default, unscaled `Camera2d` this project's
+# `spawn_camera` sets up (window pixel coordinates map 1:1 to world/stage
+# coordinates) -- there's no camera zoom/pan/viewport-scaling system yet for
+# it to need to account for, so a manual window-size-based conversion is the
+# right level of complexity for what actually exists today, not a wrong
+# shortcut around a real `Camera.viewport_to_world_2d` call (which returns a
+# `Result`, a type Boring has no established unwrapping convention for --
+# revisit this the moment a real camera-scaling feature lands and this
+# assumption stops holding).
+pub struct MouseState as Resource, Debug, Clone:
+    float32 x
+    float32 y
+    bool down
+
+# Real click-and-drag mouse interaction -- a fresh Bevy-only resource (not
+# threaded through `exec_simple` at all, unlike every other per-instance
+# state on this page: dragging never touches script execution, only real
+# input each tick), so no parameter-count pressure the way `SoundQueue`'s
+# own fields have. `dragging_id` is `""` when nothing's being dragged
+# (same "empty string means none" convention `BackdropSwitchHats.last_
+# backdrop_name`'s own seed uses, not an `Option` -- `var mut string`
+# stays a plain field either way). `offset_x`/`offset_y` are the fixed
+# "grab point" gap between the sprite's own position and the mouse at the
+# moment the drag started (`pos - mouse`, computed once), added back to
+# the *current* mouse position every tick while dragging -- the sprite
+# stays glued to wherever it was first grabbed, not to its own center,
+# same intent real Scratch's own click-and-drag has (verified against
+# real scratch-gui source's own `onStartDrag`/`dragOffset` for the
+# engine-level truth this project's own implementation should preserve --
+# a script can toggle `draggable` via `sensing_setdragmode` and a real
+# click-and-drag then works; the *exact* per-frame sign/screen-space
+# arithmetic scratch-gui's own React component uses lives in browser UI
+# code outside `scratch-vm` proper and isn't independently runnable to
+# verify byte-for-byte, so this project's own formula is the
+# straightforward, unambiguous "grab offset stays constant" version any
+# correct drag implementation reduces to, not a guessed port of that
+# component's own screen/canvas-specific sign juggling).
+pub struct DragState as Resource, Debug, Clone:
+    var mut string dragging_id
+    var mut float32 offset_x
+    var mut float32 offset_y
+
+# Real Scratch's `timer` reporter: seconds elapsed since the green flag was
+# clicked (real Scratch also resets it via a dedicated `sensing_resettimer`
+# block -- not implemented yet, a real gap, see README.md's roadmap).
+# Named `ScratchTimer`, not `Timer` -- `use bevy.prelude.*` already brings
+# in Bevy's own unrelated `Timer` type (a cooldown/countdown helper), and a
+# local declaration would shadow it silently; picking a distinct name
+# avoids ever having to reason about which `Timer` a given call site means.
+# Synced each tick by `sync_scratch_timer` from real Bevy `Res<Time>` --
+# same "plain data, eval/exec stay Bevy-free" split as `Positions`/
+# `KeyboardState`/`MouseState`. In the pure headless test-only entry
+# points (`run_greenflag_and_report*`), this always starts at and stays
+# `0.0` -- there's no real Bevy tick advancing it there, the same
+# "nothing pressed, mouse at origin" honesty already established for
+# `KeyboardState`/`MouseState`'s own headless defaults.
+pub struct ScratchTimer as Resource, Debug, Clone:
+    float32 elapsed
+
+# `operator_random`'s source of randomness -- Marsaglia's plain xorshift64
+# (shift/XOR only, deliberately *not* the higher-quality xorshift64*
+# variant, which multiplies its output by an odd constant: that multiply
+# is expected to wrap on overflow, and `boring`'s transpiler emits a
+# plain `*` for it -- wrapping in `boring run`'s own interpreter, per its
+# `wrapping_mul` handling, but a plain checked `*` in the `--emit-rust`
+# path this project actually builds with, panicking in a debug build
+# ["attempt to multiply with overflow"], confirmed empirically. A real,
+# filed compiler inconsistency, not fixed here -- shift/XOR-only avoids
+# it entirely, and "good enough" statistical quality is all a Scratch
+# project's `pick random` block needs anyway (real scratch-vm itself just
+# calls JS's own `Math.random()`, no cryptographic requirement either)).
+# `state` must never be `0` -- xorshift's one fixed point, where every
+# subsequent call would keep returning `0` forever -- so every seeder
+# below uses a nonzero constant, never `0`.
+#
+# Seeded with the *same* fixed constant everywhere, including the real
+# (non-headless) game (`setup_scratch_project`) -- a real simplification,
+# not an oversight: this makes `pick random` deterministic across runs
+# (same sequence every launch) rather than drawing on real per-run
+# entropy (wall-clock time, OS randomness). Revisit if a real project's
+# behavior is ever observed to depend on that varying -- for now, this
+# matches how `KeyboardState`/`MouseState` already start from the same
+# fixed "nothing pressed" state every run rather than reading real
+# initial hardware state at Startup.
+pub struct Rng as Resource, Debug, Clone:
+    var mut uint64 state
+
+    # One xorshift64 step: advances `state` and returns it directly as the
+    # next pseudorandom `uint64`.
+    def uint64 next_u64():
+        var mut x = state
+        x = x ^ (x << 13)
+        x = x ^ (x >> 7)
+        x = x ^ (x << 17)
+        state = x
+        x
+
+    # A uniform `float64` in `[0, 1)` -- `next_u64()`'s output divided by
+    # 2^64 (`18446744073709551616.0`, the smallest value it can never
+    # reach, keeping the range half-open exactly like `Math.random()`'s
+    # own contract `operator_random` needs to match).
+    def float64 next_f64_01():
+        (self.next_u64() as float64) / 18446744073709551616.0
+
+# One `when key pressed` hat, tagged with its owning target (same
+# `ReceiverScript` shape build_greenflag_scripts/build_broadcasts already
+# use) plus the KEY_OPTION it fires on.
+struct KeyPressHat:
+    string key_option
+    ReceiverScript script
+
+pub struct KeyPressHats as Resource, Debug, Clone:
+    [KeyPressHat] hats
+
+# One `when this sprite clicked` hat -- no field of its own to tag (unlike
+# `KeyPressHat`'s KEY_OPTION), since real Scratch's `event_
+# whenthisspriteclicked` always means "this hat's own owning sprite", the
+# same target `script.target_id` already carries. Checked in `check_
+# click_hats` against an AABB hit test (`touching_point`, the exact same
+# bounding-box math `sensing_touchingobject`'s own mouse-touching case
+# already uses -- see that block's own doc comment in `BlockKind` for the
+# pixel-perfect-vs-AABB trade this makes) -- real Scratch's own click
+# detection is pixel-perfect too, so this is the same honest, consistent
+# simplification, not a new one invented for this hat specifically.
+struct ClickHat:
+    ReceiverScript script
+
+pub struct ClickHats as Resource, Debug, Clone:
+    [ClickHat] hats
+
+# One `event_whentouchingobject` hat -- `touching_block` is the WHOLE
+# already-linked `Block(kind = BlockKind.Touching(...))`, not just its own
+# inner TOUCHINGOBJECTMENU expr, so `check_touching_object_hats` can
+# `eval()` it completely unchanged, reusing `Touching`'s own "_mouse_"/
+# "_edge_"/a sprite name dispatch and AABB math wholesale (the same
+# reporter `sensing_touchingobject` itself evaluates) rather than
+# duplicating any of it. Edge-triggered like `event_whengreaterthan`, but
+# unlike that hat's own single template-level `was_true` (its TIMER
+# condition is target-agnostic), touching-status genuinely depends on
+# *which instance* is asking -- each live clone can be touching or not
+# touching independently -- so this tracks a whole `{instance_id=bool}`
+# map instead of one bool. Rebuilt fresh each tick (never index-assigned
+# into the old map in place), same "copy into a freshly-`{=}`-bound
+# local" workaround the sprite-local variables round already established
+# for this exact nested-mutable-dict shape.
+struct TouchingObjectHat:
+    Block touching_block
+    {string=bool} was_true_by_instance
+    ReceiverScript script
+
+pub struct TouchingObjectHats as Resource, Debug, Clone:
+    var mut [TouchingObjectHat] hats
+
+# One `event_whengreaterthan` hat -- `menu` is the WHENGREATERTHANMENU
+# field ("TIMER" or "LOUDNESS"; only "TIMER" is supported, see
+# `check_greater_than_hats`' own doc comment for why LOUDNESS always
+# evaluates false rather than crashing), `value_expr` the VALUE input
+# (the threshold, itself a real expression -- almost always a literal in
+# practice, but not assumed to be). `was_true` is this hat's own
+# previous-tick condition result, needed to detect the false->true
+# *transition* real Scratch's edge-triggered semantics require (unlike
+# `event_whenkeypressed`, which gets edge-triggering for free from Bevy's
+# own `.just_pressed()` -- there's no equivalent primitive for "this
+# arbitrary expression just became true", so this hat tracks it by hand).
+struct GreaterThanHat:
+    string menu
+    Block value_expr
+    bool was_true
+    ReceiverScript script
+
+pub struct GreaterThanHats as Resource, Debug, Clone:
+    var mut [GreaterThanHat] hats
+
+# One `event_whenbackdropswitchesto` hat -- BACKDROP is a plain field (a
+# dropdown of backdrop *names*, not a menu-shadow input), matching real
+# scratch-vm: this hat fires the moment the Stage's own backdrop becomes
+# exactly this name, not a level check re-evaluated every tick the way
+# `event_whengreaterthan` is. Real Scratch drives this straight off the
+# switch action itself (`Runtime.startHats` called from inside `switch
+# Backdrop`); this project has no such direct hook from `looks_
+# switchbackdropto`'s own `exec_simple` case (no `Commands`/thread-spawn
+# access there, same reason `SoundRequest`/`CloneRequest` exist), so
+# `check_backdrop_switch_hats` (`scratch.br`) instead detects the switch
+# by comparing the Stage's current backdrop name against the last tick's
+# own -- same edge-triggered shape `GreaterThanHat.was_true` already
+# established for a different hat, just tracked once for the whole Stage
+# (there's only one backdrop, unlike per-hat truth values) rather than
+# per-hat.
+struct BackdropSwitchHat:
+    string backdrop_name
+    ReceiverScript script
+
+pub struct BackdropSwitchHats as Resource, Debug, Clone:
+    var mut [BackdropSwitchHat] hats
+    # The Stage's own backdrop name as of the last tick `check_backdrop_
+    # switch_hats` ran -- seeded at Startup to the Stage's real *initial*
+    # backdrop (`initial_backdrop_name`, `linker.br`), not an empty
+    # string, so a project whose very first backdrop happens to share a
+    # name with one of these hats doesn't spuriously fire on tick 0 (no
+    # actual *switch* has happened yet).
+    var mut string last_backdrop_name
+
+# One `sound_play` request -- which target's sound to play (a sound is
+# selected by *name*, scoped to whichever sprite/Stage owns it, matching
+# real Scratch: two different sprites can each have their own sound named
+# "meow" and `sound_play` always means "play *this* target's own sound of
+# that name", never another target's) and the name itself. Queued by
+# `exec`'s `PlaySound` arm, drained by `play_queued_sounds` (Bevy ECS
+# section, below) -- same "plain data now, real Bevy `Commands`/
+# `AssetServer` work happens in a dedicated system later" split as
+# `PendingThreads`/`Positions`, for the same reason: `eval`/`exec` stay
+# Bevy-free and headless-testable.
+struct SoundRequest:
+    string target_id
+    string sound_name
+    # The target's own current volume (0-100, `SoundQueue.volumes`),
+    # snapshotted at the moment `sound_play` queued this request --
+    # applied once, at spawn time, via `play_queued_sounds`' own
+    # `PlaybackSettings.with_volume`. A real, documented gap, not an
+    # oversight: real Scratch's `sound_setvolumeto`/`sound_changevolumeby`
+    # also live-adjust any sound *already playing* from that target,
+    # immediately -- this project doesn't track which live `PlayingSound`
+    # entity belongs to which target (no such lookup exists anywhere else
+    # in this file either), so a volume change after a sound has started
+    # only affects sounds played *after* it, not one already in flight.
+    float32 volume
+    # The target's own current pitch effect (semitones*10, -360..360, real
+    # Scratch's own range/default-0), snapshotted the same way `volume` is
+    # -- applied once, at spawn time, via `play_queued_sounds`' own
+    # `PlaybackSettings.with_speed`. Same real, documented "already-
+    # playing sounds aren't live-adjusted" gap `volume`'s own doc comment
+    # already has, for the identical reason (no live-entity-per-target
+    # lookup exists).
+    float32 pitch
+    # The target's own current PAN effect (-100..100, real Scratch's own
+    # range/default-0), snapshotted the same way `volume`/`pitch` are --
+    # applied once, at spawn time, via `play_queued_sounds`' own Bevy
+    # spatial-audio positioning (see that system's own doc comment for the
+    # real, calibrated Position<->pan mapping and its documented
+    # trade-offs). Same real "already-playing sounds aren't live-adjusted"
+    # gap `volume`'s own doc comment already has.
+    float32 pan
+
+# One deferred `control_create_clone_of` -- the actual per-instance-resource
+# copying (`Positions`/`LooksStates`/`LayerOrders`/`SoundQueue.volumes`/
+# `SpeechBubbles`) already happened synchronously inside `exec_simple`
+# itself (plain data mutation, safe there, see that case's own comment);
+# this is only what's left for `spawn_pending_clones` to do with real
+# `Commands`/`Query` access -- spawn the new entity (cloning the *origin*'s
+# own `TargetCostumeHandles`/`Sprite`, never another clone's) and, once
+# `StartAsCloneHats` lands, its own start-as-clone thread.
+struct CloneRequest:
+    string source_instance_id
+    string new_id
+    string origin_name
+
+# `stop_all_requested` is a plain bool, not a queued "request" like
+# `play_queue` -- `sound_stopallsounds` has no target/sound to remember,
+# just "stop everything currently playing", checked and cleared once per
+# tick by `play_queued_sounds`.
+#
+# `volumes` (every target's current sound volume, 0-100, real Scratch's
+# own range and default) lives on this same resource -- deliberately NOT
+# a separate `SoundVolumes` resource the way `LayerOrders`/`LooksStates`
+# might suggest ("one category, one resource"): `run_pending_threads`
+# (`scratch.br`) is already at Bevy's own hard 16-parameter `SystemParam`
+# tuple limit (confirmed empirically -- a real unsatisfied-trait-bounds
+# `cargo build` failure the first time this was tried as its own
+# resource), so a genuinely new top-level resource threaded through that
+# one system isn't free the way it was for every earlier round. Folding
+# `volumes` into `SoundQueue` (already threaded everywhere this needs to
+# reach, since `sound_play` already needs it) costs zero additional
+# params anywhere -- a real constraint driving this shape, not just a
+# style preference.
+# One instance's own Pen extension state -- confirmed against real
+# `Scratch3PenBlocks.DEFAULT_PEN_STATE` (source), which is exactly this
+# shape: `penDown`/`color` (hue, 0..100)/`saturation`/`brightness`
+# (0..100 each)/`transparency` (0..100, inverse of alpha)/the cached
+# `penAttributes.diameter` (1..1200)/the legacy `_shade` (0..200,
+# default 50). `shade` used to be deliberately left untracked (those four
+# "set pen shade to"/"set pen hue to" blocks are `hideFromPalette: true`
+# in real `getInfo()`, so no project exported from the *modern* editor
+# can ever reference them) -- landed after all once it became clear a
+# hand-edited/imported Scratch 2.0 project can still contain and run
+# them today (real scratch-vm keeps them fully functional, hidden only
+# from the palette, not from execution). `shade` is only ever written by
+# `set_pen_shade_to_number`/`change_pen_shade_by` and read by `legacy_
+# update_pen_color` (`interpreter.br`) -- every other pen code path
+# (`pen_color_of`, the modern color-parameter blocks) only ever reads
+# hue/saturation/brightness/transparency, exactly like real Scratch.
+struct PenState:
+    bool down
+    float32 hue
+    float32 saturation
+    float32 brightness
+    float32 transparency
+    float32 diameter
+    float32 shade
+
+# `pen_state_of`'s own real default -- `DEFAULT_PEN_STATE`'s exact
+# values, confirmed against source (`color: 66.66` is deliberate, not a
+# rounding artifact -- it's real Scratch's own default pen hue; `_shade:
+# 50` likewise real Scratch's own default).
+def PenState default_pen_state():
+    PenState(down = false, hue = 66.66, saturation = 100.0, brightness = 100.0, transparency = 0.0, diameter = 1.0, shade = 50.0)
+
+# A resolved RGBA color (0.0..1.0 each channel), the form `draw_pen_marks`
+# (`pen.br`) actually blends into the canvas -- computed fresh from a
+# `PenState`'s own hue/saturation/brightness/transparency every time it's
+# needed (matching real Scratch's own `_updatePenColor`, which likewise
+# recomputes from HSV+transparency on every color-parameter change rather
+# than caching independently of them).
+struct PenColor:
+    float32 r
+    float32 g
+    float32 b
+    float32 a
+
+# Real Scratch's own `Color.hsvToRgb`, ported verbatim (confirmed against
+# source, `src/util/color.js`) -- `hue`/`saturation`/`brightness` are all
+# 0..100 (`PenState`'s own range), converted here to the 0..360/0..1/0..1
+# ranges that formula itself expects. `transparency` (0..100, 0=opaque)
+# converts to alpha via the same `1.0 - (transparency/100.0)` `_transparencyToAlpha`
+# already established for `SoundQueue.get_pan`-adjacent effects... no --
+# this is Pen's own independent transparency, not sound's; same formula
+# shape, unrelated state.
+def PenColor pen_color_of(PenState s):
+    let h = (s.hue * 3.6) % 360.0
+    let sat = clamp01(s.saturation / 100.0)
+    let v = clamp01(s.brightness / 100.0)
+    let i = floor(h / 60.0) as isize
+    let f = (h / 60.0) - (i as float32)
+    let p = v * (1.0 - sat)
+    let q = v * (1.0 - (sat * f))
+    let t = v * (1.0 - (sat * (1.0 - f)))
+    var mut r = v
+    var mut g = t
+    var mut b = p
+    if i == 1:
+        r = q
+        g = v
+        b = p
+    elif i == 2:
+        r = p
+        g = v
+        b = t
+    elif i == 3:
+        r = p
+        g = q
+        b = v
+    elif i == 4:
+        r = t
+        g = p
+        b = v
+    elif i == 5:
+        r = v
+        g = p
+        b = q
+    let alpha = 1.0 - (s.transparency / 100.0)
+    PenColor(r = r, g = g, b = b, a = alpha)
+
+def float32 clamp01(float32 v):
+    if v < 0.0:
+        0.0
+    elif v > 1.0:
+        1.0
+    else:
+        v
+
+# Parses a real `colour_picker` shadow's own stored value (`"#rrggbb"`,
+# confirmed against real `scratch-blocks` source -- `Blockly.Blocks.
+# colour_picker`'s own `field_colour_slider`) into 0..255 channel values.
+# Trusts the input is well-formed (always true for a project exported by
+# the real editor's own color picker -- there is no other way to produce
+# this shadow's own field value) -- an unrecognized hex digit resolves to
+# `0`, a silent-but-safe fallback rather than a crash, matching this
+# project's own established "malformed input degrades gracefully"
+# convention elsewhere (e.g. `to_isize_checked`).
+def isize hex_digit_value(string c):
+    if c == "0":
+        0
+    elif c == "1":
+        1
+    elif c == "2":
+        2
+    elif c == "3":
+        3
+    elif c == "4":
+        4
+    elif c == "5":
+        5
+    elif c == "6":
+        6
+    elif c == "7":
+        7
+    elif c == "8":
+        8
+    elif c == "9":
+        9
+    elif c == "a" or c == "A":
+        10
+    elif c == "b" or c == "B":
+        11
+    elif c == "c" or c == "C":
+        12
+    elif c == "d" or c == "D":
+        13
+    elif c == "e" or c == "E":
+        14
+    elif c == "f" or c == "F":
+        15
+    else:
+        0
+
+def isize hex_byte_value(string hi, string lo):
+    (hex_digit_value(hi) * 16) + hex_digit_value(lo)
+
+# A plain 0..1 RGB triple, no alpha -- used only by the legacy shade math
+# below (`mix_rgb01`/`hue100_to_full_rgb`), kept separate from `PenColor`
+# since alpha has no meaning during that intermediate step.
+struct Rgb01:
+    float32 r
+    float32 g
+    float32 b
+
+# This project's own hue/saturation/brightness scale (all 0..100,
+# `PenState`'s own convention) computed from a plain 0..1 RGB triple --
+# real Scratch's own `Color.rgbToHsv`, ported verbatim (confirmed against
+# source), factored out so both `pen_state_from_hex_color` (below) and
+# `legacy_update_pen_color` (`interpreter.br`) share one implementation.
+struct HsvTriple:
+    float32 hue100
+    float32 sat100
+    float32 val100
+
+def HsvTriple rgb_to_hsv100(float32 r, float32 g, float32 b):
+    let rg_min = if r < g: r else: g
+    let x = if rg_min < b: rg_min else: b
+    let rg_max = if r > g: r else: g
+    let v = if rg_max > b: rg_max else: b
+    var mut h = 0.0
+    var mut sat = 0.0
+    if x != v:
+        var mut f = 0.0
+        var mut idx = 0.0
+        if r == x:
+            f = g - b
+            idx = 3.0
+        elif g == x:
+            f = b - r
+            idx = 5.0
+        else:
+            f = r - g
+            idx = 1.0
+        h = ((idx - (f / (v - x))) * 60.0) % 360.0
+        if h < 0.0:
+            h = h + 360.0
+        sat = (v - x) / v
+    HsvTriple(hue100 = h / 3.6, sat100 = sat * 100.0, val100 = v * 100.0)
+
+# Real Scratch's own `Color.mixRgb` (confirmed against source, `src/
+# util/color.js`) -- a plain per-channel linear interpolation from
+# `rgb1` at `fraction = 0` to `rgb2` at `fraction = 1`. Scale-invariant
+# (the exact same normalized result whether channels are 0..1 or
+# 0..255), so this project's own 0..1 convention works unchanged even
+# though `legacy_update_pen_color`'s real source works in 0..255
+# throughout (only because that happens to be the scale real `Color.
+# hsvToRgb`/`RGB_BLACK`/`RGB_WHITE` use there).
+def Rgb01 mix_rgb01(Rgb01 rgb1, Rgb01 rgb2, float32 fraction):
+    Rgb01(r = rgb1.r + (fraction * (rgb2.r - rgb1.r)), g = rgb1.g + (fraction * (rgb2.g - rgb1.g)), b = rgb1.b + (fraction * (rgb2.b - rgb1.b)))
+
+# Real Scratch's own `Color.hsvToRgb` at full saturation/value (`s: 1, v:
+# 1`) -- exactly `pen_color_of`'s own HSV->RGB formula with `sat`/`v`
+# forced to `1.0` (so `p = 0`, `q = 1 - f`, `t = f`), factored out so
+# `legacy_update_pen_color` (`interpreter.br`) can reuse it for its own
+# hue-only lookup (real `_legacyUpdatePenColor`'s own `Color.hsvToRgb({h:
+# ..., s: 1, v: 1})`).
+def Rgb01 hue100_to_full_rgb(float32 hue100):
+    let h = (hue100 * 3.6) % 360.0
+    let i = floor(h / 60.0) as isize
+    let f = (h / 60.0) - (i as float32)
+    let q = 1.0 - f
+    let t = f
+    var mut r = 1.0
+    var mut g = t
+    var mut b = 0.0
+    if i == 1:
+        r = q
+        g = 1.0
+        b = 0.0
+    elif i == 2:
+        r = 0.0
+        g = 1.0
+        b = t
+    elif i == 3:
+        r = 0.0
+        g = q
+        b = 1.0
+    elif i == 4:
+        r = t
+        g = 0.0
+        b = 1.0
+    elif i == 5:
+        r = 1.0
+        g = 0.0
+        b = q
+    Rgb01(r = r, g = g, b = b)
+
+# Parses a real `colour_picker` shadow's own `"#rrggbb"` value into a
+# fully-opaque `PenColor` -- shared by `pen_state_from_hex_color` below
+# and `sensing_touchingcolor`'s own `TouchingColor` (`interpreter.br`),
+# both of which start from exactly this same real shadow-block value.
+def PenColor hex_to_pen_color(string hex):
+    var mut r = 0.0
+    var mut g = 0.0
+    var mut b = 0.0
+    if hex.length >= 7:
+        r = (hex_byte_value(hex[1], hex[2]) as float32) / 255.0
+        g = (hex_byte_value(hex[3], hex[4]) as float32) / 255.0
+        b = (hex_byte_value(hex[5], hex[6]) as float32) / 255.0
+    PenColor(r = r, g = g, b = b, a = 1.0)
+
+# Real Scratch's own `Color.rgbToHsv`-based `pen_setPenColorToColor` path
+# -- `current` supplies the fields a raw RGB color picker value doesn't
+# determine (`down`/`diameter`/`shade` -- setting a color picker color
+# doesn't touch the legacy shade field, matching real Scratch: only
+# `set/changePenShadeBy` ever write it).
+def PenState pen_state_from_hex_color(string hex, PenState current):
+    let rgb = hex_to_pen_color(hex)
+    let hsv = rgb_to_hsv100(rgb.r, rgb.g, rgb.b)
+    PenState(down = current.down, hue = hsv.hue100, saturation = hsv.sat100, brightness = hsv.val100, transparency = 0.0, diameter = current.diameter, shade = current.shade)
+
+# Real scratch-render's own `isTouchingColor` pixel-comparison tolerance
+# (`RenderWebGL.js`, confirmed against source, not guessed): each 0..255
+# channel is masked before comparing, not compared exactly -- the top 5
+# bits for red/green (`0b11111000` = 248, an 8-step tolerance) and the
+# top 4 bits for blue (`0b11110000` = 240, a 16-step tolerance,
+# deliberately coarser -- confirmed against source, not a typo). Written
+# in plain decimal (not a `0b...` literal -- unconfirmed whether `boring`
+# even supports binary literals, and decimal is unambiguous either way).
+def bool pen_colors_touch(PenColor a, PenColor b):
+    let ar = (a.r * 255.0) as isize
+    let ag = (a.g * 255.0) as isize
+    let ab = (a.b * 255.0) as isize
+    let br = (b.r * 255.0) as isize
+    let bg = (b.g * 255.0) as isize
+    let bb = (b.b * 255.0) as isize
+    ((ar & 248) == (br & 248)) and ((ag & 248) == (bg & 248)) and ((ab & 240) == (bb & 240))
+
+# Scans a canvas-pixel-space rectangle (`[min_x, max_x] x [min_y,
+# max_y]`, real Scratch's own AABB approximation -- `Touching`'s own doc
+# comment, `interpreter.br`) of `sound_queue.scene_composite` for any
+# pixel matching `target` (real scratch-render's own tolerance, `pen_
+# colors_touch` above). The one shared core `sensing_touchingcolor`'s
+# own `TouchingColor` eval case and a test-only entry point (`scheduler.
+# br`) both call, so the geometry/color-matching logic itself is tested
+# directly, not just indirectly through a full ECS pipeline that -- for
+# real costume-based coverage -- would need real `asset_server.load`
+# assets to actually finish decoding (`render_stamp_for_test`'s own doc
+# comment, `pen.br`, on why `MinimalPlugins` alone can't do that).
+def bool scan_scene_for_color(SoundQueue sound_queue, isize min_x, isize max_x, isize min_y, isize max_y, PenColor target):
+    var mut found = false
+    var mut py = min_y
+    while py <= max_y:
+        var mut px = min_x
+        while px <= max_x:
+            if !found:
+                let pixel = sound_queue.get_scene_pixel(px, py)
+                if pen_colors_touch(pixel, target):
+                    found = true
+            px = px + 1
+        py = py + 1
+    found
+
+# One deferred pen mark -- `exec_simple` has no `Assets<Image>`/`Commands`
+# access (same reason `SoundRequest`/`CloneRequest` themselves exist), so
+# actually painting onto the pen canvas is deferred to `draw_pen_marks`
+# (`pen.br`), a real Bevy Update system. `from_*`/`to_*` equal (the same
+# point twice) represents `pen_penDown`'s own immediate dot -- real
+# Scratch's `penPoint` -- rather than needing a separate request shape;
+# `draw_pen_marks`' own line rasterizer degenerates a zero-length segment
+# into exactly a dot naturally, with no special-casing needed there.
+struct PenLineRequest:
+    float32 from_x
+    float32 from_y
+    float32 to_x
+    float32 to_y
+    PenColor color
+    float32 diameter
+
+# One deferred `pen_stamp` request -- same "`exec_simple` has no `Assets
+# <Image>`/`Commands`/ECS `Query` access" reason `PenLineRequest` above
+# and `SoundRequest` themselves exist for. Unlike the *original* design
+# here (a bare target-id list, resolved entirely at drain time by re-
+# reading live `Positions`/`LooksStates`), every field a real stamp
+# actually depends on is snapshotted *at the exact moment `pen_stamp`
+# itself runs* -- `x`/`y`/`direction`/`rotation_style`/`ghost`/
+# `costume_index`/`size`, all read by `Stamp`'s own `exec_simple` case,
+# which already has `Positions`/`LooksStates`/`SoundQueue` in scope for
+# exactly this. The bare-target-id design got this wrong the same way
+# the old per-tick pen-line diff did (`move_position`'s own doc comment,
+# `interpreter.br`): a script that stamps and then changes position/
+# direction/costume *again* before this tick ends (e.g. `repeat [stamp,
+# turn right]`, drained together once per tick) would have every queued
+# stamp read the *same*, final, post-loop state at drain time instead of
+# each one's own state at the moment it actually ran -- found testing a
+# real "stamp a rotated flower" project, the classic `pen_stamp` use
+# case, which showed a static, non-rotating flower instead of one
+# fanning out in a circle. Only the actual costume *pixel bytes*
+# genuinely can't be resolved here (needs `Assets<Image>`) -- everything
+# else is captured immediately, matching `SoundRequest`'s own volume/
+# pitch/pan snapshot precedent.
+struct StampRequest:
+    string target_id
+    float32 x
+    float32 y
+    float32 direction
+    string rotation_style
+    float32 ghost
+    int costume_index
+    float32 size
+
+# The blank starting buffer for `SoundQueue.scene_composite` (below) --
+# opaque white (real Scratch's own stage background wherever nothing
+# else covers it), before `compose_scene_for_touching` has run even
+# once (this project's very first tick).
+def [uint8] blank_scene_composite_data():
+    mut data = []
+    var mut i = 0
+    while i < (480 * 360 * 4):
+        data.push(255 as uint8)
+        i = i + 1
+    data
+
+pub struct SoundQueue as Resource, Debug, Clone:
+    var mut [SoundRequest] play_queue
+    var mut bool stop_all_requested
+    var mut {string=float32} volumes
+    # Every target's current PITCH effect value (semitones*10, real
+    # Scratch's own `-360..360`/default-0 range) -- same "fold into
+    # `SoundQueue`, not its own resource" reasoning as `volumes` just
+    # above. PAN is deliberately NOT tracked here at all, not even as
+    # dead state -- real Scratch has no reporter for either sound
+    # effect's current value (both `sound_seteffectto`/`changeeffectby`
+    # are write-only), so there's nothing observable to get wrong by
+    # omitting it, same reasoning `LooksState.ghost`'s own doc comment
+    # already established for six of Looks' seven graphic effects.
+    var mut {string=float32} pitches
+    # Every target's current PAN effect value (-100..100, real Scratch's
+    # own range/default-0). Same "fold into `SoundQueue`, not its own
+    # resource" reasoning as `volumes`/`pitches` just above. Unlike
+    # `pitches` (which drives `PlaybackSettings.speed`, a plain scalar
+    # `bevy_audio` already exposes directly), rendering PAN needs the real
+    # spatial-audio calibration `play_queued_sounds` does -- see that
+    # system's own doc comment for the exact position math and its
+    # documented trade-offs (this project's own honest, verified-not-
+    # guessed approximation of a true stereo pan law, `bevy_audio` having
+    # no direct pan primitive of its own).
+    var mut {string=float32} pans
+    # Every target's *current* rotation style ("all around"/"left-right"/
+    # "don't rotate", real Scratch's own three exact strings). Same "fold
+    # into `SoundQueue`, not its own resource" reasoning as `volumes`/
+    # `pitches` just above -- genuinely per-*instance*, mutable state
+    # (unlike the link-time-constant table an earlier round first modeled
+    # rotation style as, a `SpriteRotationStyle` Bevy Component baked in
+    # once at spawn time and never touched again: correct for the READ
+    # side alone, but `motion_setrotationstyle` -- a real block this
+    # project hadn't implemented yet -- needs the calling script's own
+    # instance to change it at runtime, which a plain Component can never
+    # do, `exec_simple` has no `Commands`/`Query` access at all). Seeded
+    # at link time from every *origin* target's own saved `rotationStyle`
+    # (`build_target_rotation_styles`, `linker.br`), then copied on clone
+    # creation from the source instance's own *current* value
+    # (`CreateCloneOf`'s `exec_simple` case, same as `volumes`/`pitches`
+    # themselves) -- a clone must inherit whatever rotation style its
+    # source had *at the moment of cloning*, not necessarily its origin's
+    # own original saved value, if a script already changed it. Read
+    # directly by `tag.target_id` in `sync_transforms_from_positions` --
+    # no origin resolution needed there, unlike `TargetCostumes`/
+    # `TargetCostumeDims`, since this is genuinely per-instance already.
+    var mut {string=string} rotation_styles
+    # Type/Instance-model additions for clone support (`control_create_
+    # clone_of`/`control_start_as_clone`/`control_delete_this_clone`) --
+    # folded onto this already-threaded resource for the exact same reason
+    # `volumes` itself is (own doc comment above): `run_pending_threads`
+    # (`scratch.br`) is already at Bevy's hard 16-parameter `SystemParam`
+    # limit, so a brand-new resource costs a 17th param it doesn't have.
+    #
+    # Every live instance's id -> the origin sprite's own name it shares
+    # scripts/costumes/sounds with ("Type-level" data -- `TargetCostumes`/
+    # `TargetCostumeDims`/sound-asset lookup all stay keyed by origin name
+    # only, never per-instance). An original target's own id *is* its name
+    # (identity-seeded at link time, `build_instance_types_table`) -- zero
+    # change for the overwhelmingly common no-clone case. A clone's id is
+    # freshly synthesized (`next_clone_id`, below) and maps to the real
+    # origin, propagated transitively so cloning a clone still resolves to
+    # the true origin, not an intermediate clone.
+    var mut {string=string} instance_types
+    # Monotonic, never reused (even once a clone is deleted) -- so two
+    # clones can never collide just because one was deleted and another
+    # created later.
+    var mut int next_clone_id
+    # `control_create_clone_of`'s `exec_simple` case has no `Commands`/
+    # `Query` access to spawn a real entity itself (same reason `sound_play`
+    # already defers its own entity spawn to `play_queued_sounds`) -- it
+    # copies per-instance resource state synchronously, then queues the
+    # rest here for `spawn_pending_clones`.
+    var mut [CloneRequest] clone_requests
+    # Same deferral, for `control_delete_this_clone` -- drained by
+    # `despawn_pending_clones`.
+    var mut [string] despawn_requests
+    # Real Scratch's own global clone cap (scratch-vm's `Clone.MAX_CLONES`,
+    # 300) -- a plain counter, cheaper to check on every `create clone of`
+    # than scanning `instance_types` for a live count each time.
+    var mut int live_clone_count
+    # `sound_playuntildone`'s own duration lookup -- target id -> sound
+    # name -> length in real seconds, precomputed once at link time
+    # (`build_target_sound_durations`, `linker.br`) straight from each
+    # sound's own sb3-saved `rate`/`sampleCount` metadata (`duration =
+    # sampleCount / rate`), never touching the real decoded audio asset
+    # at all. Folded onto this already-threaded resource for the exact
+    # same "`run_pending_threads`/`step_thread` are already at Bevy's/
+    # their own hard parameter ceiling, a brand-new resource costs a
+    # param neither has" reason `volumes`/`pitches`/`instance_types`
+    # above already are -- and, unlike those three, this one is never
+    # mutated after being seeded once, but stays a plain field (not its
+    # own `let`-only resource) for exactly that reason: no extra plumbing
+    # anywhere just to keep one read-only table separate. Type-level data
+    # (keyed by *origin* name, like `TargetCostumes`/the sound-asset zip
+    # lookup) -- a clone shares its origin's own sound list, never has
+    # its own, same reasoning `PlaySound`'s own `instance_type_of`
+    # resolution already documents.
+    {string={string=float32}} sound_durations
+    # A plain copy of `BackdropSwitchHats.hats` -- `looks_
+    # switchbackdroptoandwait`'s own `exec_simple` case (`SwitchBackdropToAndWait`)
+    # needs to find every `event_whenbackdropswitchesto` hat matching the
+    # backdrop it just switched to and drive each to completion right
+    # there, the same real "and wait" semantics `BroadcastAndWait` already
+    # established for broadcasts. Folded onto this already-threaded
+    # resource for the exact same "`run_pending_threads`/`step_thread` are
+    # already at Bevy's/their own hard parameter ceiling, a brand-new
+    # resource costs a param neither has" reason `sound_durations` itself
+    # is (own doc comment just above) -- never mutated after being seeded
+    # once from the same `build_backdrop_switch_hats` call `BackdropSwitchHats`
+    # itself is built from, so the two stay in sync by construction, not
+    # by any runtime bookkeeping.
+    [BackdropSwitchHat] backdrop_switch_hats
+    # `sensing_resettimer`'s own deferred request -- `exec_simple` has no
+    # `var ScratchTimer` access (see `BlockKind::ResetTimer`'s own doc
+    # comment for why not), so this is checked and cleared by `sync_
+    # scratch_timer` itself every tick instead, the one place that
+    # already has real `mut ResMut<ScratchTimer>` access. A plain bool,
+    # not a queue -- unlike `clone_requests`/`despawn_requests`, there's
+    # nothing to distinguish between two resets requested in the same
+    # tick, "reset" has no parameters of its own.
+    var mut bool reset_timer_requested
+    # `sensing_setdragmode`'s own per-instance state -- same "fold into
+    # `SoundQueue`, not its own resource" reasoning as `volumes`/`pitches`/
+    # `rotation_styles` above (`exec_simple`'s `SetDragMode` case needs
+    # write access, and every already-threaded-resource slot is spoken
+    # for). Seeded at link time from every *origin* target's own saved
+    # `draggable` sb3 field (`build_target_draggable`, `linker.br`), then
+    # copied on clone creation from the source instance's own *current*
+    # value -- same "a clone must inherit whatever a script already
+    # changed, not just its origin's saved default" reasoning `rotation_
+    # styles`' own doc comment gives. Read by `handle_sprite_dragging`
+    # (`scratch.br`), a brand-new Update system with no parameter-count
+    # pressure of its own -- folded here anyway for consistency with every
+    # other per-instance flag a script can toggle, and because `SoundQueue`
+    # is already the natural place any *other* system reads this project's
+    # own per-instance state from (`Res<SoundQueue>`, no new resource to
+    # wire through `setup_scratch_project`'s own seeding either).
+    var mut {string=bool} draggable
+    # `sensing_askandwait`'s own submit-on-enter aside, this is otherwise
+    # the *last* piece of genuinely new per-instance state this project's
+    # Sensing category has needed -- `sensing_setdragmode` was the one
+    # remaining non-blocked opcode gap after the full-category audit and
+    # the keyboard-completeness rounds.
+    # Every instance's own Pen extension state (`PenState`'s own doc
+    # comment) -- same "fold into `SoundQueue`, not its own resource"
+    # reasoning as every other per-instance field above (`exec_simple`'s
+    # own Pen cases need write access).
+    var mut {string=PenState} pen_states
+    # Deferred pen marks -- `exec_simple`/`step_thread` have no
+    # `Assets<Image>`/`Commands` access, so the actual canvas paint is
+    # queued here and drained by `draw_pen_marks` (`pen.br`), same "queue
+    # a request, a real Bevy system does the rest" shape `SoundRequest`/
+    # `CloneRequest` already established. Queued from two places: `pen_
+    # penDown`'s own immediate dot, and (ordinary pen-down *motion*
+    # trails) `move_position` (`interpreter.br`) -- the one shared helper
+    # every real motion opcode goes through, which queues a line segment
+    # at the exact moment a pen-down target's position actually changes.
+    # Used to instead be detected after the fact, once per tick, by
+    # `draw_pen_marks` itself diffing `Positions` against a remembered
+    # `PenCanvas.last_position` -- see `move_position`'s own doc comment
+    # for the real downloaded-project bug that diff-based design got
+    # wrong (multiple motions on the same target within one tick).
+    var mut [PenLineRequest] pen_line_requests
+    var mut bool pen_clear_requested
+    # `pen_stamp`'s own deferred request queue -- see `StampRequest`'s own
+    # doc comment for why every field but the actual costume pixel bytes
+    # is snapshotted immediately, at queue time, not re-read at drain
+    # time.
+    var mut [StampRequest] stamp_requests
+    # A once-per-tick software composite of the *entire visible stage* --
+    # backdrop, pen marks, and every visible sprite, in real z-order --
+    # built purely from this project's own authoritative game state
+    # (`draw_stamp`'s own inverse-UV compositing, `pen.br`, reused for
+    # every sprite, not just an explicit `pen_stamp` call), never a GPU
+    # framebuffer readback. `sensing_touchingcolor` (the only real
+    # Scratch block that needs "what does the rendered scene actually
+    # look like right now") -- real scratch-vm answers this by asking
+    # its own WebGL renderer to redraw candidates into an offscreen
+    # buffer and read the pixels back (`RenderWebGL.isTouchingColor`,
+    # confirmed against source), each time the block is *evaluated*.
+    # Doing the same here would mean a real GPU render-to-texture +
+    # readback round-trip (genuinely new Bevy machinery this project has
+    # never needed) plus threading `Commands`/`Assets<Image>`/an ECS
+    # `Query` through `eval`'s entire call graph, which today has none
+    # of those.
+    #
+    # Lives here (not its own `Resource`) for the same reason `pen_
+    # states`/`pen_line_requests`/`stamp_requests` themselves do --
+    # `run_pending_threads` (`scratch.br`) is already at Bevy's own real
+    # 16-parameter `SystemParam` ceiling (confirmed empirically: a 17th
+    # top-level resource parameter fails to compile), so a brand new
+    # top-level `Resource` isn't free the way it was for `TargetCostumes`/
+    # `TargetCostumeDims` earlier. Folding this into `SoundQueue` (already
+    # threaded everywhere `eval`/`exec_simple`/`step_thread` need it to
+    # reach) costs zero additional parameters anywhere.
+    #
+    # `compose_scene_for_touching` (a real Bevy system, `pen.br`) rebuilds
+    # this field once per tick, late in the `Update` chain -- after every
+    # position/costume mutation for that tick has already settled -- so a
+    # query made *during* the next tick's own script execution sees
+    # exactly what was on screen at the end of the *previous* tick.
+    # That's the same "one render per frame, not per statement"
+    # granularity real Scratch's own browser rendering has too (its
+    # actual canvas is likewise never redrawn mid-script, only once per
+    # real animation frame) -- this project's own already-accepted "per-
+    # tick, not per-statement" limitation for pen trails isn't a
+    # *regression* here, it matches real behavior's own inherent timing.
+    #
+    # One real, documented simplification: does NOT exclude the
+    # *querying* sprite's own drawable from the composite the way real
+    # scratch-vm's own per-query candidate list does -- this buffer is
+    # built ONCE per tick for every query to share, not freshly per query
+    # with a different sprite excluded each time (which real per-query
+    # self-exclusion would require). A sprite touching its own rendered
+    # color (a narrow edge case) reports touching where real Scratch
+    # wouldn't; every other real semantic (z-order, rotation/flip/scale,
+    # ghost, pen marks, backdrop) is faithful.
+    var mut [uint8] scene_composite
+
+    # `(0, 0, 0, 0)` (fully transparent) for any out-of-bounds `(x, y)` --
+    # the same "malformed input degrades gracefully" convention this
+    # project's own AABB/index helpers already follow, not a crash. In
+    # practice never actually transparent once `compose_scene_for_
+    # touching` has run at least once (it starts opaque white and only
+    # ever composites *more* opaque content on top), only before that.
+    req PenColor get_scene_pixel(isize x, isize y):
+        if x < 0 or x >= 480 or y < 0 or y >= 360:
+            PenColor(r = 0.0, g = 0.0, b = 0.0, a = 0.0)
+        else:
+            let i = ((y * 480) + x) * 4
+            # Bare `self.field[idx] as T` (nothing else wrapping the
+            # cast) mis-transpiles into a *string* `.trim().parse()`
+            # cast -- the same real `boring` transpiler quirk already
+            # documented (and worked around the same way) in `draw_
+            # stamp`'s own doc comment, `pen.br`.
+            let byte_r = scene_composite[i]
+            let byte_g = scene_composite[i + 1]
+            let byte_b = scene_composite[i + 2]
+            let byte_a = scene_composite[i + 3]
+            PenColor(r = (byte_r as float32) / 255.0, g = (byte_g as float32) / 255.0, b = (byte_b as float32) / 255.0, a = (byte_a as float32) / 255.0)
+
+    req float32 get_sound_duration(string target_id, string sound_name):
+        let {string=float32} by_name = sound_durations[target_id] else {=}
+        by_name[sound_name] else 0.0
+
+    req float32 get_volume(string target_id):
+        volumes[target_id] else 100.0
+
+    def set_volume(string target_id, float32 v):
+        volumes[target_id] = v
+
+    # See `Positions.remove`'s own doc comment -- same reason, same shape.
+    def remove_volume(string target_id):
+        volumes.remove(target_id)
+
+    req string get_rotation_style(string target_id):
+        rotation_styles[target_id] else "all around"
+
+    def set_rotation_style(string target_id, string style):
+        rotation_styles[target_id] = style
+
+    # See `Positions.remove`'s own doc comment -- same reason, same shape.
+    def remove_rotation_style(string target_id):
+        rotation_styles.remove(target_id)
+
+    req bool get_draggable(string target_id):
+        draggable[target_id] else false
+
+    def set_draggable(string target_id, bool v):
+        draggable[target_id] = v
+
+    # See `Positions.remove`'s own doc comment -- same reason, same shape.
+    def remove_draggable(string target_id):
+        draggable.remove(target_id)
+
+    req PenState get_pen_state(string target_id):
+        pen_states[target_id] else default_pen_state()
+
+    def set_pen_state(string target_id, PenState s):
+        pen_states[target_id] = s
+
+    # See `Positions.remove`'s own doc comment -- same reason, same shape.
+    def remove_pen_state(string target_id):
+        pen_states.remove(target_id)
+
+    req float32 get_pitch(string target_id):
+        pitches[target_id] else 0.0
+
+    def set_pitch(string target_id, float32 v):
+        pitches[target_id] = v
+
+    # See `Positions.remove`'s own doc comment -- same reason, same shape.
+    def remove_pitch(string target_id):
+        pitches.remove(target_id)
+
+    req float32 get_pan(string target_id):
+        pans[target_id] else 0.0
+
+    def set_pan(string target_id, float32 v):
+        pans[target_id] = v
+
+    # See `Positions.remove`'s own doc comment -- same reason, same shape.
+    def remove_pan(string target_id):
+        pans.remove(target_id)
+
+    # Which origin sprite `instance_id` belongs to -- itself as a safe
+    # fallback if it has no entry at all (not expected in practice, since
+    # every real target is seeded at link time and every clone is seeded
+    # the moment it's created, but "unknown instance is its own origin" is
+    # a defensible default rather than a crash).
+    req string instance_type_of(string instance_id):
+        instance_types[instance_id] else instance_id
+
+    def set_instance_type(string instance_id, string origin_name):
+        instance_types[instance_id] = origin_name
+
+    # See `Positions.remove`'s own doc comment -- same reason, same shape.
+    def remove_instance_type(string instance_id):
+        instance_types.remove(instance_id)
+
+# Every currently-live instance belonging to `origin` -- always includes
+# `origin` itself (an original target's own `instance_types` entry is
+# always its own name, see `SoundQueue.instance_types`' own doc comment),
+# plus one entry per currently-alive clone of it. What every hat-dispatch
+# system (`check_key_press_hats`/`check_click_hats`/`check_greater_than_
+# hats`, and `Broadcast`/`BroadcastAndWait` in `exec_simple`) fans a single
+# hat *template* (still tagged with its origin's own name, same as every
+# hat-template resource in this file) out to -- real Scratch fires every
+# hat type on every live clone of the sprite that owns it, not just
+# `control_start_as_clone`'s own dedicated hat. A plain (non-`mut`) dict
+# parameter, not a struct's own field accessed from inside its own method
+# body -- the "2-variable destructuring" transpiler bug this file works
+# around elsewhere (`LayerOrders.go_to_front`'s own doc comment) was
+# already fixed for exactly this shape, only the `var mut`-field-inside-
+# its-own-method-body variant still needs a workaround.
+def [string] instances_of({string=string} instance_types, string origin):
+    mut result = []
+    for id, v in instance_types:
+        if v.clone() == origin:
+            result.push(id.clone())
+    result
+
+# One `sensing_askandwait` still waiting for its own answer -- `ask_id`
+# (assigned from `Vars.next_ask_id` when queued) is what a paused thread's
+# own `FrameKind::WaitingForAnswer` frame checks against `Vars.last_
+# answered_id` to know when to resume (see that variant's own doc
+# comment). `target_id` isn't needed for resolving *which* thread resumes
+# (the frame already carries its own `ask_id`) -- kept anyway since a real
+# per-asker on-screen position (real Scratch shows the ask box near the
+# asking sprite) is a real, documented follow-up this pass doesn't attempt
+# (see `Vars.ask_queue`'s own doc comment).
+struct PendingAsk:
+    int ask_id
+    string target_id
+    string question
+
+# One target's current speech/thought bubble text -- `is_thought`
+# distinguishes `looks_say` from `looks_think` for a future rendering pass
+# that actually draws the two differently (a rounded "say" bubble vs. a
+# cloud-shaped "think" bubble); this pass only renders plain text either
+# way (see `sync_speech_bubbles`'s own doc comment), so it's tracked now
+# rather than added later as a breaking change to this struct's shape.
+struct SpeechBubble:
+    string text
+    bool is_thought
+
+# Every target's current bubble, keyed by target name -- same "plain data,
+# eval/exec stay Bevy-free" rationale as `Positions`/`KeyboardState`.
+# Absent from `table` (the common case: nothing has ever been said) means
+# "no bubble", same as `text_for`'s own empty-string fallback.
+pub struct SpeechBubbles as Resource, Debug, Clone:
+    var mut {string=SpeechBubble} table
+
+    req string text_for(string target_id):
+        let b = table[target_id] else SpeechBubble(text = "", is_thought = false)
+        b.text
+
+    # A real method, not `speech_bubbles.table[id] = value` at the call
+    # site -- confirmed with a real `cargo build` that the latter
+    # transpiles a dict-index assignment through a `var`-passed struct
+    # parameter into an invalid `.table[key].clone() = value` (assigning
+    # into a `.clone()` result). `Positions.set` already uses this same
+    # in-method-body assignment shape for the identical reason; `exec`'s
+    # `Say`/`Think` arms call this instead of touching `.table` directly.
+    def set(string target_id, SpeechBubble b):
+        table[target_id] = b
+
+    # See `Positions.remove`'s own doc comment -- same reason, same shape.
+    def remove(string target_id):
+        table.remove(target_id)
+
+# One visible variable watcher (on-stage display of a Stage variable's
+# live value) -- `label` (the variable's human-readable name) and position
+# are fixed at project-load time (real Scratch lets a user drag/toggle a
+# watcher at runtime; not modeled here, see README.md's roadmap), so
+# there's nothing for `exec` to ever mutate here -- unlike `Positions`/
+# `SpeechBubbles`, this resource is built once at Startup and only ever
+# read afterward, no `var` threading through `eval`/`exec` needed at all.
+struct VariableWatcher:
+    string variable_id
+    string label
+    float32 x
+    float32 y
+
+pub struct VariableWatchers as Resource, Debug, Clone:
+    [VariableWatcher] watchers
+
+# A visible *reporter* watcher -- real Scratch can watch a handful of
+# built-in reporters directly (not just user variables), e.g. a sprite's
+# x/y position or direction, or the Timer. `expr` is the already-linked
+# `Block` to re-`eval()` every tick (reusing this project's *existing*
+# reporters -- `XPosition`/`YPosition`/`Direction`/`Timer` -- unmodified,
+# not a new interpreter feature); `target_id` is which sprite it's
+# evaluated against for the three per-target Motion ones (a plain
+# per-target reporter monitor always names one -- see
+# `Sb3Monitor::sprite_name_string`'s own doc comment), or the empty string
+# for `Timer` (target-agnostic -- see `Sb3Monitor::is_sensing_timer_
+# watcher`'s own doc comment). Same "built once at Startup, no `var`
+# threading" reasoning as `VariableWatcher` -- what reporter a watcher
+# shows never changes at runtime here either.
+#
+# Deliberately scoped to only these four reporters -- the only monitor
+# opcodes among everything a real project can watch (confirmed against
+# `monitors.sb3`, scratch-vm's own everything-at-once monitor test
+# fixture: it also has `looks_size`, `looks_costumenumbername`,
+# `looks_backdropnumbername`, `sensing_current`, and two extension
+# monitors; `timer-monitor.sb3` drove adding `sensing_timer` to this list)
+# that this project's interpreter already implements a matching reporter
+# for. The rest are a real, documented gap (README.md's roadmap), not
+# silently dropped without a trace.
+struct ReporterWatcher:
+    string target_id
+    Block expr
+    string label
+    float32 x
+    float32 y
+
+# Resolves an INDEX/ITEM input's evaluated value to a 0-based array index,
+# or `-1` if it doesn't resolve to a valid position. Handles the one
+# non-numeric special case real Scratch supports here, the literal dropdown
+# string "last" (-> the list's own last position) -- "random" is a known
+# gap (no RNG exists yet anywhere in this runtime, see README.md's roadmap);
+# a literal "random" index falls through to the numeric branch, fails to
+# parse, and resolves to `-1` (a safe, documented no-op) rather than
+# crashing or guessing. `allow_end` widens the valid range by one (`<=
+# len`, not `< len`) for `insert_at`, which alone accepts "one past the end"
+# as a real position (append).
+def int resolve_list_index(ScratchValue idx_val, int len, bool allow_end):
+    let is_last = match idx_val.clone():
+        Str(s): s == "last"
+        _: false
+    if is_last:
+        if len > 0:
+            len - 1
+        else:
+            -1
+    else:
+        let n = idx_val.to_num().to_isize_checked() else -999
+        # `n - 1` below would underflow for `n == int::MIN` (a literal
+        # `-9223372036854775808` is a valid Scratch number and survives
+        # `to_isize_checked` unchanged -- it fits `int64` exactly, so it's
+        # not the overflow case that helper already guards) -- panics in a
+        # debug build, silently wraps to `int::MAX` in release. Same
+        # "compare against the exact boundary before subtracting" shape
+        # `checked_i128_to_i64`/`to_i64_num_den` already use elsewhere in
+        # this codebase for this exact edge case; short-circuiting to the
+        # same `-1` ("not a valid position") this function already returns
+        # for every other out-of-range index is exactly right here too, no
+        # new sentinel needed.
+        let int_min = -9223372036854775807 - 1
+        if n == int_min:
+            -1
+        else:
+            let zero_based = n - 1
+            let max_valid = if allow_end: len else: len - 1
+            if zero_based >= 0 and zero_based <= max_valid:
+                zero_based
+            else:
+                -1
+
+# Every `when I receive` script in the project, keyed by broadcast message
+# name -- built once at link time (`build_broadcasts`), read-only
+# afterward, so (unlike `Vars`/`Lists`) this never needs a `var` parameter
+# anywhere it's threaded.
+#
+# `broadcast`/`broadcast and wait` behave *identically* in this phase: both
+# run every matching receiver script straight through to completion,
+# synchronously, before the broadcasting script continues. That's a real
+# simplification of `broadcast`'s true semantics (fire-and-forget -- the
+# broadcasting script should keep running immediately, with receivers only
+# picked up at the scheduler's next tick) -- but it's an *exact*
+# simplification, not an approximation, as long as Control has no
+# `wait`/`forever` (true today: see README.md's roadmap). With no block
+# that can make a script span more than one scheduler tick, "run to
+# completion sequentially" and "run concurrently, interleaved, one tick at
+# a time" produce identical final state -- there's nothing for a receiver
+# script to still be doing when a real scheduler would hand control back.
+# This stops being exact the moment `wait`/`forever` land; revisit
+# `Broadcast`'s own `exec` arm then, not before.
+# One `when I receive` script, tagged with the target it belongs to --
+# Motion blocks inside a receiver need this (via `Frame.target_id`) exactly
+# like a green-flag script does (see `GreenflagScript` below), and a
+# broadcast can fan out to receivers on more than one sprite at once, so the
+# tag has to travel with each script individually, not live once at the
+# `Broadcasts` level.
+struct ReceiverScript:
+    string target_id
+    [Block] body
+
+pub struct Broadcasts as Resource, Debug, Clone:
+    {string=[ReceiverScript]} table
+
+    req [ReceiverScript] get(string name):
+        table[name] else []
+
+# Every `when I start as a clone` script, keyed by *origin* sprite name --
+# same "built once at link time, read-only afterward" shape as `Broadcasts`
+# (`build_start_as_clone_hats`, `linker.br`, mirrors `build_broadcasts`
+# directly). A sprite can have more than one of these hats, same as
+# broadcasts can have more than one receiver -- grouped as a list per
+# origin, not a single script. Consumed only by `spawn_pending_clones`
+# (`scratch.br`): for each newly-spawned clone, look up its *origin*'s own
+# templates here and start one fresh `Thread` per template, with `target_id`
+# substituted to the new clone's own id (the template itself is still
+# tagged with the origin's name, same as every other hat-template resource
+# in this file).
+pub struct StartAsCloneHats as Resource, Debug, Clone:
+    {string=[ReceiverScript]} table
+
+    req [ReceiverScript] get(string origin_name):
+        table[origin_name] else []
+

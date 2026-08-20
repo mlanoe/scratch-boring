@@ -1,0 +1,477 @@
+# Costume/sound asset extraction from a `.sb3` zip -- `read_zip_entry_bytes`
+# (the shared, prefix-tolerant zip lookup -- see its own doc comment for why
+# it's inlined here rather than a cross-file shared helper), SVG
+# rasterization (`rasterize_svg_to_png`), and the two public entry points
+# `setup_scratch_project`/`play_queued_sounds` (in `scratch.br`) actually
+# call: `extract_current_costume_to_temp_file`/`extract_sound_to_temp_file`.
+# Ported from the former hand-written `src/costume_rt.rs`/`src/sound_rt.rs`
+# Rust modules to pure Boring -- see each function's own doc comment for the
+# history.
+#
+# Sibling file to `scratch.br`, pulled in via a bare `use assets` there --
+# same mechanism as `values.br`/`runtime.br`/etc. (see any of their own
+# header comments). Split out once `scratch.br` grew past ~3100 lines --
+# this is the one piece with its own extra external-crate `use`s
+# (`zip`/`resvg`/`std.path`), not needed anywhere else in this project, so
+# they're declared here rather than at `scratch.br`'s own top.
+
+# ============================================================================
+# Phase 2 costume loading -- ported from the former src/costume_rt.rs
+# (hand-written Rust) to pure Boring, now that boring.toml's [external_fns]
+# section (see ../boring.toml) can express the `&`/`&mut` argument borrows
+# zip/resvg's real signatures need. Behavioral equivalence with the old
+# Rust module was verified with a byte-for-byte comparison test (both the
+# SVG-rasterized and bitmap-passthrough paths) before it was deleted -- see
+# the project README/task notes, not reproduced as a checked-in test here
+# since it duplicates tests/costumes.rs below almost exactly.
+#
+# `use zip.ZipArchive`/`use zip.read.ZipFile` bring in bare type names for
+# UFCS-style static calls (`ZipArchive.byName(archive, name)`, not
+# `archive.byName(name)`) -- deliberate, not just style: `boring.toml
+# [external_fns]`'s receiver-based borrow lookup only resolves a local var's
+# type when it's a plain `Type::Named` annotation, and `ZipArchive<File>`
+# (the real, generic-parameterized Rust type our `File` produces) parses as
+# `Type::Generic` instead, which the lookup silently never matches --
+# confirmed empirically (see boring.toml's own comment on `ZipArchive::byName`).
+# UFCS sidesteps it entirely: the qualifier is the literal type name typed at
+# the call site, no var-type resolution involved. The same applies to
+# `Path.join(dir, name)` (not `dir.join(name)`) for an unrelated reason --
+# `.join(...)` on any receiver is hijacked by Boring's own builtin array/
+# string-join method before it ever reaches the external-call fallback.
+#
+# `resvg.tiny_skia.Transform` is referenced by its fully-qualified path
+# inline, deliberately NOT imported under the bare name `Transform` --
+# `use bevy.prelude.*` (top of this file) already brings in Bevy's own
+# `Transform` component under that exact name, and an explicit `use`
+# targeting the same bare name would silently shadow it project-wide.
+use std.fs.File
+use std.io.Read
+use std.path.Path
+use zip.ZipArchive
+use zip.read.ZipFile
+use resvg.usvg.Options, Tree
+use resvg.usvg.fontdb.Database
+use resvg.tiny_skia.Pixmap
+
+# Reads `entryFilename`'s raw bytes out of the `.sb3` zip at `sb3Path` --
+# `nil` if the path isn't a real zip, or the entry can't be found at the
+# root or one directory level deep (mirrors real Scratch's own tolerant
+# loading step -- see `sb3_loader.br`'s `zip_entry_matches`/
+# `read_project_json_from_zip` for the same lookup against `project.json`
+# itself), any I/O step fails, or the matched entry's declared size
+# exceeds `MAX_ZIP_ENTRY_BYTES` (declared in `sb3_loader.br`, see its own
+# doc comment). Inlines the by-index search directly
+# rather than calling a shared helper: a Boring-declared function can't
+# cleanly take `archive`'s real type (`ZipArchive<File>`, an external
+# generic) as a parameter -- see `sb3_loader.br`'s own header comment on
+# why its former thin-Rust-delegate equivalent (`findZipEntryForBoring`)
+# was dropped rather than ported as a shared cross-file function.
+def [uint8]? read_zip_entry_bytes(string sb3Path, string entryFilename):
+    let fileOpt = try? File.open(sb3Path.asRef())
+    guard let file = fileOpt else return nil
+    let archiveOpt = try? ZipArchive.new(file)
+    guard let archiveFixed = archiveOpt else return nil
+    var mut archive = archiveFixed
+    let entryCount = ZipArchive.len(archive)
+    var string? foundName = nil
+    var mut i = 0 as uint
+    while i < entryCount:
+        let indexedOpt = try? ZipArchive.byIndex(archive, i)
+        if let indexed = indexedOpt:
+            let rawName = indexed.name()
+            let nameStr = "{rawName}"
+            if zip_entry_matches(nameStr.clone(), entryFilename.clone()):
+                foundName = nameStr
+        i = i + (1 as uint)
+    guard let entryName = foundName else return nil
+    let entryOpt = try? ZipArchive.byName(archive, entryName)
+    guard let entryFixed = entryOpt else return nil
+    var mut entry = entryFixed
+    # `MAX_ZIP_ENTRY_BYTES` (declared once, in `sb3_loader.br` -- see its
+    # own doc comment) guards against a zip-bomb-style asset the same way
+    # `read_project_json_from_zip` guards `project.json` itself.
+    if entry.size() > MAX_ZIP_ENTRY_BYTES:
+        return nil
+    var [uint8] buf = []
+    let bytesReadOpt = try? ZipFile.readToEnd(entry, buf)
+    guard let bytesRead = bytesReadOpt else return nil
+    buf
+
+# Rasterizes an SVG document to a PNG image, sized to the SVG's own natural
+# (ceil'd) dimensions -- `nil` if the SVG fails to parse or the pixmap can't
+# be allocated. `width`/`height` are a plain (unchecked, saturating) `as
+# uint32` cast, not a checked one -- matching the original hand-written
+# Rust's own `size.width().ceil() as u32`, which was never checked either.
+pub def [uint8]? rasterize_svg_to_png([uint8] svgBytes):
+    # `Options.default()`'s own `fontdb` starts genuinely empty (confirmed
+    # against real `usvg` source, `Options<'a>::fontdb: Arc<fontdb::
+    # Database>`) -- with no system fonts loaded, every `<text>` element in
+    # an SVG costume silently fails to rasterize at all (`usvg`'s own
+    # runtime warning, "No match for \"Sans Serif\" font-family", confirmed
+    # against a real downloaded project whose "shop item" costumes bake
+    # text directly into their own SVG art). Loading system fonts before
+    # every rasterization call is the documented fix, not a guess -- see
+    # `fontdb::Database::load_system_fonts`'s own real signature.
+    mut fonts = Database.new()
+    fonts.load_system_fonts()
+    mut opts = Options.default()
+    opts.fontdb = fonts.into()
+    let treeOpt = try? Tree.fromData(svgBytes, opts)
+    guard let tree = treeOpt else return nil
+    let size = tree.size()
+    let width = size.width().ceil() as uint32
+    let height = size.height().ceil() as uint32
+    guard let pixmap = Pixmap.new(width.max(1), height.max(1)) else return nil
+    var mut pixmap2 = pixmap
+    resvg.render(tree, resvg.tiny_skia.Transform.default(), pixmap2.asMut())
+    let pngOpt = try? pixmap2.encodePng()
+    guard let png = pngOpt else return nil
+    png
+
+# ============================================================================
+# Cache-filename validation -- both `extract_costume_bytes_to_temp_file` and
+# `extract_sound_to_temp_file` below build the on-disk cache filename by
+# directly interpolating `asset_id`/`data_format`, both plain fields
+# deserialized straight out of an attacker-controlled `project.json` (see
+# `Sb3Costume`/`Sb3Sound` in `sb3_loader.br`) -- neither one is validated by
+# `fromJson` itself. Without this check, a forged `.sb3` whose `assetId` is
+# e.g. `"../../../../home/x/.ssh/authorized_keys"` would make
+# `Path.join(cacheDir, fileName)` resolve *outside* `.costume_cache`/
+# `.sound_cache` entirely, and the following `std.fs.write` would then write
+# attacker-controlled asset bytes to that attacker-chosen path -- a real
+# path-traversal-to-arbitrary-file-write, reachable just by loading a
+# malicious project (every costume/sound is extracted up front, see
+# `setup_scratch_project`). Both functions below reject (return `nil`,
+# same "degrade to a placeholder" contract every other failure mode here
+# already uses) rather than trying to sanitize; the whitelist approach
+# means a `/`, `.`, or any other path separator can never reach
+# `Path.join` in the first place.
+
+# A real downloaded Scratch project's asset ids are always an MD5 hex
+# digest, but this repo's own hand-authored test fixtures use short
+# human-readable ids instead (`"bg"`, `"beepwav"`, `"c1"` -- see
+# `assets/sound_pan_test.sb3`/`assets/touchingcolor_demo.sb3` and friends),
+# so the whitelist here is plain ASCII alphanumeric (`[0-9a-zA-Z]`), not
+# hex-only -- still enough on its own to make a path-traversal payload
+# impossible (no `/`, `..`, or null byte is ever alphanumeric), while
+# staying compatible with every asset id this project actually ships.
+# Empty strings are rejected too (an empty filename stem is never a real
+# asset id, and `Path.join(dir, ".{ext}")` is a degenerate case not worth
+# accepting).
+def bool is_safe_asset_id(string s):
+    if s.length == 0:
+        return false
+    mut chars = s.chars()
+    for c in chars:
+        let lowered = "{c}".toLower()
+        let is_digit = lowered == "0" or lowered == "1" or lowered == "2" or lowered == "3" or lowered == "4" or lowered == "5" or lowered == "6" or lowered == "7" or lowered == "8" or lowered == "9"
+        let is_letter = lowered == "a" or lowered == "b" or lowered == "c" or lowered == "d" or lowered == "e" or lowered == "f" or lowered == "g" or lowered == "h" or lowered == "i" or lowered == "j" or lowered == "k" or lowered == "l" or lowered == "m" or lowered == "n" or lowered == "o" or lowered == "p" or lowered == "q" or lowered == "r" or lowered == "s" or lowered == "t" or lowered == "u" or lowered == "v" or lowered == "w" or lowered == "x" or lowered == "y" or lowered == "z"
+        if !(is_digit or is_letter):
+            return false
+    true
+
+# Whitelists a costume's `dataFormat` to Scratch's own closed set of
+# costume formats, returning the (unchanged) extension to write the cache
+# file with -- `nil` for anything else. Exact (case-sensitive) match only:
+# real `.sb3` files always write these lowercase, so anything else is
+# already suspicious and safe to reject outright rather than normalize.
+def string? costume_extension_for_format(string data_format):
+    if data_format == "png":
+        "png"
+    elif data_format == "jpg":
+        "jpg"
+    elif data_format == "jpeg":
+        "jpeg"
+    elif data_format == "gif":
+        "gif"
+    elif data_format == "svg":
+        "svg"
+    else:
+        nil
+
+# Same idea as `costume_extension_for_format`, for Scratch's own closed set
+# of sound formats.
+def string? sound_extension_for_format(string data_format):
+    if data_format == "wav":
+        "wav"
+    elif data_format == "mp3":
+        "mp3"
+    else:
+        nil
+
+# `targetName`'s costume at `idx` in `project` -- `nil` if no target
+# matches the name, or `idx` isn't a valid index into `costumes` (an
+# unchecked `usize::try_from` failure, or simply out-of-range -- both
+# collapse to `nil` via `.get()`, same as the original Rust's
+# `target.costumes.get(usize::try_from(...).ok()?)?`). Generalizes the
+# original single-purpose "current costume only" lookup into "any index"
+# once `looks_switchcostumeto`/`looks_nextcostume` needed to pre-extract
+# *every* costume, not just whichever one was current at load time (see
+# `TargetCostumes`' own doc comment in `runtime.br`).
+def Sb3Costume? find_target_costume_at_index(Sb3Project project, string targetName, int idx):
+    for target in project.targets:
+        if target.name_matches(targetName.clone()):
+            guard let uidx = (idx as uint) else return nil
+            return target.costumes.get(uidx).cloned()
+    nil
+
+# `targetName`'s currently-selected costume in `project` -- a thin
+# wrapper over `find_target_costume_at_index` now, behaviorally identical
+# to before that function existed. `project_for_lookup` cloned up front,
+# same reasoning as `build_variable_watchers`' own identical comment: the
+# `for target in project.targets:` loop below moves `project.targets` out
+# of `project`, so a `project.clone()` called *inside* the loop body
+# would be cloning an already-partially-moved value.
+def Sb3Costume? find_target_costume(Sb3Project project, string targetName):
+    let project_for_lookup = project.clone()
+    for target in project.targets:
+        if target.name_matches(targetName.clone()):
+            return find_target_costume_at_index(project_for_lookup.clone(), targetName, target.current_costume)
+    nil
+
+# Extracts target `targetName`'s currently-selected costume from the `.sb3`
+# zip at `sb3Path`, rasterizing SVG to PNG if needed, and writes it to a
+# cache file *inside the project's own `assets/` directory*
+# (`<assets-dir>/.costume_cache/<asset-id>.<ext>`) -- deliberately NOT a
+# system temp dir, since Bevy's `AssetServer::load` rejects any path outside
+# its configured asset root by default. Returns the cache file's path
+# *relative to the assets directory* (e.g. `.costume_cache/<id>.png`) --
+# exactly the shape `AssetServer::load` expects. The assets directory itself
+# is derived as `sb3Path`'s parent directory, same as every project path in
+# this repo already living under `assets/`.
+#
+# Returns `nil` if `sb3Path` isn't a real zip (a hand-authored raw-JSON test
+# fixture has no asset bytes at all -- callers fall back to the flat-color
+# placeholder in that case), `sb3Path` has no parent directory, the target/
+# its current costume can't be found, or extraction/rasterization/writing
+# the cache file fails for any reason -- a rendering nicety, not a
+# correctness-critical path, so degrading to a placeholder rect beats
+# crashing the whole game over one bad costume asset.
+# The shared extraction body both `extract_current_costume_to_temp_file`
+# and `extract_costume_at_index_to_temp_file` delegate to, once each has
+# resolved *which* `Sb3Costume` it actually means -- everything from here
+# down (zip read, SVG rasterization, cache-file write) is identical
+# regardless of which costume it is.
+def string? extract_costume_bytes_to_temp_file(string sb3Path, Sb3Costume costume):
+    if !is_safe_asset_id(costume.asset_id.clone()):
+        return nil
+    guard let checked_extension = costume_extension_for_format("{costume.data_format}") else return nil
+    let rawOpt = read_zip_entry_bytes(sb3Path.clone(), costume.md5ext)
+    guard let rawBytes = rawOpt else return nil
+    var outBytes = []
+    var extension = ""
+    if "{costume.data_format}" == "svg":
+        let pngOpt = rasterize_svg_to_png(rawBytes)
+        guard let png = pngOpt else return nil
+        outBytes = png
+        extension = "png"
+    else:
+        # Bitmap formats ("png"/"jpg"/"jpeg"/"gif" -- Scratch's own set)
+        # pass straight through; `AssetServer::load` picks its decoder from
+        # the file extension written below, so `checked_extension` (already
+        # whitelisted above, same value `costume.data_format` would give)
+        # doubles as that extension.
+        outBytes = rawBytes
+        extension = checked_extension
+    guard let assetsDir = Path.new(sb3Path.asRef()).parent() else return nil
+    let cacheDir = Path.join(assetsDir, ".costume_cache")
+    let createOpt = try? std.fs.create_dir_all(cacheDir.clone())
+    guard let created = createOpt else return nil
+    # costume.asset_id (the md5 of the asset's *content*) makes a stable,
+    # collision-free filename across targets/costumes without needing to
+    # sanitize a human-readable name.
+    let fileName = "{costume.asset_id}.{extension}"
+    let fullPath = Path.join(cacheDir, fileName.asRef())
+    let writeOpt = try? std.fs.write(fullPath, outBytes)
+    guard let wrote = writeOpt else return nil
+    ".costume_cache/{fileName}"
+
+pub def string? extract_current_costume_to_temp_file(string sb3Path, string targetName):
+    guard let project = Sb3Project.load_for_boring(sb3Path.clone()) else return nil
+    guard let costume = find_target_costume(project, targetName) else return nil
+    extract_costume_bytes_to_temp_file(sb3Path, costume)
+
+# Same contract as `extract_current_costume_to_temp_file`, but for a
+# specific costume index rather than whichever one was current at load
+# time -- what `setup_scratch_project` needs to pre-extract *every*
+# costume up front, so `looks_switchcostumeto`/`looks_nextcostume` can
+# swap a sprite's real image at runtime without ever re-touching the zip
+# (see `TargetCostumeHandles`' own doc comment in `scratch.br`).
+pub def string? extract_costume_at_index_to_temp_file(string sb3Path, string targetName, int idx):
+    guard let project = Sb3Project.load_for_boring(sb3Path.clone()) else return nil
+    guard let costume = find_target_costume_at_index(project, targetName, idx) else return nil
+    extract_costume_bytes_to_temp_file(sb3Path, costume)
+
+# ============================================================================
+# sensing_touchingobject support -- real pixel dimensions per costume, so
+# `Touching`'s AABB math (`interpreter.br`'s `eval`, `runtime.br`'s
+# `TargetCostumeDims`/`aabb_overlap`/`touching_point`/`touching_stage_edge`)
+# has a real on-screen footprint to work with instead of a guessed one.
+
+# Parses a PNG's IHDR chunk directly to recover its real pixel width/
+# height -- `nil` if `bytes` is too short to hold a signature + IHDR, or
+# doesn't start with PNG's own fixed magic bytes (`0x89 P N G \r \n
+# \x1A \n`). No new external crate needed for this: every costume this
+# project ever writes to its own on-disk cache (`extract_costume_bytes_
+# to_temp_file`, above) is *already* either a real PNG (the bitmap-
+# passthrough branch) or an SVG rasterized to PNG (`rasterize_svg_to_png`,
+# above) -- see `TargetCostumeDims`' own doc comment in `runtime.br` for
+# what a genuinely non-PNG bitmap format (jpg/gif/bmp -- rare in real
+# Scratch content, and not what either of this project's own costume
+# paths ever produce) degrades to instead. IHDR's width/height are the
+# first two 4-byte big-endian fields right after the 8-byte signature and
+# IHDR's own 8-byte length+tag header (bytes 16..20 / 20..24) -- built up
+# by hand from four `uint8`s each (`* 16777216 + ... * 65536 + ... * 256
+# + ...`, not a bit-shift), matching `Rng.next_u64`'s own established
+# `<<`/`>>`/`^` usage for *word*-sized values but avoiding it here for a
+# handful of individual byte reads with no established precedent yet.
+def (uint32, uint32)? png_dimensions([uint8] bytes):
+    if bytes.length < 24:
+        return nil
+    if bytes[0] != 137 or bytes[1] != 80 or bytes[2] != 78 or bytes[3] != 71:
+        return nil
+    let width = (bytes[16] as uint32) * 16777216 + (bytes[17] as uint32) * 65536 + (bytes[18] as uint32) * 256 + (bytes[19] as uint32)
+    let height = (bytes[20] as uint32) * 16777216 + (bytes[21] as uint32) * 65536 + (bytes[22] as uint32) * 256 + (bytes[23] as uint32)
+    (width, height)
+
+# One costume's real pixel dimensions -- extracts it exactly the way
+# `extract_costume_at_index_to_temp_file` already does (so this always
+# sees the *same* cached PNG bytes that ends up loaded as the sprite's
+# real `Handle<Image>`, never a second, potentially different decode),
+# then reads the cache file straight back off disk and parses its PNG
+# header. `nil` for a costume that can't be extracted at all (a raw-JSON
+# test fixture, or corrupt/missing asset bytes -- same fallback path as
+# extraction itself), or a genuinely non-PNG bitmap format (see
+# `png_dimensions`' own doc comment) -- `TargetCostumeDims.get`'s own
+# fallback in `runtime.br` is what a caller actually sees for either case.
+def CostumeDim? costume_pixel_dims(string sb3Path, string targetName, int idx):
+    guard let cachePath = extract_costume_at_index_to_temp_file(sb3Path.clone(), targetName.clone(), idx) else return nil
+    guard let assetsDir = Path.new(sb3Path.asRef()).parent() else return nil
+    let fullPath = Path.join(assetsDir, cachePath.asRef())
+    let bytesOpt = try? std.fs.read(fullPath)
+    guard let bytes = bytesOpt else return nil
+    guard let dims_tuple = png_dimensions(bytes) else return nil
+    let (w, h) = dims_tuple
+    CostumeDim(width = w as float32, height = h as float32)
+
+# Builds `TargetCostumeDims` for every target/costume in `project` --
+# called once at link time (`setup_scratch_project`'s Startup system and
+# every headless `run_greenflag_and_report*` entry point, same as
+# `build_target_costumes`), never per-tick. `target_id` read into a local
+# up front, before touching `target.costumes` at all -- not because this
+# loop moves it (a plain `while i < target.costumes.length:` index loop
+# only ever *borrows* `.length`, never moves the array the way a `for c
+# in target.costumes:` loop would), but to keep the same defensive shape
+# every other per-target builder in this project already uses
+# (`build_target_costumes`/`find_target_costume`'s own doc comments).
+# `sb3Path` is `""` for every headless entry point fed a raw-JSON fixture
+# (no real zip to extract from) -- `costume_pixel_dims` degrades to `nil`
+# for every costume in that case, same as it would for any other
+# unextractable asset, so this still returns a well-formed (all-fallback)
+# `TargetCostumeDims` rather than needing a special empty-path branch.
+pub def TargetCostumeDims build_target_costume_dims(string sb3Path, Sb3Project project):
+    var mut table = {=}
+    for target in project.targets:
+        let target_id = "{target.name_string()}"
+        var mut dims = []
+        var mut i = 0
+        while i < target.costumes.length:
+            # Real Scratch scales a bitmap costume's *logical* size down by
+            # its own saved `bitmapResolution` (2 for a retina-authored
+            # costume, meaning the raw PNG is twice the pixel size it's
+            # meant to render/collide at) -- an SVG costume's own
+            # `bitmapResolution` is always absent/1 (vector, no such
+            # concept), so this is a real no-op for every costume this
+            # project's own SVG-rasterization path produces, and only
+            # actually corrects a genuine bitmap-sourced `.sb3`. Applied
+            # here (dividing `costume_pixel_dims`' own raw decoded PNG
+            # pixel size), not inside `costume_pixel_dims` itself, since
+            # that function's own job stays "what does the PNG file
+            # itself say", independent of any sb3-level metadata.
+            let resolution = (target.costumes[i].bitmap_resolution else 1.0) as float32
+            if let raw = costume_pixel_dims(sb3Path.clone(), target_id.clone(), i):
+                dims.push(CostumeDim(width = raw.width / resolution, height = raw.height / resolution))
+            else:
+                dims.push(CostumeDim(width = 40.0, height = 40.0))
+            i += 1
+        table[target_id] = dims
+    TargetCostumeDims(table = table)
+
+# ============================================================================
+# Phase 2 sound loading -- ported from the former src/sound_rt.rs
+# (hand-written Rust) to pure Boring, same [external_fns] mechanism as
+# costume loading above. A strict subset of that costume port: zip
+# extraction + cache-file write, with no rasterization step at all (Scratch's
+# own sound formats -- wav/mp3 -- are already formats `bevy_audio` decodes
+# natively, so this only ever needs to extract-and-passthrough). Reuses
+# `read_zip_entry_bytes` unchanged (its signature -- `(sb3Path, entryFilename)
+# -> [uint8]?` -- already fits this exactly) and the same `Path`/`std.fs`
+# imports already brought in above; no new `use`s or `[external_fns]`
+# entries needed.
+#
+# `Sb3Target.sound_by_name` (`boring/sb3_loader.br`) is a plain by-name
+# linear scan there, not re-expressed here -- see that method's own doc
+# comment for why (no `.get(idx)`-style lookup the way costumes have).
+
+# `targetName`'s sound named `soundName` in `project` -- `nil` if no target
+# matches the name, or that target has no sound with that name.
+#
+# `guard let ... else return nil` (not a bare `return target.sound_by_name(
+# ...)`) deliberately -- kept even now that `sound_by_name` is a Boring-
+# declared method (it used to be a genuinely external Rust accessor before
+# `sb3_loader.rs` was ported, where a bare `return` of its `Option<Sb3Sound>`
+# result inside a `Sb3Sound?`-returning function got double-wrapped by the
+# transpiler (`Some(target.sound_by_name(...))`,
+# `Some(Option<Sb3Sound>)` -- a real `Option<Option<T>>` type mismatch,
+# confirmed with a real `cargo build` before this was written) since the
+# transpiler can't see through an external call's real return type the way
+# it can for its own builtin `.get()`/`.cloned()` idioms (see
+# `find_target_costume`'s own `.get(idx).cloned()` above, which needs no
+# such guard). `guard let` sidesteps this entirely -- same reasoning as
+# `read_zip_entry_bytes`'s own `Sb3Project.findZipEntryForBoring(...)` call
+# above.
+def Sb3Sound? find_target_sound(Sb3Project project, string targetName, string soundName):
+    for target in project.targets:
+        if target.name_matches(targetName.clone()):
+            guard let sound = target.sound_by_name(soundName.clone()) else return nil
+            return sound
+    nil
+
+# Extracts target `targetName`'s sound named `soundName` from the `.sb3` zip
+# at `sb3Path`, and writes it to a cache file *inside the project's own
+# `assets/` directory* (`<assets-dir>/.sound_cache/<asset-id>.<data-format>`)
+# -- same reasoning as `extract_current_costume_to_temp_file`'s own doc
+# comment: Bevy's `AssetServer::load` rejects any path outside its
+# configured asset root by default. Returns the cache file's path *relative
+# to the assets directory*, exactly the shape `AssetServer::load` expects.
+#
+# Returns `nil` if `sb3Path` isn't a real zip (a hand-authored raw-JSON test
+# fixture has no asset bytes at all -- callers should just skip playback in
+# that case, there is no placeholder sound the way there's a placeholder
+# color rect for costumes), `sb3Path` has no parent directory, the target/
+# named sound can't be found, or extraction or writing the cache file fails
+# for any reason. Every failure mode collapses to `nil` rather than
+# propagating a specific error -- a missing/malformed sound asset should
+# never crash the whole game, same rationale as the costume extractor.
+pub def string? extract_sound_to_temp_file(string sb3Path, string targetName, string soundName):
+    guard let project = Sb3Project.load_for_boring(sb3Path.clone()) else return nil
+    guard let sound = find_target_sound(project, targetName, soundName) else return nil
+    if !is_safe_asset_id(sound.asset_id.clone()):
+        return nil
+    guard let checked_extension = sound_extension_for_format("{sound.data_format}") else return nil
+    let rawOpt = read_zip_entry_bytes(sb3Path.clone(), sound.md5ext)
+    guard let rawBytes = rawOpt else return nil
+    guard let assetsDir = Path.new(sb3Path.asRef()).parent() else return nil
+    let cacheDir = Path.join(assetsDir, ".sound_cache")
+    let createOpt = try? std.fs.create_dir_all(cacheDir.clone())
+    guard let created = createOpt else return nil
+    # sound.asset_id (the md5 of the asset's *content*) makes a stable,
+    # collision-free filename across targets/sounds without needing to
+    # sanitize a human-readable name -- same convention as the costume
+    # cache. `checked_extension` (already whitelisted above) replaces a
+    # direct `sound.data_format` interpolation here.
+    let fileName = "{sound.asset_id}.{checked_extension}"
+    let fullPath = Path.join(cacheDir, fileName.asRef())
+    let writeOpt = try? std.fs.write(fullPath, rawBytes)
+    guard let wrote = writeOpt else return nil
+    ".sound_cache/{fileName}"

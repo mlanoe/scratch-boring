@@ -1,0 +1,329 @@
+{
+  "targets": [
+    {
+      "isStage": true,
+      "name": "Stage",
+      "variables": {
+        "var_result_bouncer_x": [
+          "result_bouncer_x",
+          0
+        ],
+        "var_result_bouncer_y": [
+          "result_bouncer_y",
+          0
+        ],
+        "var_result_bouncer_dir": [
+          "result_bouncer_dir",
+          0
+        ],
+        "var_result_untouched_x": [
+          "result_untouched_x",
+          0
+        ],
+        "var_result_untouched_y": [
+          "result_untouched_y",
+          0
+        ],
+        "var_result_untouched_dir": [
+          "result_untouched_dir",
+          0
+        ]
+      },
+      "lists": {},
+      "broadcasts": {},
+      "blocks": {},
+      "comments": {},
+      "currentCostume": 0,
+      "costumes": [
+        {
+          "name": "backdrop1",
+          "dataFormat": "svg",
+          "assetId": "bg",
+          "md5ext": "bg.svg",
+          "rotationCenterX": 0,
+          "rotationCenterY": 0
+        }
+      ],
+      "sounds": [],
+      "volume": 100,
+      "layerOrder": 0,
+      "tempo": 60,
+      "videoTransparency": 50,
+      "videoState": "on",
+      "textToSpeechLanguage": null
+    },
+    {
+      "isStage": false,
+      "name": "Bouncer",
+      "variables": {},
+      "lists": {},
+      "broadcasts": {},
+      "blocks": {
+        "hat1": {
+          "opcode": "event_whenflagclicked",
+          "next": "bounce1",
+          "parent": null,
+          "inputs": {},
+          "fields": {},
+          "shadow": false,
+          "topLevel": true,
+          "x": 0,
+          "y": 0
+        },
+        "bounce1": {
+          "opcode": "motion_ifonedgebounce",
+          "next": "set_x",
+          "parent": "hat1",
+          "inputs": {},
+          "fields": {},
+          "shadow": false,
+          "topLevel": false
+        },
+        "expr_x_bouncer": {
+          "opcode": "motion_xposition",
+          "next": null,
+          "parent": "set_x",
+          "inputs": {},
+          "fields": {},
+          "shadow": false,
+          "topLevel": false
+        },
+        "set_x": {
+          "opcode": "data_setvariableto",
+          "next": "set_y",
+          "parent": "bounce1",
+          "inputs": {
+            "VALUE": [
+              1,
+              "expr_x_bouncer"
+            ]
+          },
+          "fields": {
+            "VARIABLE": [
+              "result_bouncer_x",
+              "var_result_bouncer_x"
+            ]
+          },
+          "shadow": false,
+          "topLevel": false
+        },
+        "expr_y_bouncer": {
+          "opcode": "motion_yposition",
+          "next": null,
+          "parent": "set_y",
+          "inputs": {},
+          "fields": {},
+          "shadow": false,
+          "topLevel": false
+        },
+        "set_y": {
+          "opcode": "data_setvariableto",
+          "next": "set_dir",
+          "parent": "set_x",
+          "inputs": {
+            "VALUE": [
+              1,
+              "expr_y_bouncer"
+            ]
+          },
+          "fields": {
+            "VARIABLE": [
+              "result_bouncer_y",
+              "var_result_bouncer_y"
+            ]
+          },
+          "shadow": false,
+          "topLevel": false
+        },
+        "expr_dir_bouncer": {
+          "opcode": "motion_direction",
+          "next": null,
+          "parent": "set_dir",
+          "inputs": {},
+          "fields": {},
+          "shadow": false,
+          "topLevel": false
+        },
+        "set_dir": {
+          "opcode": "data_setvariableto",
+          "next": null,
+          "parent": "set_y",
+          "inputs": {
+            "VALUE": [
+              1,
+              "expr_dir_bouncer"
+            ]
+          },
+          "fields": {
+            "VARIABLE": [
+              "result_bouncer_dir",
+              "var_result_bouncer_dir"
+            ]
+          },
+          "shadow": false,
+          "topLevel": false
+        }
+      },
+      "comments": {},
+      "currentCostume": 0,
+      "costumes": [
+        {
+          "name": "a",
+          "dataFormat": "svg",
+          "assetId": "c_Bouncer",
+          "md5ext": "c_Bouncer.svg",
+          "rotationCenterX": 0,
+          "rotationCenterY": 0
+        }
+      ],
+      "sounds": [],
+      "volume": 100,
+      "layerOrder": 1,
+      "visible": true,
+      "x": 235,
+      "y": 0,
+      "size": 100,
+      "direction": 90,
+      "draggable": false,
+      "rotationStyle": "all around"
+    },
+    {
+      "isStage": false,
+      "name": "Untouched",
+      "variables": {},
+      "lists": {},
+      "broadcasts": {},
+      "blocks": {
+        "hat1": {
+          "opcode": "event_whenflagclicked",
+          "next": "bounce1",
+          "parent": null,
+          "inputs": {},
+          "fields": {},
+          "shadow": false,
+          "topLevel": true,
+          "x": 0,
+          "y": 0
+        },
+        "bounce1": {
+          "opcode": "motion_ifonedgebounce",
+          "next": "set_x",
+          "parent": "hat1",
+          "inputs": {},
+          "fields": {},
+          "shadow": false,
+          "topLevel": false
+        },
+        "expr_x_untouched": {
+          "opcode": "motion_xposition",
+          "next": null,
+          "parent": "set_x",
+          "inputs": {},
+          "fields": {},
+          "shadow": false,
+          "topLevel": false
+        },
+        "set_x": {
+          "opcode": "data_setvariableto",
+          "next": "set_y",
+          "parent": "bounce1",
+          "inputs": {
+            "VALUE": [
+              1,
+              "expr_x_untouched"
+            ]
+          },
+          "fields": {
+            "VARIABLE": [
+              "result_untouched_x",
+              "var_result_untouched_x"
+            ]
+          },
+          "shadow": false,
+          "topLevel": false
+        },
+        "expr_y_untouched": {
+          "opcode": "motion_yposition",
+          "next": null,
+          "parent": "set_y",
+          "inputs": {},
+          "fields": {},
+          "shadow": false,
+          "topLevel": false
+        },
+        "set_y": {
+          "opcode": "data_setvariableto",
+          "next": "set_dir",
+          "parent": "set_x",
+          "inputs": {
+            "VALUE": [
+              1,
+              "expr_y_untouched"
+            ]
+          },
+          "fields": {
+            "VARIABLE": [
+              "result_untouched_y",
+              "var_result_untouched_y"
+            ]
+          },
+          "shadow": false,
+          "topLevel": false
+        },
+        "expr_dir_untouched": {
+          "opcode": "motion_direction",
+          "next": null,
+          "parent": "set_dir",
+          "inputs": {},
+          "fields": {},
+          "shadow": false,
+          "topLevel": false
+        },
+        "set_dir": {
+          "opcode": "data_setvariableto",
+          "next": null,
+          "parent": "set_y",
+          "inputs": {
+            "VALUE": [
+              1,
+              "expr_dir_untouched"
+            ]
+          },
+          "fields": {
+            "VARIABLE": [
+              "result_untouched_dir",
+              "var_result_untouched_dir"
+            ]
+          },
+          "shadow": false,
+          "topLevel": false
+        }
+      },
+      "comments": {},
+      "currentCostume": 0,
+      "costumes": [
+        {
+          "name": "a",
+          "dataFormat": "svg",
+          "assetId": "c_Untouched",
+          "md5ext": "c_Untouched.svg",
+          "rotationCenterX": 0,
+          "rotationCenterY": 0
+        }
+      ],
+      "sounds": [],
+      "volume": 100,
+      "layerOrder": 1,
+      "visible": true,
+      "x": 0,
+      "y": 0,
+      "size": 100,
+      "direction": 45,
+      "draggable": false,
+      "rotationStyle": "all around"
+    }
+  ],
+  "monitors": [],
+  "extensions": [],
+  "meta": {}
+}

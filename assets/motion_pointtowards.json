@@ -1,0 +1,163 @@
+{
+  "targets": [
+    {
+      "isStage": true,
+      "name": "Stage",
+      "variables": {
+        "var_result": ["result", 0]
+      },
+      "lists": {},
+      "broadcasts": {},
+      "blocks": {},
+      "comments": {},
+      "currentCostume": 0,
+      "costumes": [
+        {
+          "name": "backdrop1",
+          "dataFormat": "svg",
+          "assetId": "bg",
+          "md5ext": "bg.svg",
+          "rotationCenterX": 0,
+          "rotationCenterY": 0
+        }
+      ],
+      "sounds": [],
+      "volume": 100,
+      "layerOrder": 0,
+      "tempo": 60,
+      "videoTransparency": 50,
+      "videoState": "on",
+      "textToSpeechLanguage": null
+    },
+    {
+      "isStage": false,
+      "name": "A",
+      "variables": {},
+      "lists": {},
+      "broadcasts": {},
+      "blocks": {
+        "hat1": {
+          "opcode": "event_whenflagclicked",
+          "next": "point1",
+          "parent": null,
+          "inputs": {},
+          "fields": {},
+          "shadow": false,
+          "topLevel": true,
+          "x": 0,
+          "y": 0
+        },
+        "point1": {
+          "opcode": "motion_pointtowards",
+          "next": "set_result",
+          "parent": "hat1",
+          "inputs": {
+            "TOWARDS": [1, "menu1"]
+          },
+          "fields": {},
+          "shadow": false,
+          "topLevel": false
+        },
+        "menu1": {
+          "opcode": "motion_pointtowards_menu",
+          "next": null,
+          "parent": "point1",
+          "inputs": {},
+          "fields": {
+            "TOWARDS": ["B", null]
+          },
+          "shadow": true,
+          "topLevel": false
+        },
+        "expr_direction": {
+          "opcode": "motion_direction",
+          "next": null,
+          "parent": "set_result",
+          "inputs": {},
+          "fields": {},
+          "shadow": false,
+          "topLevel": false
+        },
+        "set_result": {
+          "opcode": "data_setvariableto",
+          "next": null,
+          "parent": "point1",
+          "inputs": {
+            "VALUE": [1, "expr_direction"]
+          },
+          "fields": {
+            "VARIABLE": ["result", "var_result"]
+          },
+          "shadow": false,
+          "topLevel": false
+        }
+      },
+      "comments": {},
+      "currentCostume": 0,
+      "costumes": [
+        {
+          "name": "costumeA",
+          "dataFormat": "svg",
+          "assetId": "cA",
+          "md5ext": "cA.svg",
+          "rotationCenterX": 0,
+          "rotationCenterY": 0
+        }
+      ],
+      "sounds": [],
+      "volume": 100,
+      "layerOrder": 1,
+      "visible": true,
+      "x": 0,
+      "y": 0,
+      "size": 100,
+      "direction": 90,
+      "draggable": false,
+      "rotationStyle": "all around"
+    },
+    {
+      "isStage": false,
+      "name": "B",
+      "variables": {},
+      "lists": {},
+      "broadcasts": {},
+      "blocks": {},
+      "comments": {},
+      "currentCostume": 0,
+      "costumes": [
+        {
+          "name": "costumeB",
+          "dataFormat": "svg",
+          "assetId": "cB",
+          "md5ext": "cB.svg",
+          "rotationCenterX": 0,
+          "rotationCenterY": 0
+        }
+      ],
+      "sounds": [],
+      "volume": 100,
+      "layerOrder": 2,
+      "visible": true,
+      "x": 0,
+      "y": 100,
+      "size": 100,
+      "direction": 90,
+      "draggable": false,
+      "rotationStyle": "all around"
+    }
+  ],
+  "monitors": [
+    {
+      "id": "var_result",
+      "mode": "default",
+      "opcode": "data_variable",
+      "params": {"VARIABLE": "result"},
+      "spriteName": null,
+      "value": 0,
+      "width": 0, "height": 0, "x": 0, "y": 20,
+      "visible": true
+    }
+  ],
+  "extensions": [],
+  "meta": {}
+}

@@ -1,0 +1,139 @@
+[package]
+name = "scratch-boring"
+version = "0.1.0"
+edition = "2021"
+description = "Scratch runtime (player, not editor) authored in the Boring language, rendered with Bevy"
+license = "GPL-3.0-or-later"
+repository = "https://github.com/mlanoe/scratch-boring"
+
+# [lib] and [[bin]] deliberately point at the same file, same convention as
+# breakout-boring -- src/boring_gen.rs (generated from boring/scratch.br +
+# boring/sb3_loader.br, see boring/regen.sh) is both crate roots directly, no
+# hand-written src/lib.rs/src/main.rs. This crate is now 100% Boring-authored
+# (like breakout-boring) -- no hand-written Rust module remains. `sb3_loader.rs`
+# (JSON/zip loading) was the last one; ScratchNumber and the zip/SVG
+# extraction glue (value_rt.rs/costume_rt.rs/sound_rt.rs) were ported earlier.
+[lib]
+name = "scratch_boring"
+path = "src/boring_gen.rs"
+
+[[bin]]
+name = "scratch-boring"
+path = "src/boring_gen.rs"
+
+[dependencies]
+# Phase 1 (headless core): boring/sb3_loader.br needs to unzip a .sb3 and
+# parse its project.json (via `zip`, called directly from Boring source per
+# boring.toml's own [external_fns], and `fromJson`/`@derive(Deserialize)`,
+# Boring's own built-in JSON support). The "rc" feature is required by every
+# `@derive(Deserialize)` struct with an `Arc<str>` field (Boring's own string
+# representation under --threading multi) -- without it, `serde`'s derive
+# macro has no `Deserialize`/`Serialize` impl for `Arc<str>` at all. The
+# exact-arithmetic ScratchNumber tower used to need num-bigint/num-rational/
+# num-traits here too, but is now 100% Boring-authored (see boring/scratch.br)
+# and needs no Rust crate of its own.
+serde = { version = "1", features = ["derive", "rc"] }
+serde_json = "1"
+zip = "2"
+# Phase 2: rendering + a real per-frame scheduler. Full default features
+# (window, render, audio, input, text/UI) -- a real visual player, not a
+# headless PoC, same rationale as breakout-boring's own Cargo.toml.
+#
+# `symphonia-wav` explicitly added -- Bevy's own default `audio` feature
+# only pulls in `vorbis` (`bevy`'s own Cargo.toml, `default = [...,
+# "audio"]` -> `audio = ["bevy_audio", "vorbis"]`), NOT any WAV codec.
+# Every Scratch project's own sounds are always `.wav` (the sb3 format's
+# own convention, confirmed against every fixture in this project), so
+# playing back ANY real project's sound previously panicked outright --
+# `rodio`'s symphonia-based decoder (confirmed via a real crash: `rodio::
+# decoder::symphonia::SymphoniaDecoder`) has no registered WAV format
+# reader without this feature, so `bevy_audio`'s own `Decodable::decoder`
+# unwraps a `DecoderError::UnrecognizedFormat` unconditionally. Found by
+# actually running a real downloaded project (`flamingo_demo.sb3`) --
+# every previous test/round only ever exercised the sound *queueing*
+# logic (`SoundQueue.play_queue`) headlessly, never real Bevy audio
+# playback, so this was invisible to the entire existing test suite.
+# `symphonia-wav` (not plain `wav`, which maps to the OLDER, non-
+# symphonia `rodio/hound` decoder) matches the decode path already
+# active, confirmed against `bevy_audio`'s own Cargo.toml feature
+# mapping (`wav = ["rodio/hound"]` vs `symphonia-wav = ["rodio/wav"]` --
+# a real naming quirk between the two crates' own feature names).
+#
+# `mp3` added the same round, one real project later -- a real sb3
+# sound's own `dataFormat` isn't always `"wav"`; `Coconut clicker`'s own
+# imported "Popsicle" sound is `dataFormat: "mp3"` (a real, valid sb3
+# possibility, confirmed against real scratch-vm/sb3-format support for
+# imported non-`.wav` sounds, not a one-off quirk of this one demo).
+# Without any MP3 codec, `symphonia`'s own format probe scans up to its
+# default byte limit looking for a recognizable format boundary and gives
+# up (`symphonia_core::probe: reached probe limit of 1048576 bytes`),
+# hitting the exact same `bevy_audio::Decodable::decoder` unwrap panic as
+# the WAV case above -- found the same way, running a second real
+# downloaded project after the WAV fix landed. Unlike WAV/vorbis, MP3 has
+# no separate `symphonia-mp3` alias exposed at the top-level `bevy` crate
+# (confirmed against its own Cargo.toml: only a plain `mp3` feature,
+# mapping through unconditionally to `rodio`'s own symphonia-based MP3
+# decoder either way) -- so plain `"mp3"` is already the correct,
+# unambiguous name here, no naming quirk to route around this time.
+bevy = { version = "0.19", features = ["symphonia-wav", "mp3"] }
+resvg = "0.48.1"
+# `sensing_askandwait`'s own real keyboard-text-capture (`handle_ask_text_
+# input`, boring/scratch.br) needs `KeyboardInput`/`ButtonState` directly --
+# neither is re-exported at the `bevy::input` path (confirmed: `bevy_input`'s
+# own `src/lib.rs` prelude module doesn't include them, and `bevy::input`
+# only re-exports that same prelude), so this needs to be a direct
+# dependency to name `bevy_input::keyboard::...` at all. Already resolved
+# transitively via `bevy` itself -- this doesn't pull in a new version, just
+# makes the already-present crate directly nameable.
+bevy_input = "0.19"
+# `Anchor` (speech-bubble text growing upward from its own anchor entity,
+# `SpeechBubbleAnchor`) isn't re-exported through `bevy_sprite::prelude`
+# (confirmed: that module's own source only re-exports `Sprite`/
+# `SpriteImageMode`/`SpriteMesh`/texture-slice types/`Text2d*`, not
+# `Anchor` -- it's a crate-root item, `pub use sprite::*` in `bevy_sprite`'s
+# own `lib.rs`), so `bevy::prelude::*` doesn't surface it either. Same
+# "already resolved transitively via `bevy` itself" reasoning as
+# `bevy_input` above -- this doesn't pull in a new version, just makes the
+# already-present crate directly nameable for an explicit `use`.
+bevy_sprite = "0.19"
+# `sensing_current` (real local wall-clock date/time) -- the very first
+# feature this project has ever needed genuine OS time for (`ScratchTimer`
+# is always synthetic, driven by Bevy's own `Time` resource or a headless
+# test's manual/zero elapsed value, never real wall-clock). Rust's std lib
+# deliberately has no calendar/timezone support at all, hence the
+# dependency. `boring run` (the interpreter) can't call into an external
+# crate like this at all -- irrelevant here, this project's own real
+# pipeline is always `boring build --emit-rust` + `cargo build`/`cargo
+# test`, never `boring run` (confirmed: no script/CI in this repo invokes
+# it). Default features (`clock`, needed for `Local::now()`).
+chrono = "0.4"
+
+[dev-dependencies]
+# `tests/wav_decode_regression.rs` -- a real dev-dependency on `rodio`
+# directly (already resolved transitively via `bevy_audio`, same version,
+# no new crate actually pulled in) so a headless test can decode a real
+# `.wav` byte buffer through the *exact* `rodio::Decoder::builder()...
+# build()` call `bevy_audio`'s own `Decodable::decoder` makes, without
+# needing a live `AudioPlugin`/audio device at all. Exists specifically
+# because the `symphonia-wav` feature gap this project shipped without
+# for its entire history (see `bevy`'s own dependency comment above) was
+# completely invisible to every other test in this suite -- none of them
+# ever decoded real sound bytes, only queued a `SoundRequest`.
+#
+# `default-features = false` here is load-bearing, not incidental --
+# `rodio`'s own crate defaults already include `wav`, and Cargo unifies
+# feature flags for one dependency across an entire build (including dev-
+# dependencies pulled in for `cargo test`), so a bare `rodio = "0.22"`
+# here would silently enable WAV decoding project-wide regardless of
+# whether `bevy`'s own `symphonia-wav` feature above is actually present
+# -- masking exactly the regression this test exists to catch. Confirmed
+# by deliberately reverting `bevy`'s own feature and watching this test
+# still pass with default features here, then fixing it to `default-
+# features = false` and watching it correctly fail instead.
+rodio = { version = "0.22", default-features = false }
+# `tests/sb3_loader.rs` -- unique, atomically-created temp files
+# (`tempfile::Builder`/`NamedTempFile`) instead of fixed, predictable
+# names under the shared `std::env::temp_dir()`, closing a TOCTOU/
+# filename-collision risk on a shared temp directory (CI/dev-machine
+# scope, not attacker-reachable via any real `.sb3`).
+tempfile = "3"

@@ -1,0 +1,165 @@
+{
+  "targets": [
+    {
+      "isStage": true,
+      "name": "Stage",
+      "variables": {
+        "var_fired": [
+          "fireCount",
+          0
+        ],
+        "var_timer_start": [
+          "timerAtStart",
+          0
+        ]
+      },
+      "lists": {},
+      "broadcasts": {},
+      "blocks": {},
+      "comments": {},
+      "currentCostume": 0,
+      "costumes": [
+        {
+          "name": "backdrop1",
+          "dataFormat": "svg",
+          "assetId": "a",
+          "md5ext": "a.svg",
+          "rotationCenterX": 0,
+          "rotationCenterY": 0
+        }
+      ],
+      "sounds": [],
+      "volume": 100,
+      "layerOrder": 0,
+      "tempo": 60,
+      "videoTransparency": 50,
+      "videoState": "on",
+      "textToSpeechLanguage": null
+    },
+    {
+      "isStage": false,
+      "name": "Sprite1",
+      "variables": {},
+      "lists": {},
+      "broadcasts": {},
+      "blocks": {
+        "hatTimer": {
+          "opcode": "event_whengreaterthan",
+          "next": "changeFired",
+          "parent": null,
+          "inputs": {
+            "VALUE": [
+              1,
+              [
+                4,
+                "0.05"
+              ]
+            ]
+          },
+          "fields": {
+            "WHENGREATERTHANMENU": [
+              "TIMER",
+              null
+            ]
+          },
+          "shadow": false,
+          "topLevel": true,
+          "x": 0,
+          "y": 0
+        },
+        "changeFired": {
+          "opcode": "data_changevariableby",
+          "next": null,
+          "parent": "hatTimer",
+          "inputs": {
+            "VALUE": [
+              1,
+              [
+                4,
+                "1"
+              ]
+            ]
+          },
+          "fields": {
+            "VARIABLE": [
+              "fireCount",
+              "var_fired"
+            ]
+          },
+          "shadow": false,
+          "topLevel": false
+        },
+        "hatFlag": {
+          "opcode": "event_whenflagclicked",
+          "next": "setTimerStart",
+          "parent": null,
+          "inputs": {},
+          "fields": {},
+          "shadow": false,
+          "topLevel": true,
+          "x": 0,
+          "y": 100
+        },
+        "setTimerStart": {
+          "opcode": "data_setvariableto",
+          "next": null,
+          "parent": "hatFlag",
+          "inputs": {
+            "VALUE": [
+              3,
+              "timerReporter",
+              [
+                4,
+                "0"
+              ]
+            ]
+          },
+          "fields": {
+            "VARIABLE": [
+              "timerAtStart",
+              "var_timer_start"
+            ]
+          },
+          "shadow": false,
+          "topLevel": false
+        },
+        "timerReporter": {
+          "opcode": "sensing_timer",
+          "next": null,
+          "parent": "setTimerStart",
+          "inputs": {},
+          "fields": {},
+          "shadow": false,
+          "topLevel": false
+        }
+      },
+      "comments": {},
+      "currentCostume": 0,
+      "costumes": [
+        {
+          "name": "costume1",
+          "dataFormat": "svg",
+          "assetId": "b",
+          "md5ext": "b.svg",
+          "rotationCenterX": 0,
+          "rotationCenterY": 0
+        }
+      ],
+      "sounds": [],
+      "volume": 100,
+      "layerOrder": 1,
+      "visible": true,
+      "x": 0,
+      "y": 0,
+      "size": 100,
+      "direction": 90,
+      "draggable": false,
+      "rotationStyle": "all around"
+    }
+  ],
+  "monitors": [],
+  "extensions": [],
+  "meta": {
+    "semver": "3.0.0"
+  }
+}

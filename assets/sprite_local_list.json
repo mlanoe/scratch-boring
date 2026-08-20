@@ -1,0 +1,198 @@
+{
+  "targets": [
+    {
+      "isStage": true,
+      "name": "Stage",
+      "variables": {
+        "var_result_len_local": ["result_len_local", 0],
+        "var_result_first_local": ["result_first_local", 0],
+        "var_result_len_global": ["result_len_global", 0],
+        "var_result_first_global": ["result_first_global", 0]
+      },
+      "lists": {
+        "list_global_items": ["items", ["Z1", "Z2", "Z3"]]
+      },
+      "broadcasts": {},
+      "blocks": {},
+      "comments": {},
+      "currentCostume": 0,
+      "costumes": [
+        {
+          "name": "backdrop1",
+          "dataFormat": "svg",
+          "assetId": "bg",
+          "md5ext": "bg.svg",
+          "rotationCenterX": 0,
+          "rotationCenterY": 0
+        }
+      ],
+      "sounds": [],
+      "volume": 100,
+      "layerOrder": 0,
+      "tempo": 60,
+      "videoTransparency": 50,
+      "videoState": "on",
+      "textToSpeechLanguage": null
+    },
+    {
+      "isStage": false,
+      "name": "A",
+      "variables": {},
+      "lists": {
+        "list_a_items": ["items", ["L1"]]
+      },
+      "broadcasts": {},
+      "blocks": {
+        "hat1": {
+          "opcode": "event_whenflagclicked",
+          "next": "add1",
+          "parent": null,
+          "inputs": {},
+          "fields": {},
+          "shadow": false,
+          "topLevel": true,
+          "x": 0,
+          "y": 0
+        },
+        "add1": {
+          "opcode": "data_addtolist",
+          "next": "set_len_local",
+          "parent": "hat1",
+          "inputs": {
+            "ITEM": [1, [10, "L2"]]
+          },
+          "fields": {
+            "LIST": ["items", "list_a_items"]
+          },
+          "shadow": false,
+          "topLevel": false
+        },
+        "expr_len_local": {
+          "opcode": "data_lengthoflist",
+          "next": null,
+          "parent": "set_len_local",
+          "inputs": {},
+          "fields": {
+            "LIST": ["items", "list_a_items"]
+          },
+          "shadow": false,
+          "topLevel": false
+        },
+        "set_len_local": {
+          "opcode": "data_setvariableto",
+          "next": "set_first_local",
+          "parent": "add1",
+          "inputs": {
+            "VALUE": [1, "expr_len_local"]
+          },
+          "fields": {
+            "VARIABLE": ["result_len_local", "var_result_len_local"]
+          },
+          "shadow": false,
+          "topLevel": false
+        },
+        "expr_first_local": {
+          "opcode": "data_itemoflist",
+          "next": null,
+          "parent": "set_first_local",
+          "inputs": {
+            "INDEX": [1, [4, "1"]]
+          },
+          "fields": {
+            "LIST": ["items", "list_a_items"]
+          },
+          "shadow": false,
+          "topLevel": false
+        },
+        "set_first_local": {
+          "opcode": "data_setvariableto",
+          "next": "set_len_global",
+          "parent": "set_len_local",
+          "inputs": {
+            "VALUE": [1, "expr_first_local"]
+          },
+          "fields": {
+            "VARIABLE": ["result_first_local", "var_result_first_local"]
+          },
+          "shadow": false,
+          "topLevel": false
+        },
+        "expr_len_global": {
+          "opcode": "data_lengthoflist",
+          "next": null,
+          "parent": "set_len_global",
+          "inputs": {},
+          "fields": {
+            "LIST": ["items", "list_global_items"]
+          },
+          "shadow": false,
+          "topLevel": false
+        },
+        "set_len_global": {
+          "opcode": "data_setvariableto",
+          "next": "set_first_global",
+          "parent": "set_first_local",
+          "inputs": {
+            "VALUE": [1, "expr_len_global"]
+          },
+          "fields": {
+            "VARIABLE": ["result_len_global", "var_result_len_global"]
+          },
+          "shadow": false,
+          "topLevel": false
+        },
+        "expr_first_global": {
+          "opcode": "data_itemoflist",
+          "next": null,
+          "parent": "set_first_global",
+          "inputs": {
+            "INDEX": [1, [4, "1"]]
+          },
+          "fields": {
+            "LIST": ["items", "list_global_items"]
+          },
+          "shadow": false,
+          "topLevel": false
+        },
+        "set_first_global": {
+          "opcode": "data_setvariableto",
+          "next": null,
+          "parent": "set_len_global",
+          "inputs": {
+            "VALUE": [1, "expr_first_global"]
+          },
+          "fields": {
+            "VARIABLE": ["result_first_global", "var_result_first_global"]
+          },
+          "shadow": false,
+          "topLevel": false
+        }
+      },
+      "comments": {},
+      "currentCostume": 0,
+      "costumes": [
+        {
+          "name": "costumeA",
+          "dataFormat": "svg",
+          "assetId": "cA",
+          "md5ext": "cA.svg",
+          "rotationCenterX": 0,
+          "rotationCenterY": 0
+        }
+      ],
+      "sounds": [],
+      "volume": 100,
+      "layerOrder": 1,
+      "visible": true,
+      "x": 0,
+      "y": 0,
+      "size": 100,
+      "direction": 90,
+      "draggable": false,
+      "rotationStyle": "all around"
+    }
+  ],
+  "monitors": [],
+  "extensions": [],
+  "meta": {}
+}

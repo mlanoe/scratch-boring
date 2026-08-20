@@ -1,0 +1,123 @@
+{
+  "targets": [
+    {
+      "isStage": true,
+      "name": "Stage",
+      "variables": {
+        "var_result": ["result", "waiting"]
+      },
+      "lists": {},
+      "broadcasts": {},
+      "blocks": {},
+      "comments": {},
+      "currentCostume": 0,
+      "costumes": [
+        {
+          "name": "backdrop1",
+          "dataFormat": "svg",
+          "assetId": "bg",
+          "md5ext": "bg.svg",
+          "rotationCenterX": 0,
+          "rotationCenterY": 0
+        }
+      ],
+      "sounds": [],
+      "volume": 100,
+      "layerOrder": 0,
+      "tempo": 60,
+      "videoTransparency": 50,
+      "videoState": "on",
+      "textToSpeechLanguage": null
+    },
+    {
+      "isStage": false,
+      "name": "A",
+      "variables": {},
+      "lists": {},
+      "broadcasts": {},
+      "blocks": {
+        "hat1": {
+          "opcode": "event_whenflagclicked",
+          "next": "play1",
+          "parent": null,
+          "inputs": {},
+          "fields": {},
+          "shadow": false,
+          "topLevel": true,
+          "x": 0,
+          "y": 0
+        },
+        "play1": {
+          "opcode": "sound_playuntildone",
+          "next": "set_result",
+          "parent": "hat1",
+          "inputs": {
+            "SOUND_MENU": [1, [10, "beep"]]
+          },
+          "fields": {},
+          "shadow": false,
+          "topLevel": false
+        },
+        "set_result": {
+          "opcode": "data_setvariableto",
+          "next": null,
+          "parent": "play1",
+          "inputs": {
+            "VALUE": [1, [10, "done"]]
+          },
+          "fields": {
+            "VARIABLE": ["result", "var_result"]
+          },
+          "shadow": false,
+          "topLevel": false
+        }
+      },
+      "comments": {},
+      "currentCostume": 0,
+      "costumes": [
+        {
+          "name": "costumeA",
+          "dataFormat": "svg",
+          "assetId": "cA",
+          "md5ext": "cA.svg",
+          "rotationCenterX": 0,
+          "rotationCenterY": 0
+        }
+      ],
+      "sounds": [
+        {
+          "name": "beep",
+          "dataFormat": "wav",
+          "assetId": "beepasset",
+          "format": "",
+          "rate": 10,
+          "sampleCount": 20,
+          "md5ext": "beepasset.wav"
+        }
+      ],
+      "volume": 100,
+      "layerOrder": 1,
+      "visible": true,
+      "x": 0,
+      "y": 0,
+      "size": 100,
+      "direction": 90,
+      "draggable": false,
+      "rotationStyle": "all around"
+    }
+  ],
+  "monitors": [
+    {
+      "id": "var_result",
+      "mode": "default",
+      "opcode": "data_variable",
+      "params": {"VARIABLE": "result"},
+      "spriteName": null,
+      "value": 0,
+      "width": 0, "height": 0, "x": 0, "y": 20,
+      "visible": true
+    }
+  ],
+  "extensions": [],
+  "meta": {}
+}

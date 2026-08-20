@@ -1,0 +1,398 @@
+{
+  "targets": [
+    {
+      "isStage": true,
+      "name": "Stage",
+      "variables": {
+        "varCounter": [
+          "counter",
+          10
+        ],
+        "varLen": [
+          "len",
+          0
+        ],
+        "varFirst": [
+          "first_item",
+          ""
+        ],
+        "varIdx": [
+          "idx",
+          0
+        ],
+        "varHasD": [
+          "has_d",
+          false
+        ]
+      },
+      "lists": {
+        "listId1": [
+          "myList",
+          [
+            "a",
+            "b",
+            "c"
+          ]
+        ]
+      },
+      "broadcasts": {},
+      "blocks": {},
+      "comments": {},
+      "currentCostume": 0,
+      "costumes": [
+        {
+          "name": "backdrop1",
+          "dataFormat": "svg",
+          "assetId": "a",
+          "md5ext": "a.svg",
+          "rotationCenterX": 0,
+          "rotationCenterY": 0
+        }
+      ],
+      "sounds": [],
+      "volume": 100,
+      "layerOrder": 0,
+      "tempo": 60,
+      "videoTransparency": 50,
+      "videoState": "on",
+      "textToSpeechLanguage": null
+    },
+    {
+      "isStage": false,
+      "name": "Sprite1",
+      "variables": {},
+      "lists": {},
+      "broadcasts": {},
+      "blocks": {
+        "hat1": {
+          "opcode": "event_whenflagclicked",
+          "next": "addD",
+          "parent": null,
+          "inputs": {},
+          "fields": {},
+          "shadow": false,
+          "topLevel": true,
+          "x": 0,
+          "y": 0
+        },
+        "addD": {
+          "opcode": "data_addtolist",
+          "next": "delB",
+          "parent": "hat1",
+          "inputs": {
+            "ITEM": [
+              1,
+              [
+                10,
+                "d"
+              ]
+            ]
+          },
+          "fields": {
+            "LIST": [
+              "myList",
+              "listId1"
+            ]
+          },
+          "shadow": false,
+          "topLevel": false
+        },
+        "delB": {
+          "opcode": "data_deleteoflist",
+          "next": "insX",
+          "parent": "addD",
+          "inputs": {
+            "INDEX": [
+              1,
+              [
+                4,
+                "2"
+              ]
+            ]
+          },
+          "fields": {
+            "LIST": [
+              "myList",
+              "listId1"
+            ]
+          },
+          "shadow": false,
+          "topLevel": false
+        },
+        "insX": {
+          "opcode": "data_insertatlist",
+          "next": "replZ",
+          "parent": "delB",
+          "inputs": {
+            "INDEX": [
+              1,
+              [
+                4,
+                "1"
+              ]
+            ],
+            "ITEM": [
+              1,
+              [
+                10,
+                "x"
+              ]
+            ]
+          },
+          "fields": {
+            "LIST": [
+              "myList",
+              "listId1"
+            ]
+          },
+          "shadow": false,
+          "topLevel": false
+        },
+        "replZ": {
+          "opcode": "data_replaceitemoflist",
+          "next": "setLen",
+          "parent": "insX",
+          "inputs": {
+            "INDEX": [
+              1,
+              [
+                4,
+                "3"
+              ]
+            ],
+            "ITEM": [
+              1,
+              [
+                10,
+                "z"
+              ]
+            ]
+          },
+          "fields": {
+            "LIST": [
+              "myList",
+              "listId1"
+            ]
+          },
+          "shadow": false,
+          "topLevel": false
+        },
+        "setLen": {
+          "opcode": "data_setvariableto",
+          "next": "setFirst",
+          "parent": "replZ",
+          "inputs": {
+            "VALUE": [
+              3,
+              "lenOfList",
+              [
+                4,
+                "0"
+              ]
+            ]
+          },
+          "fields": {
+            "VARIABLE": [
+              "len",
+              "varLen"
+            ]
+          },
+          "shadow": false,
+          "topLevel": false
+        },
+        "lenOfList": {
+          "opcode": "data_lengthoflist",
+          "next": null,
+          "parent": "setLen",
+          "inputs": {},
+          "fields": {
+            "LIST": [
+              "myList",
+              "listId1"
+            ]
+          },
+          "shadow": false,
+          "topLevel": false
+        },
+        "setFirst": {
+          "opcode": "data_setvariableto",
+          "next": "setIdx",
+          "parent": "setLen",
+          "inputs": {
+            "VALUE": [
+              3,
+              "itemOfList1",
+              [
+                10,
+                ""
+              ]
+            ]
+          },
+          "fields": {
+            "VARIABLE": [
+              "first_item",
+              "varFirst"
+            ]
+          },
+          "shadow": false,
+          "topLevel": false
+        },
+        "itemOfList1": {
+          "opcode": "data_itemoflist",
+          "next": null,
+          "parent": "setFirst",
+          "inputs": {
+            "INDEX": [
+              1,
+              [
+                4,
+                "1"
+              ]
+            ]
+          },
+          "fields": {
+            "LIST": [
+              "myList",
+              "listId1"
+            ]
+          },
+          "shadow": false,
+          "topLevel": false
+        },
+        "setIdx": {
+          "opcode": "data_setvariableto",
+          "next": "setHasD",
+          "parent": "setFirst",
+          "inputs": {
+            "VALUE": [
+              3,
+              "itemNumZ",
+              [
+                4,
+                "0"
+              ]
+            ]
+          },
+          "fields": {
+            "VARIABLE": [
+              "idx",
+              "varIdx"
+            ]
+          },
+          "shadow": false,
+          "topLevel": false
+        },
+        "itemNumZ": {
+          "opcode": "data_itemnumoflist",
+          "next": null,
+          "parent": "setIdx",
+          "inputs": {
+            "ITEM": [
+              1,
+              [
+                10,
+                "z"
+              ]
+            ]
+          },
+          "fields": {
+            "LIST": [
+              "myList",
+              "listId1"
+            ]
+          },
+          "shadow": false,
+          "topLevel": false
+        },
+        "setHasD": {
+          "opcode": "data_setvariableto",
+          "next": "changeCounter",
+          "parent": "setIdx",
+          "inputs": {
+            "VALUE": [
+              2,
+              "containsD"
+            ]
+          },
+          "fields": {
+            "VARIABLE": [
+              "has_d",
+              "varHasD"
+            ]
+          },
+          "shadow": false,
+          "topLevel": false
+        },
+        "containsD": {
+          "opcode": "data_listcontainsitem",
+          "next": null,
+          "parent": "setHasD",
+          "inputs": {
+            "ITEM": [
+              1,
+              [
+                10,
+                "d"
+              ]
+            ]
+          },
+          "fields": {
+            "LIST": [
+              "myList",
+              "listId1"
+            ]
+          },
+          "shadow": false,
+          "topLevel": false
+        },
+        "changeCounter": {
+          "opcode": "data_changevariableby",
+          "next": null,
+          "parent": "setHasD",
+          "inputs": {
+            "VALUE": [
+              1,
+              [
+                4,
+                "5"
+              ]
+            ]
+          },
+          "fields": {
+            "VARIABLE": [
+              "counter",
+              "varCounter"
+            ]
+          },
+          "shadow": false,
+          "topLevel": false
+        }
+      },
+      "comments": {},
+      "currentCostume": 0,
+      "costumes": [
+        {
+          "name": "costume1",
+          "dataFormat": "svg",
+          "assetId": "b",
+          "md5ext": "b.svg",
+          "rotationCenterX": 0,
+          "rotationCenterY": 0
+        }
+      ],
+      "sounds": [],
+      "volume": 100,
+      "layerOrder": 1,
+      "visible": true,
+      "x": 0,
+      "y": 0,
+      "size": 100,
+      "direction": 90,
+      "draggable": false,
+      "rotationStyle": "all around"
+    }
+  ],
+  "monitors": [],
+  "extensions": [],
+  "meta": {}
+}

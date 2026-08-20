@@ -1,0 +1,336 @@
+{
+  "targets": [
+    {
+      "isStage": true,
+      "name": "Stage",
+      "variables": {
+        "var_result_year": [
+          "result_year",
+          0
+        ],
+        "var_result_month": [
+          "result_month",
+          0
+        ],
+        "var_result_date": [
+          "result_date",
+          0
+        ],
+        "var_result_dayofweek": [
+          "result_dayofweek",
+          0
+        ],
+        "var_result_hour": [
+          "result_hour",
+          0
+        ],
+        "var_result_minute": [
+          "result_minute",
+          0
+        ],
+        "var_result_second": [
+          "result_second",
+          0
+        ]
+      },
+      "lists": {},
+      "broadcasts": {},
+      "blocks": {},
+      "comments": {},
+      "currentCostume": 0,
+      "costumes": [
+        {
+          "name": "backdrop1",
+          "dataFormat": "svg",
+          "assetId": "bg",
+          "md5ext": "bg.svg",
+          "rotationCenterX": 0,
+          "rotationCenterY": 0
+        }
+      ],
+      "sounds": [],
+      "volume": 100,
+      "layerOrder": 0,
+      "tempo": 60,
+      "videoTransparency": 50,
+      "videoState": "on",
+      "textToSpeechLanguage": null
+    },
+    {
+      "isStage": false,
+      "name": "Sprite1",
+      "variables": {},
+      "lists": {},
+      "broadcasts": {},
+      "blocks": {
+        "hat1": {
+          "opcode": "event_whenflagclicked",
+          "next": "set_YEAR",
+          "parent": null,
+          "inputs": {},
+          "fields": {},
+          "shadow": false,
+          "topLevel": true,
+          "x": 0,
+          "y": 0
+        },
+        "expr_YEAR": {
+          "opcode": "sensing_current",
+          "next": null,
+          "parent": "set_YEAR",
+          "inputs": {},
+          "fields": {
+            "CURRENTMENU": [
+              "YEAR",
+              null
+            ]
+          },
+          "shadow": false,
+          "topLevel": false
+        },
+        "set_YEAR": {
+          "opcode": "data_setvariableto",
+          "next": "set_MONTH",
+          "parent": "hat1",
+          "inputs": {
+            "VALUE": [
+              1,
+              "expr_YEAR"
+            ]
+          },
+          "fields": {
+            "VARIABLE": [
+              "result_year",
+              "var_result_year"
+            ]
+          },
+          "shadow": false,
+          "topLevel": false
+        },
+        "expr_MONTH": {
+          "opcode": "sensing_current",
+          "next": null,
+          "parent": "set_MONTH",
+          "inputs": {},
+          "fields": {
+            "CURRENTMENU": [
+              "MONTH",
+              null
+            ]
+          },
+          "shadow": false,
+          "topLevel": false
+        },
+        "set_MONTH": {
+          "opcode": "data_setvariableto",
+          "next": "set_DATE",
+          "parent": "set_YEAR",
+          "inputs": {
+            "VALUE": [
+              1,
+              "expr_MONTH"
+            ]
+          },
+          "fields": {
+            "VARIABLE": [
+              "result_month",
+              "var_result_month"
+            ]
+          },
+          "shadow": false,
+          "topLevel": false
+        },
+        "expr_DATE": {
+          "opcode": "sensing_current",
+          "next": null,
+          "parent": "set_DATE",
+          "inputs": {},
+          "fields": {
+            "CURRENTMENU": [
+              "DATE",
+              null
+            ]
+          },
+          "shadow": false,
+          "topLevel": false
+        },
+        "set_DATE": {
+          "opcode": "data_setvariableto",
+          "next": "set_DAYOFWEEK",
+          "parent": "set_MONTH",
+          "inputs": {
+            "VALUE": [
+              1,
+              "expr_DATE"
+            ]
+          },
+          "fields": {
+            "VARIABLE": [
+              "result_date",
+              "var_result_date"
+            ]
+          },
+          "shadow": false,
+          "topLevel": false
+        },
+        "expr_DAYOFWEEK": {
+          "opcode": "sensing_current",
+          "next": null,
+          "parent": "set_DAYOFWEEK",
+          "inputs": {},
+          "fields": {
+            "CURRENTMENU": [
+              "DAYOFWEEK",
+              null
+            ]
+          },
+          "shadow": false,
+          "topLevel": false
+        },
+        "set_DAYOFWEEK": {
+          "opcode": "data_setvariableto",
+          "next": "set_HOUR",
+          "parent": "set_DATE",
+          "inputs": {
+            "VALUE": [
+              1,
+              "expr_DAYOFWEEK"
+            ]
+          },
+          "fields": {
+            "VARIABLE": [
+              "result_dayofweek",
+              "var_result_dayofweek"
+            ]
+          },
+          "shadow": false,
+          "topLevel": false
+        },
+        "expr_HOUR": {
+          "opcode": "sensing_current",
+          "next": null,
+          "parent": "set_HOUR",
+          "inputs": {},
+          "fields": {
+            "CURRENTMENU": [
+              "HOUR",
+              null
+            ]
+          },
+          "shadow": false,
+          "topLevel": false
+        },
+        "set_HOUR": {
+          "opcode": "data_setvariableto",
+          "next": "set_MINUTE",
+          "parent": "set_DAYOFWEEK",
+          "inputs": {
+            "VALUE": [
+              1,
+              "expr_HOUR"
+            ]
+          },
+          "fields": {
+            "VARIABLE": [
+              "result_hour",
+              "var_result_hour"
+            ]
+          },
+          "shadow": false,
+          "topLevel": false
+        },
+        "expr_MINUTE": {
+          "opcode": "sensing_current",
+          "next": null,
+          "parent": "set_MINUTE",
+          "inputs": {},
+          "fields": {
+            "CURRENTMENU": [
+              "MINUTE",
+              null
+            ]
+          },
+          "shadow": false,
+          "topLevel": false
+        },
+        "set_MINUTE": {
+          "opcode": "data_setvariableto",
+          "next": "set_SECOND",
+          "parent": "set_HOUR",
+          "inputs": {
+            "VALUE": [
+              1,
+              "expr_MINUTE"
+            ]
+          },
+          "fields": {
+            "VARIABLE": [
+              "result_minute",
+              "var_result_minute"
+            ]
+          },
+          "shadow": false,
+          "topLevel": false
+        },
+        "expr_SECOND": {
+          "opcode": "sensing_current",
+          "next": null,
+          "parent": "set_SECOND",
+          "inputs": {},
+          "fields": {
+            "CURRENTMENU": [
+              "SECOND",
+              null
+            ]
+          },
+          "shadow": false,
+          "topLevel": false
+        },
+        "set_SECOND": {
+          "opcode": "data_setvariableto",
+          "next": null,
+          "parent": "set_MINUTE",
+          "inputs": {
+            "VALUE": [
+              1,
+              "expr_SECOND"
+            ]
+          },
+          "fields": {
+            "VARIABLE": [
+              "result_second",
+              "var_result_second"
+            ]
+          },
+          "shadow": false,
+          "topLevel": false
+        }
+      },
+      "comments": {},
+      "currentCostume": 0,
+      "costumes": [
+        {
+          "name": "a",
+          "dataFormat": "svg",
+          "assetId": "cA",
+          "md5ext": "cA.svg",
+          "rotationCenterX": 0,
+          "rotationCenterY": 0
+        }
+      ],
+      "sounds": [],
+      "volume": 100,
+      "layerOrder": 1,
+      "visible": true,
+      "x": 0,
+      "y": 0,
+      "size": 100,
+      "direction": 90,
+      "draggable": false,
+      "rotationStyle": "all around"
+    }
+  ],
+  "monitors": [],
+  "extensions": [],
+  "meta": {}
+}

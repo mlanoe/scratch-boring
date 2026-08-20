@@ -1,0 +1,335 @@
+# The real pausable scheduler (`step_thread`/`Thread`/`FrameKind`, all in
+# `interpreter.br`/`runtime.br`) plus `run_script` -- the headless
+# entry point that drives one green-flag/receiver script (and, via
+# `drive_thread_to_completion`, every `broadcast`/`broadcast and wait`
+# receiver it transitively starts) all the way to completion in one call
+# -- and the headless test-entry-point family built on top of it
+# (`run_greenflag_and_report*`, `run_project_and_report`,
+# `scratch_number_test_*`, `find_stage_list_id`/`list_contents_string`).
+#
+# Sibling file to `scratch.br`, pulled in via a bare `use scheduler` there
+# -- same mechanism as `values.br`/`runtime.br`/`interpreter.br` (see any
+# of their own header comments). Split out once `scratch.br` grew past
+# ~3100 lines.
+
+# ─── Scheduler ───────────────────────────────────────────────────────────
+#
+# Real Scratch runs every script cooperatively, yielding at loop-iteration
+# boundaries/`wait`/`wait until` (see README.md's "Scheduler" design
+# section, and `step_thread`/`Thread`/`FrameKind`'s own doc comments in
+# `interpreter.br`/`runtime.br` for how that's actually implemented) --
+# an explicit `Thread` frame stack, stepped once per Bevy tick by
+# `run_pending_threads` in the real game. Headless callers (this file)
+# have no real per-tick loop to hook into, so `run_script` drives the same
+# `step_thread` machinery in a tight local loop instead, all the way to
+# completion, via `drive_thread_to_completion` (`interpreter.br`) --
+# correct and exact for any script that finishes on its own (the vast
+# majority a headless test cares about testing), with a documented,
+# bounded give-up for one that genuinely never does (see that function's
+# own doc comment on its iteration cap).
+def run_script(var Vars vars, ReceiverScript script, ProcTable procs, var Lists lists, Broadcasts broadcasts, var Positions positions, KeyboardState keyboard, MouseState mouse, ScratchTimer timer, var Rng rng, var LooksStates looks, var LayerOrders layer_orders, TargetCostumes target_costumes, TargetCostumeDims costume_dims, var SoundQueue sound_queue, var SpeechBubbles speech_bubbles):
+    var thread = spawn_thread(script)
+    mut round = []
+    drive_thread_to_completion(thread, vars, procs, lists, broadcasts, positions, keyboard, mouse, timer, rng, looks, layer_orders, target_costumes, costume_dims, sound_queue, speech_bubbles, round)
+    # Any *plain* (non-waiting) `broadcast` the script fired along the way
+    # landed in `round` -- run each one to completion too, the same way
+    # `BroadcastAndWait` would, so a headless caller sees every receiver's
+    # effects regardless of which broadcast flavor started it (and so on
+    # transitively, one worklist round at a time, for a receiver that
+    # itself broadcasts something new -- a fresh `next_round` list each
+    # pass rather than appending into `round` while iterating it, the same
+    # "clone first, mutate a separate collection" shape every other
+    # queue-draining system in this project already uses). This is *more*
+    # thorough than the real, per-tick game ever is for a plain
+    # `broadcast` (which only ever fires its receivers on a later tick,
+    # never waits on them) -- a deliberate, headless-only convenience: a
+    # test calling `run_greenflag_and_report*` wants every effect a
+    # project's green-flag script transitively causes, not a faithful
+    # multi-tick replay of when each one would actually land in the real
+    # game. `safety` bounds runaway broadcast chains the same way
+    # `drive_thread_to_completion`'s own iteration cap bounds a single
+    # never-finishing thread.
+    var mut to_process = round
+    var mut safety = 0
+    while to_process.length > 0 and safety < 10000:
+        mut next_round = []
+        for pending_script in to_process:
+            var receiver = spawn_thread(pending_script)
+            drive_thread_to_completion(receiver, vars, procs, lists, broadcasts, positions, keyboard, mouse, timer, rng, looks, layer_orders, target_costumes, costume_dims, sound_queue, speech_bubbles, next_round)
+        to_process = next_round
+        safety += 1
+
+# Everything a headless entry point below needs to read back out of a
+# run, once it's over -- `run_and_build_headless_result`'s own return
+# value. Deliberately *not* every resource `run_script` touches (`procs`/
+# `broadcasts`/`keyboard`/`mouse`/`timer`/`target_costumes`/`layer_orders`
+# aren't read by any `run_greenflag_and_report*` reporting tail below) --
+# just the ones at least one of them actually reports afterward.
+struct HeadlessResult:
+    Vars vars
+    Lists lists
+    Positions positions
+    LooksStates looks
+    SoundQueue sound_queue
+    SpeechBubbles speech_bubbles
+
+# Builds the full headless resource set an already-loaded project needs
+# (the same ~15-line "no real Bevy input exists" construction every
+# `run_greenflag_and_report*` entry point below used to repeat on its own,
+# see this file's own README.md-linked history) and runs every one of its
+# green-flag scripts to completion via `run_script`, exactly once each --
+# then hands back whatever a caller might want to report on afterward as
+# one `HeadlessResult`. `path` is only needed for `build_target_costume_
+# dims` (it re-reads the `.sb3`/raw-JSON's own asset bytes off disk by
+# path, not from `project` alone).
+def HeadlessResult run_and_build_headless_result(Sb3Project project, string path):
+    var vars = build_vars(project.clone())
+    let scripts = build_greenflag_scripts(project.clone())
+    let procs = build_procs(project.clone())
+    var lists = build_lists(project.clone())
+    let broadcasts = build_broadcasts(project.clone())
+    var positions = build_positions(project.clone())
+    # No real Bevy input exists in this headless test-only entry point --
+    # "nothing pressed, mouse at origin" is the only defensible default
+    # (see `KeyboardState`/`MouseState`'s own doc comments).
+    let keyboard = KeyboardState(pressed_keys = [], any_key_pressed = false)
+    let mouse = MouseState(x = 0.0, y = 0.0, down = false)
+    let timer = ScratchTimer(elapsed = 0.0)
+    var rng = Rng(state = 88172645463325252 as uint64)
+    # `build_looks_states`, not a bare `LooksStates(table = {=})` --
+    # every headless entry point in this file used to start from the
+    # empty table (relying entirely on `LooksStates.get`'s own
+    # visible=true/size=100/costume_index=0 defaults), which happened
+    # to never matter until `sensing_touchingobject`'s visibility gate
+    # needed a target's *statically declared* `visible: false` (no
+    # script involved) honored -- the first real gap this exposed,
+    # caught by `tests/touching.rs`'s own hidden-sprite fixture. The
+    # real game (`setup_scratch_project`, scratch.br) always called
+    # `build_looks_states` correctly; only this headless family had
+    # the gap.
+    var looks = build_looks_states(project.clone())
+    let target_costumes = build_target_costumes(project.clone())
+    var layer_orders = build_layer_orders(project.clone())
+    let costume_dims = build_target_costume_dims(path.clone(), project.clone())
+    var sound_queue = SoundQueue(play_queue = [], stop_all_requested = false, volumes = build_sound_volume_table(project.clone()), pitches = {=}, pans = {=}, rotation_styles = build_target_rotation_styles(project.clone()), sound_durations = build_target_sound_durations(project.clone()), instance_types = build_instance_types_table(project.clone()), next_clone_id = 0, clone_requests = [], despawn_requests = [], live_clone_count = 0, reset_timer_requested = false, backdrop_switch_hats = build_backdrop_switch_hats(project.clone()), draggable = build_target_draggable(project.clone()), pen_states = {=}, pen_line_requests = [], pen_clear_requested = false, stamp_requests = [], scene_composite = blank_scene_composite_data())
+    var speech_bubbles = SpeechBubbles(table = {=})
+    for script in scripts:
+        run_script(vars, script, procs, lists, broadcasts, positions, keyboard, mouse, timer, rng, looks, layer_orders, target_costumes, costume_dims, sound_queue, speech_bubbles)
+    HeadlessResult(vars = vars, lists = lists, positions = positions, looks = looks, sound_queue = sound_queue, speech_bubbles = speech_bubbles)
+
+# Loads a `.sb3`, links its first green-flag script and every custom block
+# in the project, runs the script to completion, and reports one Stage
+# variable's final value by name -- the shape the Phase 1 end-to-end test
+# needs. Returns an empty string if the project can't be loaded (a real
+# error-reporting path is a later phase's concern; this is a test/CLI
+# convenience, not the runtime's own API).
+pub def string run_greenflag_and_report(string path, string var_name):
+    if let project = Sb3Project.load_for_boring(path.clone()):
+        run_project_and_report(project, path, var_name)
+    else:
+        ""
+
+# Same as `run_greenflag_and_report`, but for a raw (unzipped)
+# `project.json` -- see `Sb3Project.load_json_for_boring`'s own doc comment
+# for why (hand-authored test fixtures, e.g. `assets/procedures_nested.json`,
+# are far easier to write directly than a real `.sb3` zip).
+pub def string run_greenflag_and_report_json(string path, string var_name):
+    if let project = Sb3Project.load_json_for_boring(path.clone()):
+        run_project_and_report(project, path, var_name)
+    else:
+        ""
+
+# Same pipeline as `run_greenflag_and_report_json`, but reports a *list*'s
+# final contents (comma-joined) instead of a variable's value -- a test-only
+# convenience, not an attempt at real Scratch's own `data_listcontents`
+# join rule (all-single-character items -> no separator, otherwise a
+# newline -- a display-only concern for the on-stage list watcher, out of
+# scope until Phase 2/3 rendering, see README.md's roadmap).
+pub def string run_greenflag_and_report_list_json(string path, string list_name):
+    if let project = Sb3Project.load_json_for_boring(path.clone()):
+        let result = run_and_build_headless_result(project.clone(), path)
+        let list_id = find_stage_list_id(project, list_name)
+        list_contents_string(result.lists, list_id)
+    else:
+        ""
+
+# Same as `run_greenflag_and_report_list_json`, but for a real `.sb3` zip
+# (`Sb3Project.load_for_boring`) -- added specifically to report on a real
+# scratch-vm test fixture (`variable_characters.sb3`, fetched on demand,
+# see `scripts/fetch_scratch_vm_fixtures.sh`) that has a list, not just
+# variables, and is a real zip, not a hand-authored raw-JSON fixture.
+pub def string run_greenflag_and_report_list(string path, string list_name):
+    if let project = Sb3Project.load_for_boring(path.clone()):
+        let result = run_and_build_headless_result(project.clone(), path)
+        let list_id = find_stage_list_id(project, list_name)
+        list_contents_string(result.lists, list_id)
+    else:
+        ""
+
+# Same pipeline again, but reports one target's final `Position` field
+# (`"x"`/`"y"`/anything else -> `"direction"`) instead of a variable/list --
+# the Motion category's own test-only convenience, same shape as
+# `run_greenflag_and_report_list_json` above.
+pub def string run_greenflag_and_report_position_json(string path, string target_name, string axis):
+    if let project = Sb3Project.load_json_for_boring(path.clone()):
+        let result = run_and_build_headless_result(project, path)
+        position_value(result.positions, target_name, axis)
+    else:
+        ""
+
+# Same pipeline again, but reports one target's current speech/thought
+# bubble text -- the Looks category's own test-only convenience, same
+# shape as `run_greenflag_and_report_position_json` above.
+pub def string run_greenflag_and_report_speech_json(string path, string target_name):
+    if let project = Sb3Project.load_json_for_boring(path.clone()):
+        let result = run_and_build_headless_result(project, path)
+        result.speech_bubbles.text_for(target_name)
+    else:
+        ""
+
+# ----------------------------------------------------------------------
+# ScratchNumber test-support entry points, exercised by
+# tests/scratch_number.rs the same way the functions above are exercised by
+# tests/fibonacci.rs. Each covers one of value_rt.rs's old #[cfg(test)]
+# cases (overflow -> BigInt promotion/demotion, exact vs. inexact division,
+# Float mixing, floored remainder, division by zero, cross-tier equality) --
+# see ScratchNumber.debug_kind()'s doc comment for why plain `as string`
+# can't distinguish these cases on its own.
+# ----------------------------------------------------------------------
+
+pub def string scratch_number_test_overflow_add():
+    let imax = ScratchNumber.from_i64(9223372036854775807)
+    let one = ScratchNumber.from_i64(1)
+    imax.add_owned(one).debug_kind()
+
+pub def string scratch_number_test_demotes_back_to_int():
+    let imax = ScratchNumber.from_i64(9223372036854775807)
+    let one = ScratchNumber.from_i64(1)
+    imax.add_owned(one).sub_owned(one).debug_kind()
+
+pub def string scratch_number_test_exact_division():
+    ScratchNumber.from_i64(6).div_owned(ScratchNumber.from_i64(2)).debug_kind()
+
+pub def string scratch_number_test_inexact_division():
+    ScratchNumber.from_i64(1).div_owned(ScratchNumber.from_i64(3)).debug_kind()
+
+pub def string scratch_number_test_float_mix():
+    ScratchNumber.from_i64(2).add_owned(ScratchNumber.from_f64(0.5)).debug_kind()
+
+pub def string scratch_number_test_floored_remainder():
+    ScratchNumber.from_i64(-7).rem_owned(ScratchNumber.from_i64(3)).debug_kind()
+
+pub def string scratch_number_test_division_by_zero():
+    ScratchNumber.from_i64(1).div_owned(ScratchNumber.from_i64(0)).debug_kind()
+
+pub def string scratch_number_test_cross_tier_equality():
+    let imax = ScratchNumber.from_i64(9223372036854775807)
+    let one = ScratchNumber.from_i64(1)
+    let via_bigint = imax.add_owned(one).sub_owned(one)
+    if via_bigint.eq_owned(imax):
+        "true"
+    else:
+        "false"
+
+def string run_project_and_report(Sb3Project project, string path, string var_name):
+    let result = run_and_build_headless_result(project.clone(), path)
+    let var_id = find_stage_var_id(project, var_name)
+    let value = result.vars.get(var_id, "")
+    "{value}"
+
+# Runs a project's green-flag script to completion (same pipeline as
+# `run_greenflag_and_report_json`), then reports the *Stage's* own
+# current costume (backdrop) index, 1-based -- a `looks_switchbackdropto`-
+# specific test convenience, needed because there's no `looks_
+# backdropnumbername` reporter implemented yet (a real, documented gap)
+# to check this through an ordinary script-authored value instead.
+pub def string run_greenflag_and_report_backdrop_index_json(string path):
+    if let project = Sb3Project.load_json_for_boring(path.clone()):
+        let result = run_and_build_headless_result(project, path)
+        let idx = result.looks.get("Stage").costume_index
+        "{idx + 1}"
+    else:
+        ""
+
+# Reports every `pen_stamp` request queued while running a project's
+# green-flag script, in order, as a comma-joined list of each request's
+# own snapshotted `direction` -- a `Stamp`-specific test convenience
+# proving `StampRequest`'s own "snapshot everything at the moment `pen_
+# stamp` actually runs" design (`runtime.br`'s own doc comment): a
+# script that stamps, changes state, then stamps again -- all in one
+# tick, no loop needed, since neither `pen_stamp` nor an ordinary motion
+# opcode is a yield point -- must produce *different* directions per
+# request, not the same (final) one for every stamp. Doesn't touch
+# `Assets<Image>`/the ECS at all (no real costume asset needed), so a
+# plain hand-authored raw-JSON fixture is enough, same as `run_greenflag_
+# and_report_backdrop_index_json` right above.
+pub def string run_greenflag_and_report_stamp_directions_json(string path):
+    if let project = Sb3Project.load_json_for_boring(path.clone()):
+        let result = run_and_build_headless_result(project, path)
+        mut parts = []
+        for stamp_req in result.sound_queue.stamp_requests:
+            parts.push("{stamp_req.direction}")
+        let joined = parts.join(",")
+        "{joined}"
+    else:
+        ""
+
+# Reports one target's costume's real pixel dimensions -- a `sensing_
+# touchingobject`-specific test convenience, same shape as
+# `run_greenflag_and_report_position_json`, but reads `TargetCostumeDims`
+# directly rather than running any script (there's nothing to run: the
+# dimensions are link-time data, not something a script can change).
+# `axis` mirrors `position_value`'s own convention ("width"/anything else
+# -> "height").
+pub def string run_report_costume_dims(string path, string target_name, int idx, string axis):
+    if let project = Sb3Project.load_for_boring(path.clone()):
+        let dims = build_target_costume_dims(path, project)
+        let d = dims.get(target_name, idx)
+        if axis == "width":
+            "{d.width}"
+        else:
+            "{d.height}"
+    else:
+        ""
+
+def string find_stage_list_id(Sb3Project project, string name):
+    for target in project.targets:
+        if target.is_stage:
+            for lst in target.lists:
+                if lst.name_matches(name.clone()):
+                    return "{lst.id_string()}"
+    ""
+
+def string list_contents_string(Lists lists, string list_id):
+    let items = lists.get(list_id, "")
+    var result = ""
+    var first = true
+    for item in items:
+        if first:
+            result = "{item}"
+            first = false
+        else:
+            result = "{result},{item}"
+    result
+
+# Test-only entry point for `sensing_touchingcolor`'s own real geometry/
+# color-matching logic (`scan_scene_for_color`, `runtime.br`) -- the
+# same "headless entry point a test can call directly" shape `render_
+# stamp_for_test` (`pen.br`) already establishes, needed for the exact
+# same reason: exercising the *real* pipeline end to end (`compose_
+# scene_for_touching`) needs real costume assets to actually finish
+# loading via `asset_server.load`, which `MinimalPlugins` alone can't
+# drive to completion (confirmed empirically -- see that function's own
+# doc comment). `scene_pixels` is a hand-built 480x360 RGBA8 buffer
+# (exactly what `SoundQueue.scene_composite` holds); every other
+# `SoundQueue` field is irrelevant to this scan, so they're all given
+# harmless empty defaults.
+pub def bool run_report_touching_color_test([uint8] scene_pixels, float32 self_x, float32 self_y, float32 self_hw, float32 self_hh, string target_hex):
+    let sound_queue = SoundQueue(play_queue = [], stop_all_requested = false, volumes = {=}, pitches = {=}, pans = {=}, rotation_styles = {=}, sound_durations = {=}, instance_types = {=}, next_clone_id = 0, clone_requests = [], despawn_requests = [], live_clone_count = 0, reset_timer_requested = false, backdrop_switch_hats = [], draggable = {=}, pen_states = {=}, pen_line_requests = [], pen_clear_requested = false, stamp_requests = [], scene_composite = scene_pixels)
+    let target = hex_to_pen_color(target_hex)
+    let min_x = floor(canvas_px(self_x - self_hw)) as isize
+    let max_x = floor(canvas_px(self_x + self_hw)) as isize
+    let min_y = floor(canvas_py(self_y + self_hh)) as isize
+    let max_y = floor(canvas_py(self_y - self_hh)) as isize
+    scan_scene_for_color(sound_queue, min_x, max_x, min_y, max_y, target)
+

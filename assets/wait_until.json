@@ -1,0 +1,169 @@
+{
+  "targets": [
+    {
+      "isStage": true,
+      "name": "Stage",
+      "variables": {
+        "var_result": [
+          "result",
+          ""
+        ]
+      },
+      "lists": {},
+      "broadcasts": {},
+      "blocks": {},
+      "comments": {},
+      "currentCostume": 0,
+      "costumes": [
+        {
+          "name": "backdrop1",
+          "dataFormat": "svg",
+          "assetId": "a",
+          "md5ext": "a.svg",
+          "rotationCenterX": 0,
+          "rotationCenterY": 0
+        }
+      ],
+      "sounds": [],
+      "volume": 100,
+      "layerOrder": 0,
+      "tempo": 60,
+      "videoTransparency": 50,
+      "videoState": "on",
+      "textToSpeechLanguage": null
+    },
+    {
+      "isStage": false,
+      "name": "Sprite1",
+      "variables": {},
+      "lists": {},
+      "broadcasts": {},
+      "blocks": {
+        "hat1": {
+          "opcode": "event_whenflagclicked",
+          "next": "set1",
+          "parent": null,
+          "inputs": {},
+          "fields": {},
+          "shadow": false,
+          "topLevel": true,
+          "x": 0,
+          "y": 0
+        },
+        "set1": {
+          "opcode": "data_setvariableto",
+          "next": "waituntil1",
+          "parent": "hat1",
+          "inputs": {
+            "VALUE": [
+              1,
+              [
+                10,
+                "waiting"
+              ]
+            ]
+          },
+          "fields": {
+            "VARIABLE": [
+              "result",
+              "var_result"
+            ]
+          },
+          "shadow": false,
+          "topLevel": false
+        },
+        "gt1": {
+          "opcode": "operator_gt",
+          "next": null,
+          "parent": "waituntil1",
+          "inputs": {
+            "OPERAND1": [
+              1,
+              "timer1"
+            ],
+            "OPERAND2": [
+              1,
+              [
+                4,
+                "1"
+              ]
+            ]
+          },
+          "fields": {},
+          "shadow": false,
+          "topLevel": false
+        },
+        "timer1": {
+          "opcode": "sensing_timer",
+          "next": null,
+          "parent": "gt1",
+          "inputs": {},
+          "fields": {},
+          "shadow": false,
+          "topLevel": false
+        },
+        "waituntil1": {
+          "opcode": "control_wait_until",
+          "next": "set2",
+          "parent": "set1",
+          "inputs": {
+            "CONDITION": [
+              1,
+              "gt1"
+            ]
+          },
+          "fields": {},
+          "shadow": false,
+          "topLevel": false
+        },
+        "set2": {
+          "opcode": "data_setvariableto",
+          "next": null,
+          "parent": "waituntil1",
+          "inputs": {
+            "VALUE": [
+              1,
+              [
+                10,
+                "done"
+              ]
+            ]
+          },
+          "fields": {
+            "VARIABLE": [
+              "result",
+              "var_result"
+            ]
+          },
+          "shadow": false,
+          "topLevel": false
+        }
+      },
+      "comments": {},
+      "currentCostume": 0,
+      "costumes": [
+        {
+          "name": "costume1",
+          "dataFormat": "svg",
+          "assetId": "b",
+          "md5ext": "b.svg",
+          "rotationCenterX": 0,
+          "rotationCenterY": 0
+        }
+      ],
+      "sounds": [],
+      "volume": 100,
+      "layerOrder": 1,
+      "visible": true,
+      "x": 0,
+      "y": 0,
+      "size": 100,
+      "direction": 90,
+      "draggable": false,
+      "rotationStyle": "all around"
+    }
+  ],
+  "monitors": [],
+  "extensions": [],
+  "meta": {}
+}

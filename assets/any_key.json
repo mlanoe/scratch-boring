@@ -1,0 +1,148 @@
+{
+  "targets": [
+    {
+      "isStage": true,
+      "name": "Stage",
+      "variables": {
+        "var_any_hat": [
+          "anyHat",
+          0
+        ],
+        "var_any_reporter": [
+          "anyReporter",
+          0
+        ]
+      },
+      "lists": {},
+      "broadcasts": {},
+      "blocks": {},
+      "comments": {},
+      "currentCostume": 0,
+      "costumes": [
+        {
+          "name": "backdrop1",
+          "dataFormat": "svg",
+          "assetId": "bg",
+          "md5ext": "bg.svg",
+          "rotationCenterX": 0,
+          "rotationCenterY": 0
+        }
+      ],
+      "sounds": [],
+      "volume": 100,
+      "layerOrder": 0,
+      "tempo": 60,
+      "videoTransparency": 50,
+      "videoState": "on",
+      "textToSpeechLanguage": null
+    },
+    {
+      "isStage": false,
+      "name": "Sprite1",
+      "variables": {},
+      "lists": {},
+      "broadcasts": {},
+      "blocks": {
+        "hatAny": {
+          "opcode": "event_whenkeypressed",
+          "next": "setAny",
+          "parent": null,
+          "inputs": {},
+          "fields": {
+            "KEY_OPTION": [
+              "any",
+              null
+            ]
+          },
+          "shadow": false,
+          "topLevel": true,
+          "x": 0,
+          "y": 0
+        },
+        "anyReporterExpr": {
+          "opcode": "sensing_keypressed",
+          "next": null,
+          "parent": "setAny",
+          "inputs": {
+            "KEY_OPTION": [
+              1,
+              [
+                10,
+                "any"
+              ]
+            ]
+          },
+          "fields": {},
+          "shadow": false,
+          "topLevel": false
+        },
+        "setAny": {
+          "opcode": "data_setvariableto",
+          "next": "setAnyReporter",
+          "parent": "hatAny",
+          "inputs": {
+            "VALUE": [
+              1,
+              [
+                10,
+                "true"
+              ]
+            ]
+          },
+          "fields": {
+            "VARIABLE": [
+              "anyHat",
+              "var_any_hat"
+            ]
+          },
+          "shadow": false,
+          "topLevel": false
+        },
+        "setAnyReporter": {
+          "opcode": "data_setvariableto",
+          "next": null,
+          "parent": "setAny",
+          "inputs": {
+            "VALUE": [
+              1,
+              "anyReporterExpr"
+            ]
+          },
+          "fields": {
+            "VARIABLE": [
+              "anyReporter",
+              "var_any_reporter"
+            ]
+          },
+          "shadow": false,
+          "topLevel": false
+        }
+      },
+      "comments": {},
+      "currentCostume": 0,
+      "costumes": [
+        {
+          "name": "a",
+          "dataFormat": "svg",
+          "assetId": "cA",
+          "md5ext": "cA.svg",
+          "rotationCenterX": 0,
+          "rotationCenterY": 0
+        }
+      ],
+      "sounds": [],
+      "volume": 100,
+      "layerOrder": 1,
+      "visible": true,
+      "x": 0,
+      "y": 0,
+      "size": 100,
+      "direction": 90,
+      "draggable": false,
+      "rotationStyle": "all around"
+    }
+  ],
+  "monitors": [],
+  "extensions": [],
+  "meta": {}
+}

@@ -1,0 +1,403 @@
+{
+  "targets": [
+    {
+      "isStage": true,
+      "name": "Stage",
+      "variables": {
+        "var_touch_initial": [
+          "touch_initial",
+          0
+        ],
+        "var_touch_after_move": [
+          "touch_after_move",
+          0
+        ],
+        "var_touch_mouse_at_origin": [
+          "touch_mouse_at_origin",
+          0
+        ],
+        "var_touch_edge_far": [
+          "touch_edge_far",
+          0
+        ],
+        "var_touch_edge_center": [
+          "touch_edge_center",
+          0
+        ]
+      },
+      "lists": {},
+      "broadcasts": {},
+      "blocks": {},
+      "comments": {},
+      "currentCostume": 0,
+      "costumes": [
+        {
+          "name": "backdrop1",
+          "dataFormat": "svg",
+          "assetId": "bg",
+          "md5ext": "bg.svg",
+          "rotationCenterX": 0,
+          "rotationCenterY": 0
+        }
+      ],
+      "sounds": [],
+      "volume": 100,
+      "layerOrder": 0,
+      "tempo": 60,
+      "videoTransparency": 50,
+      "videoState": "on",
+      "textToSpeechLanguage": null
+    },
+    {
+      "isStage": false,
+      "name": "A",
+      "variables": {},
+      "lists": {},
+      "broadcasts": {},
+      "blocks": {
+        "hat1": {
+          "opcode": "event_whenflagclicked",
+          "next": "set_touch_initial",
+          "parent": null,
+          "inputs": {},
+          "fields": {},
+          "shadow": false,
+          "topLevel": true,
+          "x": 0,
+          "y": 0
+        },
+        "expr_touch_initial": {
+          "opcode": "sensing_touchingobject",
+          "next": null,
+          "parent": "set_touch_initial",
+          "inputs": {
+            "TOUCHINGOBJECTMENU": [
+              1,
+              [
+                10,
+                "B"
+              ]
+            ]
+          },
+          "fields": {},
+          "shadow": false,
+          "topLevel": false
+        },
+        "set_touch_initial": {
+          "opcode": "data_setvariableto",
+          "next": "g1",
+          "parent": "hat1",
+          "inputs": {
+            "VALUE": [
+              1,
+              "expr_touch_initial"
+            ]
+          },
+          "fields": {
+            "VARIABLE": [
+              "touch_initial",
+              "var_touch_initial"
+            ]
+          },
+          "shadow": false,
+          "topLevel": false
+        },
+        "g1": {
+          "opcode": "motion_gotoxy",
+          "next": "set_touch_after_move",
+          "parent": "set_touch_initial",
+          "inputs": {
+            "X": [
+              1,
+              [
+                4,
+                "100"
+              ]
+            ],
+            "Y": [
+              1,
+              [
+                4,
+                "0"
+              ]
+            ]
+          },
+          "fields": {},
+          "shadow": false,
+          "topLevel": false
+        },
+        "expr_touch_after_move": {
+          "opcode": "sensing_touchingobject",
+          "next": null,
+          "parent": "set_touch_after_move",
+          "inputs": {
+            "TOUCHINGOBJECTMENU": [
+              1,
+              [
+                10,
+                "B"
+              ]
+            ]
+          },
+          "fields": {},
+          "shadow": false,
+          "topLevel": false
+        },
+        "set_touch_after_move": {
+          "opcode": "data_setvariableto",
+          "next": "g2",
+          "parent": "g1",
+          "inputs": {
+            "VALUE": [
+              1,
+              "expr_touch_after_move"
+            ]
+          },
+          "fields": {
+            "VARIABLE": [
+              "touch_after_move",
+              "var_touch_after_move"
+            ]
+          },
+          "shadow": false,
+          "topLevel": false
+        },
+        "g2": {
+          "opcode": "motion_gotoxy",
+          "next": "set_touch_mouse_at_origin",
+          "parent": "set_touch_after_move",
+          "inputs": {
+            "X": [
+              1,
+              [
+                4,
+                "0"
+              ]
+            ],
+            "Y": [
+              1,
+              [
+                4,
+                "0"
+              ]
+            ]
+          },
+          "fields": {},
+          "shadow": false,
+          "topLevel": false
+        },
+        "expr_touch_mouse_at_origin": {
+          "opcode": "sensing_touchingobject",
+          "next": null,
+          "parent": "set_touch_mouse_at_origin",
+          "inputs": {
+            "TOUCHINGOBJECTMENU": [
+              1,
+              [
+                10,
+                "_mouse_"
+              ]
+            ]
+          },
+          "fields": {},
+          "shadow": false,
+          "topLevel": false
+        },
+        "set_touch_mouse_at_origin": {
+          "opcode": "data_setvariableto",
+          "next": "g3",
+          "parent": "g2",
+          "inputs": {
+            "VALUE": [
+              1,
+              "expr_touch_mouse_at_origin"
+            ]
+          },
+          "fields": {
+            "VARIABLE": [
+              "touch_mouse_at_origin",
+              "var_touch_mouse_at_origin"
+            ]
+          },
+          "shadow": false,
+          "topLevel": false
+        },
+        "g3": {
+          "opcode": "motion_gotoxy",
+          "next": "set_touch_edge_far",
+          "parent": "set_touch_mouse_at_origin",
+          "inputs": {
+            "X": [
+              1,
+              [
+                4,
+                "300"
+              ]
+            ],
+            "Y": [
+              1,
+              [
+                4,
+                "0"
+              ]
+            ]
+          },
+          "fields": {},
+          "shadow": false,
+          "topLevel": false
+        },
+        "expr_touch_edge_far": {
+          "opcode": "sensing_touchingobject",
+          "next": null,
+          "parent": "set_touch_edge_far",
+          "inputs": {
+            "TOUCHINGOBJECTMENU": [
+              1,
+              [
+                10,
+                "_edge_"
+              ]
+            ]
+          },
+          "fields": {},
+          "shadow": false,
+          "topLevel": false
+        },
+        "set_touch_edge_far": {
+          "opcode": "data_setvariableto",
+          "next": "g4",
+          "parent": "g3",
+          "inputs": {
+            "VALUE": [
+              1,
+              "expr_touch_edge_far"
+            ]
+          },
+          "fields": {
+            "VARIABLE": [
+              "touch_edge_far",
+              "var_touch_edge_far"
+            ]
+          },
+          "shadow": false,
+          "topLevel": false
+        },
+        "g4": {
+          "opcode": "motion_gotoxy",
+          "next": "set_touch_edge_center",
+          "parent": "set_touch_edge_far",
+          "inputs": {
+            "X": [
+              1,
+              [
+                4,
+                "0"
+              ]
+            ],
+            "Y": [
+              1,
+              [
+                4,
+                "0"
+              ]
+            ]
+          },
+          "fields": {},
+          "shadow": false,
+          "topLevel": false
+        },
+        "expr_touch_edge_center": {
+          "opcode": "sensing_touchingobject",
+          "next": null,
+          "parent": "set_touch_edge_center",
+          "inputs": {
+            "TOUCHINGOBJECTMENU": [
+              1,
+              [
+                10,
+                "_edge_"
+              ]
+            ]
+          },
+          "fields": {},
+          "shadow": false,
+          "topLevel": false
+        },
+        "set_touch_edge_center": {
+          "opcode": "data_setvariableto",
+          "next": null,
+          "parent": "g4",
+          "inputs": {
+            "VALUE": [
+              1,
+              "expr_touch_edge_center"
+            ]
+          },
+          "fields": {
+            "VARIABLE": [
+              "touch_edge_center",
+              "var_touch_edge_center"
+            ]
+          },
+          "shadow": false,
+          "topLevel": false
+        }
+      },
+      "comments": {},
+      "currentCostume": 0,
+      "costumes": [
+        {
+          "name": "costumeA",
+          "dataFormat": "svg",
+          "assetId": "cA",
+          "md5ext": "cA.svg",
+          "rotationCenterX": 0,
+          "rotationCenterY": 0
+        }
+      ],
+      "sounds": [],
+      "volume": 100,
+      "layerOrder": 1,
+      "visible": true,
+      "x": 0,
+      "y": 0,
+      "size": 100,
+      "direction": 90,
+      "draggable": false,
+      "rotationStyle": "all around"
+    },
+    {
+      "isStage": false,
+      "name": "B",
+      "variables": {},
+      "lists": {},
+      "broadcasts": {},
+      "blocks": {},
+      "comments": {},
+      "currentCostume": 0,
+      "costumes": [
+        {
+          "name": "costumeB",
+          "dataFormat": "svg",
+          "assetId": "cB",
+          "md5ext": "cB.svg",
+          "rotationCenterX": 0,
+          "rotationCenterY": 0
+        }
+      ],
+      "sounds": [],
+      "volume": 100,
+      "layerOrder": 2,
+      "visible": true,
+      "x": 30,
+      "y": 0,
+      "size": 100,
+      "direction": 90,
+      "draggable": false,
+      "rotationStyle": "all around"
+    }
+  ],
+  "monitors": [],
+  "extensions": [],
+  "meta": {}
+}

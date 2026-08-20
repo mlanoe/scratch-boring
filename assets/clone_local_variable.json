@@ -1,0 +1,208 @@
+{
+  "targets": [
+    {
+      "isStage": true,
+      "name": "Stage",
+      "variables": {},
+      "lists": {},
+      "broadcasts": {},
+      "blocks": {},
+      "comments": {},
+      "currentCostume": 0,
+      "costumes": [
+        {
+          "name": "backdrop1",
+          "dataFormat": "svg",
+          "assetId": "bg",
+          "md5ext": "bg.svg",
+          "rotationCenterX": 0,
+          "rotationCenterY": 0
+        }
+      ],
+      "sounds": [],
+      "volume": 100,
+      "layerOrder": 0,
+      "tempo": 60,
+      "videoTransparency": 50,
+      "videoState": "on",
+      "textToSpeechLanguage": null
+    },
+    {
+      "isStage": false,
+      "name": "Sprite1",
+      "variables": {
+        "var_n": ["n", 1]
+      },
+      "lists": {},
+      "broadcasts": {},
+      "blocks": {
+        "hat1": {
+          "opcode": "event_whenflagclicked",
+          "next": "change_n_origin",
+          "parent": null,
+          "inputs": {},
+          "fields": {},
+          "shadow": false,
+          "topLevel": true,
+          "x": 0,
+          "y": 0
+        },
+        "change_n_origin": {
+          "opcode": "data_changevariableby",
+          "next": "clone1",
+          "parent": "hat1",
+          "inputs": {
+            "VALUE": [1, [4, "9"]]
+          },
+          "fields": {
+            "VARIABLE": ["n", "var_n"]
+          },
+          "shadow": false,
+          "topLevel": false
+        },
+        "clone1": {
+          "opcode": "control_create_clone_of",
+          "next": "setx_origin",
+          "parent": "change_n_origin",
+          "inputs": {
+            "CLONE_OPTION": [1, [10, "_myself_"]]
+          },
+          "fields": {},
+          "shadow": false,
+          "topLevel": false
+        },
+        "setx_origin": {
+          "opcode": "motion_setx",
+          "next": null,
+          "parent": "clone1",
+          "inputs": {
+            "X": [1, [12, "n", "var_n"]]
+          },
+          "fields": {},
+          "shadow": false,
+          "topLevel": false
+        },
+        "clonehat1": {
+          "opcode": "control_start_as_clone",
+          "next": "if1",
+          "parent": null,
+          "inputs": {},
+          "fields": {},
+          "shadow": false,
+          "topLevel": true,
+          "x": 0,
+          "y": 100
+        },
+        "eq1": {
+          "opcode": "operator_equals",
+          "next": null,
+          "parent": "if1",
+          "inputs": {
+            "OPERAND1": [1, [12, "n", "var_n"]],
+            "OPERAND2": [1, [4, "10"]]
+          },
+          "fields": {},
+          "shadow": false,
+          "topLevel": false
+        },
+        "if1": {
+          "opcode": "control_if_else",
+          "next": null,
+          "parent": "clonehat1",
+          "inputs": {
+            "CONDITION": [2, "eq1"],
+            "SUBSTACK": [2, "change_n_then"],
+            "SUBSTACK2": [2, "change_n_else"]
+          },
+          "fields": {},
+          "shadow": false,
+          "topLevel": false
+        },
+        "change_n_then": {
+          "opcode": "data_changevariableby",
+          "next": "setx_then",
+          "parent": "if1",
+          "inputs": {
+            "VALUE": [1, [4, "90"]]
+          },
+          "fields": {
+            "VARIABLE": ["n", "var_n"]
+          },
+          "shadow": false,
+          "topLevel": false
+        },
+        "setx_then": {
+          "opcode": "motion_setx",
+          "next": "clone_again",
+          "parent": "change_n_then",
+          "inputs": {
+            "X": [1, [12, "n", "var_n"]]
+          },
+          "fields": {},
+          "shadow": false,
+          "topLevel": false
+        },
+        "clone_again": {
+          "opcode": "control_create_clone_of",
+          "next": null,
+          "parent": "setx_then",
+          "inputs": {
+            "CLONE_OPTION": [1, [10, "_myself_"]]
+          },
+          "fields": {},
+          "shadow": false,
+          "topLevel": false
+        },
+        "change_n_else": {
+          "opcode": "data_changevariableby",
+          "next": "setx_else",
+          "parent": "if1",
+          "inputs": {
+            "VALUE": [1, [4, "900"]]
+          },
+          "fields": {
+            "VARIABLE": ["n", "var_n"]
+          },
+          "shadow": false,
+          "topLevel": false
+        },
+        "setx_else": {
+          "opcode": "motion_setx",
+          "next": null,
+          "parent": "change_n_else",
+          "inputs": {
+            "X": [1, [12, "n", "var_n"]]
+          },
+          "fields": {},
+          "shadow": false,
+          "topLevel": false
+        }
+      },
+      "comments": {},
+      "currentCostume": 0,
+      "costumes": [
+        {
+          "name": "costume1",
+          "dataFormat": "svg",
+          "assetId": "c1",
+          "md5ext": "c1.svg",
+          "rotationCenterX": 0,
+          "rotationCenterY": 0
+        }
+      ],
+      "sounds": [],
+      "volume": 100,
+      "layerOrder": 1,
+      "visible": true,
+      "x": 0,
+      "y": 0,
+      "size": 100,
+      "direction": 90,
+      "draggable": false,
+      "rotationStyle": "all around"
+    }
+  ],
+  "monitors": [],
+  "extensions": [],
+  "meta": {}
+}

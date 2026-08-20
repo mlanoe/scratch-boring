@@ -1,0 +1,84 @@
+{
+  "targets": [
+    {
+      "isStage": true,
+      "name": "Stage",
+      "variables": {
+        "varCycleResult": ["cycleResult", 0]
+      },
+      "lists": {},
+      "broadcasts": {},
+      "blocks": {},
+      "comments": {},
+      "currentCostume": 0,
+      "costumes": [],
+      "sounds": [],
+      "volume": 100,
+      "layerOrder": 0
+    },
+    {
+      "isStage": false,
+      "name": "Sprite1",
+      "variables": {},
+      "lists": {},
+      "broadcasts": {},
+      "blocks": {
+        "hat1": {
+          "opcode": "event_whenflagclicked",
+          "next": "setVar1",
+          "parent": null,
+          "inputs": {},
+          "fields": {},
+          "shadow": false,
+          "topLevel": true,
+          "x": 0,
+          "y": 0
+        },
+        "setVar1": {
+          "opcode": "data_setvariableto",
+          "next": null,
+          "parent": "hat1",
+          "inputs": {
+            "VALUE": [2, "blockA"]
+          },
+          "fields": {
+            "VARIABLE": ["cycleResult", "varCycleResult"]
+          },
+          "shadow": false,
+          "topLevel": false
+        },
+        "blockA": {
+          "opcode": "operator_add",
+          "next": null,
+          "parent": "setVar1",
+          "inputs": {
+            "NUM1": [2, "blockB"],
+            "NUM2": [1, [4, "1"]]
+          },
+          "fields": {},
+          "shadow": false,
+          "topLevel": false
+        },
+        "blockB": {
+          "opcode": "operator_add",
+          "next": null,
+          "parent": "blockA",
+          "inputs": {
+            "NUM1": [2, "blockA"],
+            "NUM2": [1, [4, "1"]]
+          },
+          "fields": {},
+          "shadow": false,
+          "topLevel": false
+        }
+      },
+      "comments": {},
+      "currentCostume": 0,
+      "costumes": [],
+      "sounds": [],
+      "volume": 100,
+      "layerOrder": 1
+    }
+  ],
+  "monitors": []
+}

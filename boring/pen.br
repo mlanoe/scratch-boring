@@ -1,0 +1,518 @@
+# Phase 4 -- the Pen extension, the first one this project implements
+# (see `BlockKind`'s own Pen-variant doc comment, `runtime.br`, for why
+# Pen specifically and not `text2speech`: entirely local, no live
+# network dependency on a remote Scratch-Team-operated API).
+#
+# Sibling file to `scratch.br`, pulled in via a bare `use pen` there --
+# same mechanism every other sibling file uses (see `scratch.br`'s own
+# header comment). Kept separate from `scratch.br` itself given its own
+# real size (canvas setup + the line-rasterization system), the same
+# "split out once one concern gets big enough" reasoning `assets.br`
+# was originally carved out for.
+#
+# `use bevy.prelude.*` etc. already declared project-wide by `scratch.br`
+# (every sibling file shares one compiled unit -- see its own header
+# comment) -- this file only needs its own *additional* imports beyond
+# that shared baseline.
+use bevy.asset.RenderAssetUsages
+use bevy.render.render_resource.Extent3d
+use bevy.render.render_resource.TextureDimension
+use bevy.render.render_resource.TextureFormat
+
+# The pen canvas -- a single persistent RGBA8 texture the size of the
+# real Scratch stage (480x360, this project's own fixed logical
+# resolution, matching `check_click_hats`' own hardcoded stage-rect
+# constants), mutated directly (CPU-side) by `draw_pen_marks` below and
+# re-uploaded to the GPU automatically by Bevy's own asset-change
+# detection whenever its `Assets<Image>` entry changes -- no explicit
+# "mark dirty" step needed beyond `images.get_mut(&handle)` itself.
+#
+# Used to also track, per instance, the last point drawn from (`last_
+# position`/`last_position_known`) so this system could detect motion by
+# diffing `Positions` once per tick, after every script had already run.
+# That's gone now -- `interpreter.br`'s own `move_position` queues a real
+# `PenLineRequest` at the *exact moment* any motion opcode actually moves
+# a pen-down target (see its own doc comment for why: a per-tick diff
+# can't tell a script's *individual* motion statements apart, so a script
+# that moves the same target more than once per tick -- e.g. replaying a
+# whole recorded point history every frame, a real pattern a downloaded
+# Scratch project ("Simple Pen Drawing Tool") exercises -- drew one wrong,
+# long straight line across the tick's own net displacement instead of
+# each real intermediate segment). `PenCanvas` itself needs no per-
+# instance state at all any more.
+pub struct PenCanvas as Resource, Debug, Clone:
+    var mut Handle<Image> handle
+
+    # `pub` (unlike every other accessor here) specifically so headless
+    # ECS tests can reach the real canvas's own pixel buffer for
+    # verification (`Assets<Image>::get(app.world().resource::<PenCanvas>
+    # ().get_handle())`) -- the field itself stays private (every `var`
+    # struct field always transpiles private, this project's own
+    # established convention), same "make just the one accessor pub for
+    # test access" pattern `rasterize_svg_to_png` itself already used.
+    pub req Handle<Image> get_handle():
+        handle
+
+# Spawned once at Startup (alongside `spawn_camera`) -- a blank,
+# fully-transparent 480x360 RGBA8 canvas, displayed as a plain `Sprite`
+# at `z = 0.5`: above the backdrop (`z = 0`, `LayerOrders`' own seeding
+# convention) and below every ordinary sprite (`z >= 1`, real Scratch's
+# own sb3 `layerOrder` never starting below 1 for a non-Stage target) --
+# matching real Scratch's own fixed `PEN_LAYER`, always directly above
+# the backdrop regardless of any sprite's own individual layer.
+pub def spawn_pen_canvas(mut Commands commands, mut ResMut<Assets<Image>> images):
+    let size = Extent3d(width = 480 as uint32, height = 360 as uint32, depth_or_array_layers = 1 as uint32)
+    let blank = [0 as uint8, 0 as uint8, 0 as uint8, 0 as uint8]
+    let image = Image.new_fill(size, TextureDimension.D2, blank.asRef(), TextureFormat.Rgba8UnormSrgb, RenderAssetUsages.default())
+    let handle = images.add(image)
+    commands.spawn((Sprite.from_image(handle.clone()), Transform.from_xyz(0.0, 0.0, 0.5)))
+    commands.insert_resource(PenCanvas(handle = handle))
+
+# Converts a stage-centered, y-up world point (`Positions`' own
+# convention, `-240..240`/`-180..180`) into pixel coordinates on the
+# 480x360 canvas buffer (top-left origin, y-down -- standard image row-
+# major convention) -- the exact inverse of `sync_mouse_state`'s own
+# window-to-stage conversion.
+def float32 canvas_px(float32 stage_x):
+    stage_x + 240.0
+
+def float32 canvas_py(float32 stage_y):
+    180.0 - stage_y
+
+# Alpha-composites `color` (straight, not premultiplied, alpha 0..1)
+# "over" the existing pixel at byte offset `i` (the first of 4 RGBA
+# bytes) in `data` -- the standard Porter-Duff "over" operator, real
+# Scratch's own pen layer compositing (a plain 2D canvas `source-over`
+# draw, confirmed against real `scratch-render`'s own pen-skin usage of
+# ordinary canvas compositing, not a more exotic blend mode).
+def blend_pixel(var [uint8] data, isize i, PenColor color):
+    if i >= 0 and (i + 3) < data.length:
+        let dst_a = (data[i + 3] as float32) / 255.0
+        let out_a = color.a + (dst_a * (1.0 - color.a))
+        if out_a <= 0.0:
+            data[i] = 0 as uint8
+            data[i + 1] = 0 as uint8
+            data[i + 2] = 0 as uint8
+            data[i + 3] = 0 as uint8
+        else:
+            let dst_r = (data[i] as float32) / 255.0
+            let dst_g = (data[i + 1] as float32) / 255.0
+            let dst_b = (data[i + 2] as float32) / 255.0
+            let out_r = ((color.r * color.a) + (dst_r * dst_a * (1.0 - color.a))) / out_a
+            let out_g = ((color.g * color.a) + (dst_g * dst_a * (1.0 - color.a))) / out_a
+            let out_b = ((color.b * color.a) + (dst_b * dst_a * (1.0 - color.a))) / out_a
+            data[i] = (out_r * 255.0) as uint8
+            data[i + 1] = (out_g * 255.0) as uint8
+            data[i + 2] = (out_b * 255.0) as uint8
+            data[i + 3] = (out_a * 255.0) as uint8
+
+# Rasterizes one thick line segment (`request`, already in canvas pixel
+# space) directly into `data` (the canvas's own raw RGBA8 byte buffer,
+# row-major, 480px-wide rows) -- a plain per-pixel "distance to the
+# segment, inside the stroke radius?" test over the segment's own
+# bounding box (padded by the stroke radius), not a scanline/Bresenham
+# optimization -- simple and correct is worth more here than raw speed
+# at this project's own 480x360 scale. A zero-length segment (`request.
+# from_x == request.to_x and from_y == to_y`, `pen_penDown`'s own dot)
+# degenerates to exactly a filled circle of the stroke's own radius,
+# with no special-casing needed: every candidate pixel's distance to a
+# single point *is* its distance to the "segment".
+def draw_pen_line(var [uint8] data, float32 x1, float32 y1, float32 x2, float32 y2, PenColor color, float32 diameter):
+    let radius = diameter / 2.0
+    let min_x_f = if x1 < x2: x1 else: x2
+    let max_x_f = if x1 > x2: x1 else: x2
+    let min_y_f = if y1 < y2: y1 else: y2
+    let max_y_f = if y1 > y2: y1 else: y2
+    let min_x = (floor(min_x_f - radius) as isize) - 1
+    let max_x = (floor(max_x_f + radius) as isize) + 1
+    let min_y = (floor(min_y_f - radius) as isize) - 1
+    let max_y = (floor(max_y_f + radius) as isize) + 1
+    let dx = x2 - x1
+    let dy = y2 - y1
+    let seg_len_sq = (dx * dx) + (dy * dy)
+    var mut py = min_y
+    while py <= max_y:
+        if py >= 0 and py < 360:
+            var mut px = min_x
+            while px <= max_x:
+                if px >= 0 and px < 480:
+                    let cx = (px as float32) + 0.5
+                    let cy = (py as float32) + 0.5
+                    var mut t = 0.0
+                    if seg_len_sq > 0.0:
+                        t = (((cx - x1) * dx) + ((cy - y1) * dy)) / seg_len_sq
+                        if t < 0.0:
+                            t = 0.0
+                        elif t > 1.0:
+                            t = 1.0
+                    let nearest_x = x1 + (t * dx)
+                    let nearest_y = y1 + (t * dy)
+                    let ddx = cx - nearest_x
+                    let ddy = cy - nearest_y
+                    let dist_sq = (ddx * ddx) + (ddy * ddy)
+                    if dist_sq <= (radius * radius):
+                        let i = ((py * 480) + px) * 4
+                        blend_pixel(data, i, color)
+                px = px + 1
+        py = py + 1
+
+# Drains `SoundQueue.pen_clear_requested`/`pen_line_requests` into the
+# real canvas pixels -- `pen_clear_requested` from `PenClear`'s own
+# `exec_simple` case, `pen_line_requests` from `PenDown`'s own immediate-
+# dot request *and* (the actual trail-drawing work) every real motion
+# opcode's own `move_position` call (`interpreter.br` -- see its own doc
+# comment for why queuing happens there, at the exact moment each motion
+# statement runs, rather than here by diffing `Positions` once per tick
+# the way this function used to). Chained after `run_pending_threads`/
+# `handle_sprite_dragging` (`build_app`'s own `.chain()`) purely so a
+# clear/line request queued this tick is drawn before this tick's own
+# frame renders, not because draining order relative to `Positions`
+# matters any more -- this function no longer reads `Positions` at all.
+pub def draw_pen_marks(mut ResMut<SoundQueue> sound_queue, mut ResMut<PenCanvas> pen_canvas, mut ResMut<Assets<Image>> images):
+    guard let imageFixed = Assets.get_mut(images, pen_canvas.handle) else return
+    var mut image = imageFixed
+    guard let dataFixed = image.data.clone() else return
+    var mut data = dataFixed
+    if sound_queue.pen_clear_requested:
+        var mut i = 0
+        while i < data.length:
+            data[i] = 0 as uint8
+            i = i + 1
+        sound_queue.pen_clear_requested = false
+    let requests = sound_queue.pen_line_requests.clone()
+    for request in requests:
+        draw_pen_line(data, canvas_px(request.from_x), canvas_py(request.from_y), canvas_px(request.to_x), canvas_py(request.to_y), request.color, request.diameter)
+    sound_queue.pen_line_requests = []
+    # A direct `image.data = data` assignment doesn't auto-wrap into
+    # `Some(...)` for an *external* (Bevy) struct's own `Option<T>` field
+    # -- the exact same real `boring` gap `sync_costume_from_looks_states`'
+    # own `Vec2?`-intermediate-local workaround already documents
+    # (`task_ff23e8cb`). Binding an explicit `[uint8]?`-typed local first
+    # triggers the correct wrap here too.
+    let [uint8]? wrapped_data = data
+    image.data = wrapped_data
+
+# One `pen_stamp` request, fully resolved and ready to composite:
+# `StampRequest`'s own snapshotted position/direction/rotation-style/
+# ghost (`runtime.br`'s own doc comment on why those are captured at
+# queue time, not here) plus its source costume's raw pixel bytes/real
+# pixel dimensions (`Assets<Image>` read once, up front -- `draw_stamps`'
+# own doc comment explains why this has to happen in a separate pass,
+# before the canvas's own mutable borrow is ever taken) and its already-
+# scaled *destination* footprint in world units (`TargetCostumeDims` x
+# the request's own snapshotted `size`, the same on-screen size `sync_
+# visibility_and_size_from_looks_states`/`sync_costume_from_looks_states`
+# already give it).
+struct StampSource:
+    [uint8] pixels
+    float32 src_width
+    float32 src_height
+    float32 dest_width
+    float32 dest_height
+    float32 x
+    float32 y
+    float32 direction
+    string rotation_style
+    float32 alpha_mult
+
+# Real Scratch's own `pen_stamp` -- composites `src`'s own source costume
+# onto the canvas at its own snapshotted position, matching exactly what
+# this project's own renderer already shows for that sprite: rotation
+# (`"all around"`) or a horizontal flip (`"left-right"`, never both), and
+# ghost transparency (`alpha_mult`). No quaternion-to-angle decoding
+# needed anywhere -- `StampRequest`'s own snapshot, not a live `Transform`/
+# `Sprite` readback, is this project's single source of truth for "what
+# did this sprite look like at the moment it stamped".
+#
+# Inverse-mapped per destination pixel (find the source UV a given
+# canvas pixel corresponds to, nearest-neighbor sample) over the rotated
+# rectangle's own padded bounding box -- the same "distance/membership
+# test over a padded bbox, not a scanline optimization" shape `draw_pen_
+# line` already establishes at this project's 480x360 scale. No rotation-
+# *center* offset support: this project's sprites are always rotated/
+# scaled about their own costume's geometric center, never a real
+# Scratch costume's own saved `rotationCenterX/Y` (nothing in this
+# project's renderer honors that today -- `sync_transforms_from_
+# positions`'s own doc comment) -- a stamp matching what's actually on
+# screen has to make the same simplification, not a more "correct" one
+# nothing else here does.
+def draw_stamp(var [uint8] data, StampSource src):
+    let half_w = src.dest_width / 2.0
+    let half_h = src.dest_height / 2.0
+    var mut radians = 0.0
+    var mut flip = false
+    if src.rotation_style == "all around":
+        radians = (90.0 - src.direction) * 0.017453292
+    elif src.rotation_style == "left-right":
+        flip = src.direction < 0.0
+    # `cos`/`sin` return `float64` regardless of a `float32` input (a
+    # known open `boring` quirk, see `IfOnEdgeBounce`'s own doc comment
+    # above) -- cast back to `float32` immediately so every downstream
+    # multiply/add below stays uniformly `float32`, the same fix that
+    # code already applies.
+    let cos_r = cos(radians) as float32
+    let sin_r = sin(radians) as float32
+    # The four corners of the (possibly rotated) destination rectangle,
+    # in world/stage space -- min/max over them gives the padded canvas-
+    # pixel bounding box to scan, the same "corners -> min/max" shape
+    # `draw_pen_line`'s own bounding-box computation already establishes
+    # for a line segment.
+    let corners_x = [0.0 - half_w, half_w, half_w, 0.0 - half_w]
+    let corners_y = [0.0 - half_h, 0.0 - half_h, half_h, half_h]
+    var mut min_wx = 0.0
+    var mut max_wx = 0.0
+    var mut min_wy = 0.0
+    var mut max_wy = 0.0
+    var mut i = 0
+    while i < 4:
+        let lx = corners_x[i]
+        let ly = corners_y[i]
+        let wx = src.x + (cos_r * lx) - (sin_r * ly)
+        let wy = src.y + (sin_r * lx) + (cos_r * ly)
+        if i == 0:
+            min_wx = wx
+            max_wx = wx
+            min_wy = wy
+            max_wy = wy
+        else:
+            if wx < min_wx:
+                min_wx = wx
+            if wx > max_wx:
+                max_wx = wx
+            if wy < min_wy:
+                min_wy = wy
+            if wy > max_wy:
+                max_wy = wy
+        i = i + 1
+    let min_x = (floor(canvas_px(min_wx)) as isize) - 1
+    let max_x = (floor(canvas_px(max_wx)) as isize) + 1
+    let min_y = (floor(canvas_py(max_wy)) as isize) - 1
+    let max_y = (floor(canvas_py(min_wy)) as isize) + 1
+    var mut py = min_y
+    while py <= max_y:
+        if py >= 0 and py < 360:
+            var mut px = min_x
+            while px <= max_x:
+                if px >= 0 and px < 480:
+                    # The exact inverse of `canvas_px`/`canvas_py`, at
+                    # this pixel's own center.
+                    let wx = ((px as float32) + 0.5) - 240.0
+                    let wy = 180.0 - ((py as float32) + 0.5)
+                    let dx = wx - src.x
+                    let dy = wy - src.y
+                    # Inverse-rotate by `-radians` (`R(-θ) = [cosθ, sinθ;
+                    # -sinθ, cosθ]`) to get this canvas pixel's own
+                    # position in the *unrotated* sprite's local frame.
+                    let local_x = (cos_r * dx) + (sin_r * dy)
+                    let local_y = (0.0 - (sin_r * dx)) + (cos_r * dy)
+                    if local_x >= (0.0 - half_w) and local_x <= half_w and local_y >= (0.0 - half_h) and local_y <= half_h:
+                        var mut u = (local_x + half_w) / src.dest_width
+                        let v = (half_h - local_y) / src.dest_height
+                        if flip:
+                            u = 1.0 - u
+                        # `src.src_width`/`src.src_height` are read into
+                        # plain locals first -- a real `boring` transpiler
+                        # quirk (a bare `for`-loop-bound struct's own
+                        # field, cast directly with `as` and nothing else
+                        # wrapping it, mis-transpiles into a *string*
+                        # `.trim().parse::<T>().ok()` cast instead of a
+                        # numeric one; confirmed empirically, `(expr *
+                        # src.src_width) as isize` -- an expression, not a
+                        # bare field access -- transpiles correctly, only
+                        # the bare-field form breaks). Binding a plain
+                        # `let` here sidesteps it entirely, the same
+                        # "explicit intermediate local" shape this
+                        # project's own `boring.toml`/doc comments already
+                        # establish for a few other real transpiler gaps.
+                        let src_w = src.src_width
+                        let src_h = src.src_height
+                        var mut sx = (u * src_w) as isize
+                        var mut sy = (v * src_h) as isize
+                        let src_w_i = src_w as isize
+                        let src_h_i = src_h as isize
+                        if sx < 0:
+                            sx = 0
+                        if sx >= src_w_i:
+                            sx = src_w_i - 1
+                        if sy < 0:
+                            sy = 0
+                        if sy >= src_h_i:
+                            sy = src_h_i - 1
+                        let src_i = ((sy * src_w_i) + sx) * 4
+                        if src_i >= 0 and (src_i + 3) < src.pixels.length:
+                            # Same bare-field-cast quirk as above, this
+                            # time on a `[uint8]` list-index expression
+                            # rather than a plain field -- the same fix.
+                            let byte_r = src.pixels[src_i]
+                            let byte_g = src.pixels[src_i + 1]
+                            let byte_b = src.pixels[src_i + 2]
+                            let byte_a = src.pixels[src_i + 3]
+                            let sa = (byte_a as float32) / 255.0
+                            let color = PenColor(r = (byte_r as float32) / 255.0, g = (byte_g as float32) / 255.0, b = (byte_b as float32) / 255.0, a = sa * src.alpha_mult)
+                            let dst_i = ((py * 480) + px) * 4
+                            blend_pixel(data, dst_i, color)
+                px = px + 1
+        py = py + 1
+
+# Drains `SoundQueue.stamp_requests` (`Stamp`'s own `exec_simple` case,
+# `interpreter.br`) into the real canvas, via `draw_stamp` above. Split
+# into two passes on purpose: `Assets<Image>` can't be borrowed both
+# ways at once (`&` for a source costume, `&mut` for the canvas), so
+# every source costume's own pixel bytes are read (`Assets.get`) and
+# fully resolved into an owned `StampSource` *before* the canvas's own
+# mutable borrow (`Assets.get_mut`) is ever taken -- the same reasoning
+# `Assets::get`'s own `boring.toml [external_fns]` entry documents.
+# `handle_by_target` -- built from the `TargetCostumeHandles` component
+# in one pass over `sprites` -- is what resolves a request's own
+# snapshotted `costume_index` into that instance's own live costume
+# handles.
+#
+# A request whose own source costume doesn't resolve to real pixel data
+# *yet* is put back into `stamp_requests` rather than dropped -- costume
+# images are loaded via `asset_server.load` (`setup_scratch_project`),
+# genuinely async, so a `pen_stamp` that runs on the very first tick (a
+# real, common pattern: "when green flag clicked" -> immediately stamp)
+# can easily reach this system before that image has actually finished
+# decoding. Retrying every tick until it does is what real Scratch's own
+# behavior amounts to here too (the stamp always eventually shows the
+# real costume, never a blank/placeholder one) -- silently dropping it
+# instead would be a real, if rare, visible content loss this project's
+# own established rigor doesn't accept elsewhere.
+pub def draw_stamps(mut ResMut<SoundQueue> sound_queue, Res<TargetCostumeDims> costume_dims, mut ResMut<PenCanvas> pen_canvas, mut ResMut<Assets<Image>> images, Query<(ScratchSprite&, TargetCostumeHandles&)> sprites):
+    let requests = sound_queue.stamp_requests.clone()
+    if requests.length == 0:
+        return
+    mut handle_by_target = {=}
+    for tag, costumes in sprites:
+        handle_by_target[tag.target_id.clone()] = costumes.handles.clone()
+    mut sources = []
+    mut still_pending = []
+    for stamp_req in requests:
+        let handles = handle_by_target[stamp_req.target_id.clone()] else []
+        var mut resolved = false
+        if handles.length > 0:
+            let idx = wrap_costume_index(stamp_req.costume_index, handles.length)
+            let handle = handles[idx].clone()
+            if let src_image = Assets.get(images, handle):
+                if let src_pixels = src_image.data.clone():
+                    let origin = sound_queue.instance_type_of(stamp_req.target_id.clone())
+                    let dim = costume_dims.get(origin, idx)
+                    let scale = stamp_req.size / 100.0
+                    let alpha_mult = 1.0 - (stamp_req.ghost / 100.0)
+                    sources.push(StampSource(pixels = src_pixels, src_width = src_image.width() as float32, src_height = src_image.height() as float32, dest_width = dim.width * scale, dest_height = dim.height * scale, x = stamp_req.x, y = stamp_req.y, direction = stamp_req.direction, rotation_style = stamp_req.rotation_style.clone(), alpha_mult = alpha_mult))
+                    resolved = true
+        if !resolved:
+            still_pending.push(stamp_req.clone())
+    sound_queue.stamp_requests = still_pending
+    if sources.length == 0:
+        return
+    guard let imageFixed = Assets.get_mut(images, pen_canvas.handle) else return
+    var mut image = imageFixed
+    guard let dataFixed = image.data.clone() else return
+    var mut data = dataFixed
+    for src in sources:
+        draw_stamp(data, src)
+    let [uint8]? wrapped_data2 = data
+    image.data = wrapped_data2
+
+# Test-only entry point for `draw_stamp`'s own geometry (rotation/flip/
+# scale/nearest-neighbor sampling) -- the same "headless entry point a
+# test can call directly" shape `run_greenflag_and_report*` (`scheduler.br`)
+# already establishes, needed here for a different reason: `draw_stamps`
+# itself can only be exercised through a real ECS `App` with a real
+# costume loaded via `asset_server.load` (genuinely async, no synchronous
+# alternative `Assets<Image>` offers for a file-based load) -- correct
+# and already proven end-to-end by this project's own established real-
+# game smoke-test discipline (`cargo run` against a real project), but not
+# something a fast, deterministic `cargo test` can depend on completing
+# within a fixed tick budget. This sidesteps `Assets<Image>`/the ECS
+# entirely: builds a blank 480x360 canvas buffer, a `StampSource` straight
+# from primitive arguments (this project's structs never expose public
+# fields for an external test file to construct one directly -- `PenCanvas`'
+# own doc comment on why), calls `draw_stamp` once, and hands the whole
+# resulting buffer back so a test can inspect any pixel it wants.
+pub def [uint8] render_stamp_for_test(float32 px, float32 py, float32 direction, string rotation_style, float32 ghost, [uint8] src_pixels, float32 src_width, float32 src_height, float32 dest_width, float32 dest_height):
+    mut data = []
+    var mut i = 0
+    while i < (480 * 360 * 4):
+        data.push(0 as uint8)
+        i = i + 1
+    let alpha_mult = 1.0 - (ghost / 100.0)
+    let src = StampSource(pixels = src_pixels, src_width = src_width, src_height = src_height, dest_width = dest_width, dest_height = dest_height, x = px, y = py, direction = direction, rotation_style = rotation_style, alpha_mult = alpha_mult)
+    draw_stamp(data, src)
+    data
+
+# Rebuilds `SceneComposite` once per tick -- see that resource's own doc
+# comment (`runtime.br`) for the full reasoning (why a software
+# recomposite instead of a real GPU readback, the "reflects last tick,
+# not mid-script" timing, and the documented no-self-exclusion trade).
+# Reuses `draw_stamp` itself for the backdrop *and* every sprite -- a
+# backdrop is composited the exact same way a `pen_stamp`'d costume is,
+# just always at `(0, 0)`/`"don't rotate"`/full opacity (real Scratch
+# backdrops have no position, direction, or ghost of their own). The pen
+# canvas's own already-composited buffer is blended on top of the
+# backdrop next (matching its real `PEN_LAYER`, always directly above
+# the backdrop), then every *other*, visible target, back-to-front
+# (`LayerOrders.sorted_target_ids`).
+pub def compose_scene_for_touching(Res<Positions> positions, Res<LooksStates> looks, Res<TargetCostumeDims> costume_dims, mut ResMut<SoundQueue> sound_queue, Res<LayerOrders> layer_orders, Res<PenCanvas> pen_canvas, Res<Assets<Image>> images, Query<(ScratchSprite&, TargetCostumeHandles&)> sprites):
+    mut handle_by_target = {=}
+    for tag, costumes in sprites:
+        handle_by_target[tag.target_id.clone()] = costumes.handles.clone()
+    # Opaque white, not transparent -- real Scratch's own stage
+    # background wherever nothing else covers it (unlike `PenCanvas`'s
+    # own blank buffer, which stays transparent on purpose so it
+    # composites correctly *onto* the backdrop -- this buffer instead
+    # represents the final, fully-opaque visible result a real player
+    # would see).
+    #
+    # `var mut` (not plain `mut`) -- unlike `render_stamp_for_test`'s own
+    # single `draw_stamp` call, this function calls it repeatedly (the
+    # backdrop, then once per sprite) reusing this same `data` binding,
+    # the same "reused across more than one `var`-parameter call" shape
+    # `draw_stamps` itself already needs `var mut` for.
+    var mut data = []
+    var mut i = 0
+    while i < (480 * 360 * 4):
+        data.push(255 as uint8)
+        i = i + 1
+    let stage_handles = handle_by_target["Stage"] else []
+    if stage_handles.length > 0:
+        let stage_looks = looks.get("Stage")
+        let idx = wrap_costume_index(stage_looks.costume_index, stage_handles.length)
+        let handle = stage_handles[idx].clone()
+        if let src_image = Assets.get(images, handle):
+            if let src_pixels = src_image.data.clone():
+                let dim = costume_dims.get("Stage", idx)
+                let backdrop_src = StampSource(pixels = src_pixels, src_width = src_image.width() as float32, src_height = src_image.height() as float32, dest_width = dim.width, dest_height = dim.height, x = 0.0, y = 0.0, direction = 90.0, rotation_style = "don't rotate", alpha_mult = 1.0)
+                draw_stamp(data, backdrop_src)
+    if let pen_image = Assets.get(images, pen_canvas.handle):
+        if let pen_pixels = pen_image.data.clone():
+            var mut j = 0
+            while j < data.length:
+                let pr = pen_pixels[j]
+                let pg = pen_pixels[j + 1]
+                let pb = pen_pixels[j + 2]
+                let pa = pen_pixels[j + 3]
+                let pen_color = PenColor(r = (pr as float32) / 255.0, g = (pg as float32) / 255.0, b = (pb as float32) / 255.0, a = (pa as float32) / 255.0)
+                blend_pixel(data, j, pen_color)
+                j = j + 4
+    let order = layer_orders.sorted_target_ids()
+    for target_id in order:
+        if target_id != "Stage":
+            let s = looks.get(target_id.clone())
+            if s.visible:
+                let handles = handle_by_target[target_id.clone()] else []
+                if handles.length > 0:
+                    let idx = wrap_costume_index(s.costume_index, handles.length)
+                    let handle = handles[idx].clone()
+                    if let src_image = Assets.get(images, handle):
+                        if let src_pixels = src_image.data.clone():
+                            let origin = sound_queue.instance_type_of(target_id.clone())
+                            let dim = costume_dims.get(origin, idx)
+                            let scale = s.size / 100.0
+                            let alpha_mult = 1.0 - (s.ghost / 100.0)
+                            let p = positions.get(target_id.clone())
+                            let style = sound_queue.get_rotation_style(target_id.clone())
+                            let sprite_src = StampSource(pixels = src_pixels, src_width = src_image.width() as float32, src_height = src_image.height() as float32, dest_width = dim.width * scale, dest_height = dim.height * scale, x = p.x, y = p.y, direction = p.direction, rotation_style = style.clone(), alpha_mult = alpha_mult)
+                            draw_stamp(data, sprite_src)
+    sound_queue.scene_composite = data

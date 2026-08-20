@@ -1,0 +1,216 @@
+{
+  "targets": [
+    {
+      "isStage": true,
+      "name": "Stage",
+      "variables": {
+        "varTemp": ["temp", 0],
+        "varResult": ["result", 0]
+      },
+      "lists": {},
+      "broadcasts": {},
+      "blocks": {},
+      "comments": {},
+      "currentCostume": 0,
+      "costumes": [
+        {"name": "backdrop1", "dataFormat": "svg", "assetId": "a", "md5ext": "a.svg", "rotationCenterX": 0, "rotationCenterY": 0}
+      ],
+      "sounds": [],
+      "volume": 100,
+      "layerOrder": 0,
+      "tempo": 60,
+      "videoTransparency": 50,
+      "videoState": "on",
+      "textToSpeechLanguage": null
+    },
+    {
+      "isStage": false,
+      "name": "Sprite1",
+      "variables": {},
+      "lists": {},
+      "broadcasts": {},
+      "blocks": {
+        "hat1": {
+          "opcode": "event_whenflagclicked",
+          "next": "callOuter",
+          "parent": null,
+          "inputs": {},
+          "fields": {},
+          "shadow": false,
+          "topLevel": true,
+          "x": 0,
+          "y": 0
+        },
+        "callOuter": {
+          "opcode": "procedures_call",
+          "next": null,
+          "parent": "hat1",
+          "inputs": {
+            "argOuterX": [1, [4, "5"]]
+          },
+          "fields": {},
+          "shadow": false,
+          "topLevel": false,
+          "mutation": {
+            "tagName": "mutation",
+            "children": [],
+            "proccode": "outer %n",
+            "argumentids": "[\"argOuterX\"]",
+            "warp": "false"
+          }
+        },
+        "def1": {
+          "opcode": "procedures_definition",
+          "next": "callInner",
+          "parent": null,
+          "inputs": {"custom_block": [1, "proto1"]},
+          "fields": {},
+          "shadow": false,
+          "topLevel": true,
+          "x": 0,
+          "y": 200
+        },
+        "proto1": {
+          "opcode": "procedures_prototype",
+          "next": null,
+          "parent": "def1",
+          "inputs": {},
+          "fields": {},
+          "shadow": true,
+          "topLevel": false,
+          "mutation": {
+            "tagName": "mutation",
+            "children": [],
+            "proccode": "outer %n",
+            "argumentids": "[\"argOuterX\"]",
+            "argumentnames": "[\"x\"]",
+            "argumentdefaults": "[\"0\"]",
+            "warp": "false"
+          }
+        },
+        "callInner": {
+          "opcode": "procedures_call",
+          "next": "setResultOuter",
+          "parent": "def1",
+          "inputs": {
+            "argInnerY": [2, "addXPlus1"]
+          },
+          "fields": {},
+          "shadow": false,
+          "topLevel": false,
+          "mutation": {
+            "tagName": "mutation",
+            "children": [],
+            "proccode": "inner %n",
+            "argumentids": "[\"argInnerY\"]",
+            "warp": "false"
+          }
+        },
+        "addXPlus1": {
+          "opcode": "operator_add",
+          "next": null,
+          "parent": "callInner",
+          "inputs": {
+            "NUM1": [2, "argReporterX"],
+            "NUM2": [1, [4, "1"]]
+          },
+          "fields": {},
+          "shadow": false,
+          "topLevel": false
+        },
+        "argReporterX": {
+          "opcode": "argument_reporter_string_number",
+          "next": null,
+          "parent": "addXPlus1",
+          "inputs": {},
+          "fields": {"VALUE": ["x", null]},
+          "shadow": false,
+          "topLevel": false
+        },
+        "setResultOuter": {
+          "opcode": "data_setvariableto",
+          "next": null,
+          "parent": "callInner",
+          "inputs": {"VALUE": [2, "argReporterX2"]},
+          "fields": {"VARIABLE": ["result", "varResult"]},
+          "shadow": false,
+          "topLevel": false
+        },
+        "argReporterX2": {
+          "opcode": "argument_reporter_string_number",
+          "next": null,
+          "parent": "setResultOuter",
+          "inputs": {},
+          "fields": {"VALUE": ["x", null]},
+          "shadow": false,
+          "topLevel": false
+        },
+        "def2": {
+          "opcode": "procedures_definition",
+          "next": "setTempInner",
+          "parent": null,
+          "inputs": {"custom_block": [1, "proto2"]},
+          "fields": {},
+          "shadow": false,
+          "topLevel": true,
+          "x": 0,
+          "y": 400
+        },
+        "proto2": {
+          "opcode": "procedures_prototype",
+          "next": null,
+          "parent": "def2",
+          "inputs": {},
+          "fields": {},
+          "shadow": true,
+          "topLevel": false,
+          "mutation": {
+            "tagName": "mutation",
+            "children": [],
+            "proccode": "inner %n",
+            "argumentids": "[\"argInnerY\"]",
+            "argumentnames": "[\"y\"]",
+            "argumentdefaults": "[\"0\"]",
+            "warp": "false"
+          }
+        },
+        "setTempInner": {
+          "opcode": "data_setvariableto",
+          "next": null,
+          "parent": "def2",
+          "inputs": {"VALUE": [2, "argReporterY"]},
+          "fields": {"VARIABLE": ["temp", "varTemp"]},
+          "shadow": false,
+          "topLevel": false
+        },
+        "argReporterY": {
+          "opcode": "argument_reporter_string_number",
+          "next": null,
+          "parent": "setTempInner",
+          "inputs": {},
+          "fields": {"VALUE": ["y", null]},
+          "shadow": false,
+          "topLevel": false
+        }
+      },
+      "comments": {},
+      "currentCostume": 0,
+      "costumes": [
+        {"name": "costume1", "dataFormat": "svg", "assetId": "b", "md5ext": "b.svg", "rotationCenterX": 0, "rotationCenterY": 0}
+      ],
+      "sounds": [],
+      "volume": 100,
+      "layerOrder": 1,
+      "visible": true,
+      "x": 0,
+      "y": 0,
+      "size": 100,
+      "direction": 90,
+      "draggable": false,
+      "rotationStyle": "all around"
+    }
+  ],
+  "monitors": [],
+  "extensions": [],
+  "meta": {}
+}

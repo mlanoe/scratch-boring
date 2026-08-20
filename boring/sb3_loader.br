@@ -1,0 +1,1162 @@
+# Loader for Scratch `.sb3` project files -- 100% Boring-authored port of the
+# former `src/sb3_loader.rs` (hand-written Rust; deleted once this file was
+# verified equivalent). Loads a `.sb3` zip archive (or a raw `project.json`)
+# into plain structs; turning those into a real block AST/instance model is
+# `boring/scratch.br`'s own linker's job (`convert_target`/`parse_variable`/
+# etc. below only concern themselves with faithfully reflecting the on-disk
+# JSON shape, matching the original file's own scope).
+#
+# Design still mirrors jscratch's `core/json` package, same as the original
+# Rust file's own doc comment described.
+#
+# Sibling file to `scratch.br` (same directory) -- pulled in via a bare
+# `use sb3_loader` there, a genuine same-project multi-file mechanism
+# (undocumented in book.md's own "Modules" section, confirmed empirically
+# against `boring/interpreter/`'s own multi-file layout): every top-level
+# item here is spliced into the same generated Rust file `scratch.br`'s own
+# code lives in, so `pub` here only matters for `tests/*.rs` (a separate
+# crate) -- see each type's own comment for which ones need it.
+#
+# ─── Why this port was possible now, and wasn't before ──────────────────────
+# The original file's own doc comment named exactly two reasons it stayed
+# hand-written Rust: (1) Boring had no field-renaming for `@derive(Deserialize)`
+# (fixed 2026-08-22, `boring` commit c35be74), and (2) most of its own JSON
+# shape is genuinely dynamic (a variable's value can be a JSON number, string,
+# or bool; a block input can be a block-id string or an inline primitive
+# array; etc.) and Boring has no dynamic/untyped JSON value type. That second
+# gap is closed here not by adding one to Boring, but by using a plain
+# Boring-declared `@serde(untagged)` enum (`JVal` below) -- serde's own
+# untagged-enum deserialization already does exactly what a hand-rolled
+# `serde_json::Value` walk did in the original, and `@serde(...)` passthrough
+# (already used elsewhere for `rename_all`) applies here for free. Verified
+# against real `serde_json` (not just `boring run`'s interpreter, which was
+# found to have its own, different -- and for this specific case, wrong --
+# `fromJson`/enum-Display behavior for untagged enums; always verify this
+# file's own behavior via `boring build` + `cargo test`, matching every other
+# Boring-authored part of this project).
+#
+# ─── Deliberate deviations from the original Rust file ──────────────────────
+# - No `Sb3LoadError` enum. The original's own Boring-integration section
+#   already collapsed every fallible load into `Option<Sb3Project>`
+#   (`load_for_boring`/`load_json_for_boring`) because "`Result<_,
+#   Sb3LoadError>` isn't Boring's own `throws` machinery, and mapping an
+#   arbitrary external error type through that would be its own can of worms"
+#   -- since that Option-collapsing entry point is now the *only* one (no Rust
+#   caller needs the rich `Result` form -- `tests/scratch_vm_fixtures.rs`'s
+#   two direct callers were updated to use it too), the seven-variant error
+#   enum + its `Display`/`Error` impls (the original file's own second-largest
+#   section) is dropped entirely. Every parse step below just returns `T?`,
+#   `nil` on any shape mismatch -- exactly as forgiving/unforgiving as the
+#   original's own error *behavior* (a malformed project still fails to
+#   load), just without a descriptive message to show for it.
+# - `find_entry_at_root_or_one_level_deep` (the original's own prefix-tolerant
+#   zip lookup, shared with `costume_rt.rs`/`sound_rt.rs`'s Rust code before
+#   they too were ported to Boring) is reimplemented here using
+#   `ZipArchive.byIndex`/`.len()` + `.split("/")` on each entry name, rather
+#   than the original's `Iterator::find` + `str::strip_suffix` -- Boring has
+#   no generic external-iterator consumption, but indexed access sidesteps
+#   that entirely, and `.split("/")`'s segment count is a cleaner equivalent
+#   to the original's `prefix.ends_with('/') && !prefix[..len-1].contains('/')`
+#   check anyway (see `zip_entry_matches`'s own comment). This project's own
+#   `boring/scratch.br` `read_zip_entry_bytes` used to call this file's
+#   `Sb3Project.findZipEntryForBoring` thin Rust delegate for the exact same
+#   lookup; it now inlines the same by-index search directly instead, since a
+#   Boring-declared function can't cleanly take an external generic type
+#   (`ZipArchive<File>`) as a parameter (see that function's own comment) --
+#   the way a Rust `fn(&ZipArchive<File>, &str)` trivially could.
+
+# `File`/`Read`/`ZipArchive`/`ZipFile` are NOT re-`use`d here even though
+# this file needs all four (`read_project_json_from_zip` below) -- once
+# inlined, both this file's and `scratch.br`'s own top-level items land in
+# the same flat Rust scope (see this file's own header comment on `use
+# sb3_loader`), and `scratch.br` already brings in the exact same four names
+# for its own costume/sound extraction code. A second identical `use` in
+# that same scope is a real Rust error (E0252 "name defined multiple
+# times"), confirmed the hard way -- unlike a module-scoped re-import,
+# Rust does not tolerate a duplicate `use` of the very same item.
+
+# ---------------------------------------------------------------------------
+# Dynamic JSON value
+# ---------------------------------------------------------------------------
+
+# A genuinely dynamic JSON value -- null/bool/number/string/array/object,
+# shape unknown until parsed. `@serde(untagged)` (passed through verbatim to
+# real `serde`, same mechanism as a struct's `@serde(rename_all = ...)`) is
+# what makes this work: serde tries each variant in declaration order until
+# one parses, which is exactly "guess the JSON shape" -- no hand-rolled
+# parser needed. Used everywhere the original Rust file used a raw
+# `serde_json::Value`: a variable/list's initial value, a block input/field's
+# raw array, a monitor's `params`/`value`.
+@derive(Debug, Clone, Serialize, Deserialize)
+@serde(untagged)
+enum JVal:
+    JNull()
+    JBool(bool)
+    JNum(float)
+    JStr(string)
+    JArr([JVal])
+    JObj({string=JVal})
+
+    # `match self.clone():` (not a bare `match self:`) throughout this enum's
+    # own methods -- `req` means `&self`, and matching a reference binds its
+    # payloads by reference too (`n: &f64`, not `f64`); `n as int64` then
+    # fails to compile ("casting `&f64` as `i64` is invalid", a real E0606
+    # from `cargo build`, not a hypothetical). Cloning first gives the match
+    # owned bindings. Distinct from (and NOT fixed by) docs/self-field-loop-
+    # match-borrow-bug.md in the `boring` repo -- that bug/fix was about a
+    # bare *field* reference (`match some_field:`); matching bare `self`
+    # itself is a different receiver shape entirely and still needs this
+    # explicit `.clone()`.
+    req string? as_str():
+        match self.clone():
+            JStr(s): s
+            _: nil
+
+    req bool? as_bool():
+        match self.clone():
+            JBool(b): b
+            _: nil
+
+    req [JVal]? as_arr():
+        match self.clone():
+            JArr(a): a
+            _: nil
+
+    req int64? as_i64():
+        match self.clone():
+            JNum(n): n as int64
+            _: nil
+
+    # Render a JSON scalar (string/number/bool) as plain text, the way sb3
+    # stores field/primitive values -- `nil` for null/array/object. Mirrors
+    # the original Rust `json_value_to_display_string`. Numbers go through
+    # ordinary float interpolation (`"{n}"`); Rust's own `f64` `Display`
+    # already omits a trailing `.0` for an integral value (`25.0` -> "25"),
+    # matching `serde_json::Number::to_string()`'s behavior for the common
+    # case closely enough that no separate int/float distinction is kept.
+    req string? as_display_string():
+        match self.clone():
+            JStr(s): s
+            JNum(n): "{n}"
+            JBool(b): "{b}"
+            _: nil
+
+# `items[idx]`'s display string, or `nil` if out of range or not a scalar --
+# used throughout `parse_primitive`/`parse_field` below, same shape as the
+# original Rust's own `get_str`/`arr.get(idx).and_then(...)` closures.
+def string? jval_display_at([JVal] items, int idx):
+    if idx < items.length:
+        items[idx].as_display_string()
+    else:
+        nil
+
+# ---------------------------------------------------------------------------
+# Raw (pre-conversion) deserialization shapes
+# ---------------------------------------------------------------------------
+#
+# These mirror the on-disk JSON directly via `@derive(Deserialize)`. Field
+# names are written in plain camelCase here specifically so they match sb3's
+# real JSON keys verbatim -- Boring never renames a field the way it does a
+# method name (see book.md's "Field names and JSON keys"), so no `@serde`
+# annotation is needed anywhere in this section.
+
+@derive(Debug, Clone, Deserialize)
+struct RawProject:
+    [RawTarget] targets
+    @serde(default)
+    [Sb3Monitor] monitors
+    # `extensions`/`meta` intentionally not modeled -- serde ignores unknown
+    # top-level fields by default, matching jscratch's own no-op parsing.
+
+@derive(Debug, Clone, Deserialize)
+struct RawTarget:
+    bool isStage
+    string name
+    @serde(default)
+    {string=[JVal]} variables
+    @serde(default)
+    {string=[JVal]} lists
+    @serde(default)
+    {string=string} broadcasts
+    @serde(default)
+    {string=RawBlock} blocks
+    @serde(default)
+    {string=Sb3Comment} comments
+    @serde(default)
+    int currentCostume
+    @serde(default)
+    [Sb3Costume] costumes
+    @serde(default)
+    [Sb3Sound] sounds
+    @serde(default)
+    float volume
+    @serde(default)
+    int layerOrder
+    float? tempo
+    float? videoTransparency
+    string? videoState
+    string? textToSpeechLanguage
+    bool? visible
+    float? x
+    float? y
+    float? size
+    float? direction
+    bool? draggable
+    string? rotationStyle
+
+@derive(Debug, Clone, Deserialize)
+struct RawBlock:
+    string opcode
+    string? next
+    string? parent
+    @serde(default)
+    {string=JVal} inputs
+    @serde(default)
+    {string=JVal} fields
+    @serde(default)
+    bool shadow
+    @serde(default)
+    bool topLevel
+    float? x
+    float? y
+    RawMutation? mutation
+    string? comment
+
+# A block's `mutation` object. Real sb3 spells its own keys inconsistently
+# (`tagName` is camelCase; `proccode`/`argumentids`/`argumentnames`/
+# `argumentdefaults`/`warp`/`hasnext` are all-lowercase, no separators at
+# all) -- field names below are spelled to match those exact keys verbatim,
+# same "no rename annotation needed" reasoning as `RawTarget`/`RawBlock`
+# above, just with uglier field names as the price. `argumentids`/
+# `argumentnames`/`argumentdefaults` stay `string?` here (not `[string]?`)
+# because they really are double-JSON-encoded on disk -- a JSON string that
+# itself contains a JSON-encoded array -- decoded a second time by
+# `decode_double_encoded_array` below, matching the original Rust's own
+# "double-encoding, a real Scratch-format quirk" comment. `warp` is likewise
+# kept as the raw string `"true"`/`"false"` here (not a `bool`) and converted
+# in `convert_mutation`.
+@derive(Debug, Clone, Deserialize)
+struct RawMutation:
+    string? tagName
+    string? proccode
+    string? argumentids
+    string? argumentnames
+    string? argumentdefaults
+    string? warp
+    string? hasnext
+    # `children` (always an empty array in every real sb3 project observed)
+    # is discarded by omission here, matching jscratch/the original Rust.
+
+# ---------------------------------------------------------------------------
+# Leaf structs -- deserialized directly, also the public/converted shape
+# ---------------------------------------------------------------------------
+#
+# Unlike Target/Block/Variable/List/Mutation above, these four have no raw/
+# converted split -- their own JSON shape is already fully static, so
+# `@derive(Deserialize)` (plus a struct-level `@serde(rename_all =
+# "camelCase")` so the Boring-side snake_case field names below still match
+# sb3's camelCase JSON keys) is the whole conversion step, same as the
+# original Rust. Snake_case field names (not camelCase, despite the rule
+# above) are deliberate here: `boring/scratch.br` already reads
+# `.data_format`/`.asset_id`/`.md5ext`/`.width`/`.height` directly as plain
+# field accesses (confirmed by grep before writing this file) -- matching
+# those exact names is required, `rename_all` is what reconciles that with
+# the real camelCase JSON.
+
+@derive(Debug, Clone, Deserialize)
+@serde(rename_all = "camelCase")
+pub struct Sb3Costume:
+    string name
+    string data_format
+    string asset_id
+    string md5ext
+    float rotation_center_x
+    float rotation_center_y
+    @serde(default)
+    float? bitmap_resolution
+
+@derive(Debug, Clone, Deserialize)
+@serde(rename_all = "camelCase")
+pub struct Sb3Sound:
+    string name
+    string asset_id
+    string data_format
+    # Defaulted, not required -- a real scratch-vm fixture (`corrupt_png.sb3`)
+    # has a sound entry with no `format` key at all, same robustness note as
+    # the original Rust struct's own doc comment.
+    @serde(default)
+    string format
+    float rate
+    float sample_count
+    string md5ext
+
+@derive(Debug, Clone, Deserialize)
+@serde(rename_all = "camelCase")
+pub struct Sb3Comment:
+    @serde(default)
+    string? block_id
+    float x
+    float y
+    float width
+    float height
+    @serde(default)
+    bool minimized
+    @serde(default)
+    string text
+
+# One entry in the project's top-level `monitors` array. `params`/`value`
+# are `JVal` (see this file's own header comment) -- every real fixture
+# observed uses plain strings/numbers there, but nothing in the format
+# guarantees it. `width`/`height`/`sprite_name`/`slider_min`/`slider_max`/
+# `is_discrete` are all defaulted -- confirmed necessary against real
+# scratch-vm test fixtures that omit them (same reasoning as the original
+# Rust struct's own doc comment).
+@derive(Debug, Clone, Deserialize)
+@serde(rename_all = "camelCase")
+pub struct Sb3Monitor:
+    string id
+    string mode
+    string opcode
+    @serde(default)
+    {string=JVal} params
+    @serde(default)
+    string? sprite_name
+    @serde(default)
+    JVal? value
+    @serde(default)
+    float width
+    @serde(default)
+    float height
+    float x
+    float y
+    @serde(default)
+    bool visible
+    @serde(default)
+    float? slider_min
+    @serde(default)
+    float? slider_max
+    @serde(default)
+    bool? is_discrete
+
+    pub req bool is_variable_watcher():
+        opcode == "data_variable"
+
+    pub req bool is_list_watcher():
+        opcode == "data_listcontents"
+
+    pub req string variable_id():
+        id
+
+    pub req string? variable_name():
+        if let v = params.get("VARIABLE"):
+            v.as_str()
+        else:
+            nil
+
+    pub req bool is_visible():
+        visible
+
+    pub req float32 x_pos():
+        x as float32
+
+    pub req float32 y_pos():
+        y as float32
+
+    pub req bool is_motion_xposition_watcher():
+        opcode == "motion_xposition"
+
+    pub req bool is_motion_yposition_watcher():
+        opcode == "motion_yposition"
+
+    pub req bool is_motion_direction_watcher():
+        opcode == "motion_direction"
+
+    pub req bool is_sensing_timer_watcher():
+        opcode == "sensing_timer"
+
+    pub req bool is_looks_size_watcher():
+        opcode == "looks_size"
+
+    pub req bool is_looks_costumenumbername_watcher():
+        opcode == "looks_costumenumbername"
+
+    # `NUMBER_NAME` -- "number" or "name" -- same field `looks_
+    # costumenumbername`'s own block reads (`BlockKind::CostumeNumberName`'s
+    # own doc comment), just resolved from a monitor's saved `params`
+    # instead of a block's `fields` at link time. Falls back to "number",
+    # real Scratch's own default when a monitor predates this field
+    # existing at all (an older project format).
+    pub req string number_name_param():
+        if let v = params.get("NUMBER_NAME"):
+            v.as_str() else "number"
+        else:
+            "number"
+
+    pub req bool is_looks_backdropnumbername_watcher():
+        opcode == "looks_backdropnumbername"
+
+    pub req bool is_sound_volume_watcher():
+        opcode == "sound_volume"
+
+    pub req bool is_sensing_current_watcher():
+        opcode == "sensing_current"
+
+    pub req bool is_sensing_dayssince2000_watcher():
+        opcode == "sensing_dayssince2000"
+
+    pub req bool is_sensing_loudness_watcher():
+        opcode == "sensing_loudness"
+
+    # `CURRENTMENU` -- "YEAR"/"MONTH"/etc, same field `sensing_current`'s
+    # own block reads (`BlockKind::CurrentDateTime`'s own doc comment),
+    # resolved from a monitor's saved `params` instead of a block's
+    # `fields`. Falls back to `""` (an unrecognized value, matching
+    # `CurrentDateTime`'s own "unrecognized menu value reports 0" default)
+    # rather than guessing a specific field -- unlike `NUMBER_NAME`, real
+    # Scratch's own `current()` has no single "most common" default to
+    # fall back to across all seven possible values.
+    pub req string current_menu_param():
+        if let v = params.get("CURRENTMENU"):
+            v.as_str() else ""
+        else:
+            ""
+
+    pub req string sprite_name_string():
+        sprite_name else ""
+
+# ---------------------------------------------------------------------------
+# Public converted data model
+# ---------------------------------------------------------------------------
+#
+# Field names below are plain snake_case, matching the original Rust
+# struct's own field names exactly -- `boring/scratch.br` already reads a
+# good number of these directly (`.targets`, `.monitors`, `.variables`,
+# `.lists`, `.current_costume`, `.costumes`, `.is_stage`, `.parent`, `.x`,
+# `.y`, ...), confirmed by grep before writing this file. None of these
+# derive `Deserialize` themselves -- they're built by `convert_target`/
+# `parse_variable`/etc. below from the Raw* shapes above.
+
+@derive(Debug, Clone)
+pub struct Sb3Project:
+    [Sb3Target] targets
+    [Sb3Monitor] monitors
+
+    # `Sb3Project.load_for_boring(...)`/`.load_json_for_boring(...)` (static,
+    # `Type.method(args)` call syntax throughout `scratch.br`) need `type def`
+    # here, not a plain top-level `def` -- a top-level function transpiles to
+    # a free `fn`, never `impl Sb3Project { fn ... }`, so `Sb3Project::
+    # load_for_boring(...)` wouldn't resolve at all (confirmed the hard way:
+    # a real E0599 from `cargo build`, not a hypothetical). `pub type def`
+    # (both keywords together) is what book.md's own "static factory method"
+    # example uses for exactly this shape.
+
+    # Load a `.sb3` project file (a zip archive containing `project.json`).
+    # Collapses every failure to `nil` -- see this file's own header comment
+    # on why there's no `Sb3LoadError` any more.
+    pub type def Sb3Project? load_for_boring(string path):
+        guard let contents = read_project_json_from_zip(path) else return nil
+        project_from_json_text(contents)
+
+    # Load a raw `project.json` file directly, with no surrounding zip
+    # archive (used by hand-authored test fixtures, e.g.
+    # `assets/procedures_nested.json` -- far easier to author directly than
+    # a real `.sb3` zip). Boring's own built-in `fs.read` (book.md's "File
+    # system" section), wrapped in `try?` per the docs' own documented idiom
+    # for using it outside a `throws` function -- previously routed through
+    # the external `std.fs.read_to_string` instead, worked around here
+    # because `try? fs.read(...)` used to double-handle the already-`Option`-
+    # producing plain form and fail to compile (docs/try-wrap-double-
+    # handling-bug.md in the `boring` repo, fixed upstream).
+    pub type def Sb3Project? load_json_for_boring(string path):
+        let contentsOpt = try? fs.read(path)
+        guard let contents = contentsOpt else return nil
+        project_from_json_text("{contents}")
+
+@derive(Debug, Clone)
+pub struct Sb3Target:
+    bool is_stage
+    string name
+    [Sb3Variable] variables
+    [Sb3List] lists
+    [Sb3Broadcast] broadcasts
+    {string=Sb3Block} blocks
+    {string=Sb3Comment} comments
+    int current_costume
+    [Sb3Costume] costumes
+    [Sb3Sound] sounds
+    float volume
+    int layer_order
+
+    # Stage-only fields (nil on sprites).
+    float? tempo
+    float? video_transparency
+    string? video_state
+    string? text_to_speech_language
+
+    # Sprite-only fields (nil on the Stage).
+    bool? visible
+    float? x
+    float? y
+    float? size
+    float? direction
+    bool? draggable
+    string? rotation_style
+
+    pub req Sb3Block? get_block(string id):
+        blocks.get(id)
+
+    # A plain 2-variable `for id, b in blocks:` destructuring loop over a
+    # bare `{K=V}` dict field (the `id` is unused in either method) used to
+    # mis-transpile to `self.blocks.clone().into_iter().enumerate().map(|(i,
+    # v)| (i as isize, v))`, treating the dict as if it needed array-style
+    # auto-enumeration (`b` ended up bound to the whole `(id, b)` tuple, not
+    # `Sb3Block` -- a real E0609 "no field `top_level`/`opcode` on
+    # `(Arc<str>, Sb3Block)`" from `cargo build`). Fixed upstream
+    # (docs/self-field-loop-match-borrow-bug.md in the `boring` repo) -- this
+    # used to route through `blocks.values()` instead, to sidestep the
+    # destructuring entirely.
+    pub req Sb3Block? find_top_level_hat(string opcode):
+        for id, b in blocks:
+            if b.top_level and b.opcode == opcode:
+                return b
+        nil
+
+    pub req [Sb3Block] all_blocks():
+        mut out = []
+        for id, b in blocks:
+            out.push(b)
+        out
+
+    pub req float32 x_or(float32 default):
+        if let v = x:
+            v as float32
+        else:
+            default
+
+    pub req float32 y_or(float32 default):
+        if let v = y:
+            v as float32
+        else:
+            default
+
+    pub req float32 direction_or(float32 default):
+        if let v = direction:
+            v as float32
+        else:
+            default
+
+    pub req float32 size_or(float32 default):
+        if let v = size:
+            v as float32
+        else:
+            default
+
+    pub req bool visible_or(bool default):
+        if let v = visible:
+            v
+        else:
+            default
+
+    # Real Scratch's own default when a target's `rotationStyle` is
+    # absent (the Stage never has one at all -- it can't rotate -- and a
+    # hand-authored raw-JSON fixture may omit it too) is "all around",
+    # confirmed against real scratch-vm (`RenderedTarget`'s own
+    # `this.rotationStyle = RenderedTarget.ROTATION_STYLE_ALL_AROUND`
+    # constructor default).
+    pub req string rotation_style_or_default():
+        rotation_style else "all around"
+
+    pub req string name_string():
+        name
+
+    pub req bool name_matches(string other):
+        name == other
+
+    pub req Sb3Sound? sound_by_name(string soundName):
+        for s in sounds:
+            if s.name == soundName:
+                return s
+        nil
+
+# `variables: {"<id>": ["<name>", <initial_value>]}`, or the 3-element
+# cloud-variable form `["<name>", <initial_value>, true]`.
+@derive(Debug, Clone)
+pub struct Sb3Variable:
+    string id
+    string name
+    JVal value
+    bool cloud
+
+    pub req string? initial_as_number_string():
+        match value:
+            JNum(n): "{n}"
+            _: nil
+
+    pub req string? initial_as_text():
+        match value:
+            JStr(s): s
+            _: nil
+
+    pub req bool? initial_as_bool():
+        match value:
+            JBool(b): b
+            _: nil
+
+    pub req bool name_matches(string other):
+        name == other
+
+    pub req string id_string():
+        id
+
+    pub req string name_string():
+        name
+
+# `lists: {"<id>": ["<name>", [<items>...]]}`.
+@derive(Debug, Clone)
+pub struct Sb3List:
+    string id
+    string name
+    [JVal] items
+
+    pub req string id_string():
+        id
+
+    pub req bool name_matches(string other):
+        name == other
+
+    pub req string name_string():
+        name
+
+    pub req int item_count():
+        items.length
+
+    pub req string? item_as_number_string(int i):
+        if i >= 0 and i < items.length:
+            match items[i].clone():
+                JNum(n): "{n}"
+                _: nil
+        else:
+            nil
+
+    pub req string? item_as_text(int i):
+        if i >= 0 and i < items.length:
+            match items[i].clone():
+                JStr(s): s
+                _: nil
+        else:
+            nil
+
+    pub req bool? item_as_bool(int i):
+        if i >= 0 and i < items.length:
+            match items[i].clone():
+                JBool(b): b
+                _: nil
+        else:
+            nil
+
+# `broadcasts: {"<id>": "<name>"}`. Never read directly by `scratch.br`
+# today (broadcasts are resolved by name via block fields instead, confirmed
+# by grep) -- kept for API completeness/fidelity with the original loader.
+@derive(Debug, Clone)
+pub struct Sb3Broadcast:
+    string id
+    string name
+
+# The resolved value of a block input: either a reference to another block
+# (by id, looked up in the same target's `blocks` map), or an inline
+# primitive value. Never pattern-matched from `scratch.br` directly
+# (confirmed by grep) -- only through `Sb3Block`'s own `input_block_id`/
+# `input_primitive` glue methods below, so this stays non-`pub`.
+@derive(Debug, Clone)
+enum Sb3InputValue:
+    Block(string)
+    Primitive(Sb3Primitive)
+
+# One entry of a block's `inputs` map. `shadow_fallback` is the "obscured
+# shadow" value underneath a real block/primitive when the input's shadow
+# status is `3` -- see the original Rust struct's own doc comment for why
+# it's kept at all. Non-`pub`, same reasoning as `Sb3InputValue`.
+@derive(Debug, Clone)
+struct Sb3Input:
+    Sb3InputValue value
+    Sb3Primitive? shadow_fallback
+
+# An inline "primitive" value that can appear as a block input, per the sb3
+# spec's primitive codes 4..=13. `pub` -- `scratch.br`'s `resolve_primitive`
+# takes this directly as a parameter.
+@derive(Debug, Clone)
+pub enum Sb3Primitive:
+    Number(string)
+    Text(string)
+    Broadcast(string name, string id)
+    Variable(string name, string id)
+    List(string name, string id)
+    ColorPicker(string)
+
+    pub req string? as_number_str():
+        match self.clone():
+            Number(s): s
+            _: nil
+
+    pub req string? as_text():
+        match self.clone():
+            Text(s): s
+            _: nil
+
+    pub req string? as_variable_id():
+        match self.clone():
+            Variable(name, id): id
+            _: nil
+
+    pub req string? as_broadcast_name():
+        match self.clone():
+            Broadcast(name, id): name
+            _: nil
+
+# `fields: {"<FIELD_NAME>": ["<value>", "<id_or_null>"]}`. Never read
+# directly by `scratch.br` (confirmed by grep) -- only through `Sb3Block`'s
+# `field_value`/`field_id` glue methods, so this stays non-`pub`.
+@derive(Debug, Clone)
+struct Sb3Field:
+    string value
+    string? id
+
+# A block's `mutation` object, converted from `RawMutation`. Non-`pub` --
+# only reachable via `Sb3Block`'s `mutation_*` glue methods.
+@derive(Debug, Clone)
+struct Sb3Mutation:
+    string tag_name
+    string? proc_code
+    [string]? argument_ids
+    [string]? argument_names
+    [string]? argument_defaults
+    bool? warp
+    string? has_next
+
+# One block in a target's `blocks` map. `pub` -- passed directly as a
+# parameter/return type all over `scratch.br`'s linker.
+@derive(Debug, Clone)
+pub struct Sb3Block:
+    string opcode
+    string? next
+    string? parent
+    {string=Sb3Input} inputs
+    {string=Sb3Field} fields
+    bool shadow
+    bool top_level
+    float? x
+    float? y
+    Sb3Mutation? mutation
+    string? comment
+
+    pub req string? next_id():
+        next
+
+    pub req string? input_block_id(string name):
+        if let inp = inputs.get(name):
+            match inp.value.clone():
+                Block(id): id
+                _: nil
+        else:
+            nil
+
+    pub req Sb3Primitive? input_primitive(string name):
+        if let inp = inputs.get(name):
+            match inp.value.clone():
+                Primitive(p): p
+                _: nil
+        else:
+            nil
+
+    pub req string? field_value(string name):
+        if let f = fields.get(name):
+            f.value
+        else:
+            nil
+
+    pub req string? field_id(string name):
+        if let f = fields.get(name):
+            f.id
+        else:
+            nil
+
+    pub req bool opcode_is(string op):
+        opcode == op
+
+    pub req string? mutation_proc_code():
+        if let m = mutation:
+            m.proc_code
+        else:
+            nil
+
+    pub req [string] mutation_argument_ids():
+        if let m = mutation:
+            m.argument_ids else []
+        else:
+            []
+
+    pub req [string] mutation_argument_names():
+        if let m = mutation:
+            m.argument_names else []
+        else:
+            []
+
+    # A `procedures_prototype`'s own "Run without screen refresh" flag
+    # (real Scratch's own "warp" -- confirmed against source, e.g.
+    # `Scratch3ProcedureBlocks`/`Sequencer.stepThread`'s `thread.warp`
+    # check). Absent (an old/malformed project, or any non-prototype
+    # block) defaults to `false` -- the safe, ordinary-yielding default,
+    # same "missing metadata degrades to the non-special-cased behavior"
+    # rule `mutation_argument_names`' own `else []` already follows.
+    pub req bool mutation_warp():
+        if let m = mutation:
+            m.warp else false
+        else:
+            false
+
+# ---------------------------------------------------------------------------
+# Raw -> public struct conversion
+# ---------------------------------------------------------------------------
+
+def Sb3Variable? parse_variable(string id, [JVal] arr):
+    guard arr.length >= 2 else return nil
+    guard let name = arr[0].as_str() else return nil
+    let value = arr[1]
+    var cloud = false
+    if arr.length >= 3:
+        if let c = arr[2].as_bool():
+            cloud = c
+    Sb3Variable(id = id, name = name, value = value, cloud = cloud)
+
+def Sb3List? parse_list(string id, [JVal] arr):
+    guard arr.length >= 2 else return nil
+    guard let name = arr[0].as_str() else return nil
+    guard let items = arr[1].as_arr() else return nil
+    Sb3List(id = id, name = name, items = items)
+
+# Parse a primitive array `[code, ...]` per the sb3 primitive codes. Codes
+# 4-8 are all "just a numeric literal string" as far as runtime semantics
+# go -- the distinction between them is an editor input-validation hint, not
+# a runtime type -- so they're all stored uniformly as `Number`, matching
+# the original Rust's own reasoning.
+def Sb3Primitive? parse_primitive(JVal raw):
+    guard let items = raw.as_arr() else return nil
+    guard items.length >= 1 else return nil
+    guard let code = items[0].as_i64() else return nil
+    match code:
+        4 | 5 | 6 | 7 | 8:
+            guard let s = jval_display_at(items, 1) else return nil
+            Sb3Primitive.Number(s)
+        10:
+            guard let s = jval_display_at(items, 1) else return nil
+            Sb3Primitive.Text(s)
+        9:
+            # Known gap (also left unimplemented by jscratch): the
+            # colour_picker literal is kept as an opaque string, no color
+            # parsing attempted -- matching the original Rust's own comment.
+            guard let s = jval_display_at(items, 1) else return nil
+            Sb3Primitive.ColorPicker(s)
+        11:
+            guard let name = jval_display_at(items, 1) else return nil
+            let id = jval_display_at(items, 2) else ""
+            Sb3Primitive.Broadcast(name, id)
+        12:
+            guard let name = jval_display_at(items, 1) else return nil
+            let id = jval_display_at(items, 2) else ""
+            Sb3Primitive.Variable(name, id)
+        13:
+            guard let name = jval_display_at(items, 1) else return nil
+            let id = jval_display_at(items, 2) else ""
+            Sb3Primitive.List(name, id)
+        _: nil
+
+# The second element of an input array is either a block id (string, looked
+# up in the target's `blocks` map) or an inline primitive array.
+def Sb3InputValue? parse_input_value(JVal raw):
+    match raw:
+        JStr(s): Sb3InputValue.Block(s)
+        JArr(_):
+            guard let p = parse_primitive(raw) else return nil
+            Sb3InputValue.Primitive(p)
+        _: nil
+
+# Parse one `inputs` entry: `[shadow_status, value_or_id, shadow_fallback?]`.
+def Sb3Input? parse_input(JVal raw):
+    guard let items = raw.as_arr() else return nil
+    guard items.length >= 2 else return nil
+    guard let shadow_status = items[0].as_i64() else return nil
+    guard let value = parse_input_value(items[1]) else return nil
+    match shadow_status:
+        # 1 = unobscured shadow, 2 = no shadow: no third element to consider.
+        1 | 2:
+            Sb3Input(value = value, shadow_fallback = nil)
+        # 3 = obscured shadow: a real value/block, with a shadow fallback
+        # underneath as the third array element.
+        3:
+            var Sb3Primitive? fallback = nil
+            if items.length >= 3:
+                fallback = parse_primitive(items[2])
+            Sb3Input(value = value, shadow_fallback = fallback)
+        _: nil
+
+# Parse one `fields` entry: `["<value>", "<id_or_null>"]`.
+def Sb3Field? parse_field(JVal raw):
+    guard let items = raw.as_arr() else return nil
+    guard let value = jval_display_at(items, 0) else return nil
+    var string? id = nil
+    if items.length >= 2:
+        id = items[1].as_str()
+    Sb3Field(value = value, id = id)
+
+# `argumentids`/`argumentnames`/`argumentdefaults` are stored as a JSON
+# string that itself contains a JSON-encoded array (double-encoding, a real
+# Scratch-format quirk) -- `fromJson` undoes the inner encoding directly,
+# no manual object-walking needed (unlike the original Rust, which had to
+# hand-decode this from a raw `serde_json::Value` object). Wrapped in `try?`
+# per book.md's documented idiom outside a `throws` function (docs/try-wrap-
+# double-handling-bug.md in the `boring` repo used to make that combination
+# fail to compile; fixed upstream, this used to be a bare `fromJson<...>(s)`
+# call as a workaround).
+def [string]? decode_double_encoded_array(string? raw):
+    guard let s = raw else return nil
+    # Parens required: `guard let`'s clause parser calls into the expression
+    # grammar one precedence level below where the bare `try`/`try?` prefix is
+    # recognized (same reason tests/cases/try_else_nil_if_let.br's own
+    # `if let r = (try? risky(v)):` needs them, in the `boring` repo).
+    guard let arr = (try? fromJson<[string]>(s)) else return nil
+    arr
+
+# Parse a block's `mutation` object. Trivial compared to the original Rust
+# version: `RawMutation` already gave us typed fields directly via serde, so
+# this is just normalizing `tagName`'s default and `warp`'s string-to-bool
+# conversion, plus double-decoding the three argument lists.
+def Sb3Mutation convert_mutation(RawMutation rm):
+    let tag_name = rm.tagName else "mutation"
+    var bool? warp = nil
+    if let w = rm.warp:
+        warp = (w == "true")
+    Sb3Mutation(
+        tag_name = tag_name,
+        proc_code = rm.proccode,
+        argument_ids = decode_double_encoded_array(rm.argumentids),
+        argument_names = decode_double_encoded_array(rm.argumentnames),
+        argument_defaults = decode_double_encoded_array(rm.argumentdefaults),
+        warp = warp,
+        has_next = rm.hasnext,
+    )
+
+def Sb3Block convert_block(RawBlock rb):
+    mut inputs = {=}
+    for name, raw in rb.inputs:
+        if let parsed = parse_input(raw):
+            inputs[name] = parsed
+    mut fields = {=}
+    for name, raw in rb.fields:
+        if let parsed = parse_field(raw):
+            fields[name] = parsed
+    var Sb3Mutation? mutation = nil
+    if let rm = rb.mutation:
+        mutation = convert_mutation(rm)
+    Sb3Block(
+        opcode = rb.opcode,
+        next = rb.next,
+        parent = rb.parent,
+        inputs = inputs,
+        fields = fields,
+        shadow = rb.shadow,
+        top_level = rb.topLevel,
+        x = rb.x,
+        y = rb.y,
+        mutation = mutation,
+        comment = rb.comment,
+    )
+
+def Sb3Target convert_target(RawTarget rt):
+    mut variables = []
+    for id, arr in rt.variables:
+        if let v = parse_variable(id, arr):
+            variables.push(v)
+    mut lists = []
+    for id, arr in rt.lists:
+        if let l = parse_list(id, arr):
+            lists.push(l)
+    mut broadcasts = []
+    for id, name in rt.broadcasts:
+        broadcasts.push(Sb3Broadcast(id = id, name = name))
+    mut blocks = {=}
+    for id, rb in rt.blocks:
+        blocks[id] = convert_block(rb)
+    Sb3Target(
+        is_stage = rt.isStage,
+        name = rt.name,
+        variables = variables,
+        lists = lists,
+        broadcasts = broadcasts,
+        blocks = blocks,
+        comments = rt.comments,
+        current_costume = rt.currentCostume,
+        costumes = rt.costumes,
+        sounds = rt.sounds,
+        volume = rt.volume,
+        layer_order = rt.layerOrder,
+        tempo = rt.tempo,
+        video_transparency = rt.videoTransparency,
+        video_state = rt.videoState,
+        text_to_speech_language = rt.textToSpeechLanguage,
+        visible = rt.visible,
+        x = rt.x,
+        y = rt.y,
+        size = rt.size,
+        direction = rt.direction,
+        draggable = rt.draggable,
+        rotation_style = rt.rotationStyle,
+    )
+
+# How deep a `project.json`'s own `{`/`[` nesting is allowed to go before
+# `json_nesting_within_limit` (below) rejects it outright. Generous on
+# purpose -- a real project.json only ever nests project -> targets ->
+# block -> inputs/fields -> primitive array, a handful of levels -- so
+# this never trips on legitimate content.
+let int MAX_JSON_NESTING_DEPTH = 256
+
+# Scans `text` (the raw `project.json` source, *before* any real parsing)
+# for its maximum brace/bracket nesting depth, `false` as soon as it goes
+# past `max_depth` -- deliberately not a real JSON tokenizer (no number/
+# keyword handling), just enough to track where a quoted string starts/
+# ends (so a `{`/`[` inside string *content* is never mistaken for real
+# structure) and count depth outside of one. `JVal` (this file's own
+# dynamic-JSON enum, used for every block's `inputs`/`fields`, a
+# variable's initial value, etc. -- see this file's own header comment)
+# is exactly as deeply recursive as whatever JSON it's asked to parse:
+# with no limit at all, a hand-forged `project.json` containing a value
+# nested tens of thousands of levels deep (e.g. a block input shaped like
+# `[[[[[...]]]]]`) overflows the stack *during deserialization itself* --
+# before `fromJson::<RawProject>` below even returns a result to check --
+# independent of every other cycle/depth guard this project has
+# elsewhere (`linker.br`'s own `resolve_expr_block`/`resolve_stack`,
+# which only ever run *after* a project has already finished loading).
+def bool json_nesting_within_limit(string text, int max_depth):
+    var mut depth = 0
+    var mut in_string = false
+    var mut escaped = false
+    mut chars = text.chars()
+    for c in chars:
+        let s = "{c}"
+        if in_string:
+            if escaped:
+                escaped = false
+            elif s == "\\":
+                escaped = true
+            elif s == "\"":
+                in_string = false
+        else:
+            if s == "\"":
+                in_string = true
+            elif s == "{{" or s == "[":
+                depth = depth + 1
+                if depth > max_depth:
+                    return false
+            elif s == "}}" or s == "]":
+                depth = depth - 1
+    true
+
+def Sb3Project? project_from_json_text(string contents):
+    if !json_nesting_within_limit(contents.clone(), MAX_JSON_NESTING_DEPTH):
+        return nil
+    let rawOpt = try? fromJson<RawProject>(contents)
+    guard let raw = rawOpt else return nil
+    mut targets = []
+    for rt in raw.targets:
+        targets.push(convert_target(rt))
+    Sb3Project(targets = targets, monitors = raw.monitors)
+
+# ---------------------------------------------------------------------------
+# Loading entry points
+# ---------------------------------------------------------------------------
+#
+# Both entry points collapse every failure to `nil` -- matching the original
+# file's own Boring-integration section, which already did this for the
+# exact same reason (`Result<_, Sb3LoadError>` isn't Boring's own `throws`
+# machinery). This is now the *only* loading API (the original's richer
+# `Result`-returning `Sb3Project::load`/`load_json` are gone, along with
+# `Sb3LoadError` itself) -- `tests/scratch_vm_fixtures.rs`'s two direct
+# Rust-side callers were updated to use `load_for_boring` instead.
+
+# `name` matches `filename` either exactly (entry at the zip root) or as
+# `<single-path-segment>/filename` (one directory level deep) -- mirrors
+# real Scratch's own loading step (`scratch-parser`'s `lib/unzip.js`,
+# `^([^/]*\/)?project\.json$`), which accepts a `.sb3` that's really a
+# zipped *folder* (e.g. produced by "Compress" on a folder in a file
+# manager, not exported by the Scratch editor itself). Confirmed a real
+# shape via real scratch-vm test fixtures (`missing_svg.sb3`/
+# `corrupt_svg.sb3`), same as the original Rust's own comment. Splitting on
+# `/` and counting segments is this file's own equivalent of the original's
+# `prefix.ends_with('/') && !prefix[..len-1].contains('/')` check: exactly
+# one segment means "at the root"; exactly two means "one directory deep";
+# three or more means "nested too deep, reject".
+def bool zip_entry_matches(string name, string filename):
+    let parts = name.split("/")
+    if parts.length == 1:
+        parts[0] == filename
+    elif parts.length == 2:
+        parts[1] == filename
+    else:
+        false
+
+# Shared cap on a single zip entry's *declared* uncompressed size --
+# checked (via `ZipFile.size()`, the entry's own central-directory field)
+# before either `read_project_json_from_zip` below or `assets.br`'s
+# `read_zip_entry_bytes` calls `ZipFile.readToEnd`. Both extract a single
+# entry out of an attacker-controlled `.sb3` into an in-memory buffer with
+# no size limit at all otherwise -- a "zip bomb" (a tiny file, extreme
+# compression ratio) declares a genuinely enormous uncompressed size for
+# one entry, and `read_to_end` happily keeps growing its buffer to match,
+# allocating gigabytes from a download of a few KB, before a single byte
+# of that entry is ever used. 100 MiB is comfortably above any real
+# project.json or any individual costume/sound asset a real `.sb3` ever
+# contains (assets are typically KB-to-low-MB), so this never trips on
+# legitimate content. One shared constant (not duplicated per-file) since
+# `sb3_loader.br`/`assets.br` are sibling files spliced into the same flat
+# generated-Rust scope (see this file's own header comment) -- a second,
+# differently-valued definition of the same limit in each file would be
+# easy to let drift out of sync.
+let uint64 MAX_ZIP_ENTRY_BYTES = 104857600 as uint64
+
+# Opens `sb3Path` as a zip archive and returns `project.json`'s full text
+# (wherever it sits per `zip_entry_matches` above), or `nil` on any I/O/zip
+# error or a missing entry, or an entry whose declared size exceeds
+# `MAX_ZIP_ENTRY_BYTES` (see that constant's own doc comment).
+def string? read_project_json_from_zip(string sb3Path):
+    let fileOpt = try? File.open(sb3Path.asRef())
+    guard let file = fileOpt else return nil
+    let archiveOpt = try? ZipArchive.new(file)
+    guard let archiveFixed = archiveOpt else return nil
+    var mut archive = archiveFixed
+    let entryCount = ZipArchive.len(archive)
+    var string? foundName = nil
+    var mut i = 0 as uint
+    while i < entryCount:
+        let indexedOpt = try? ZipArchive.byIndex(archive, i)
+        if let entry = indexedOpt:
+            let rawName = entry.name()
+            let nameStr = "{rawName}"
+            if zip_entry_matches(nameStr.clone(), "project.json" as string):
+                foundName = nameStr
+        i = i + (1 as uint)
+    guard let entryName = foundName else return nil
+    let entryOpt = try? ZipArchive.byName(archive, entryName)
+    guard let entryFixed = entryOpt else return nil
+    var mut entry = entryFixed
+    if entry.size() > MAX_ZIP_ENTRY_BYTES:
+        return nil
+    var [uint8] buf = []
+    let bytesReadOpt = try? ZipFile.readToEnd(entry, buf)
+    guard let bytesRead = bytesReadOpt else return nil
+    let contentsOpt = try? String.fromUtf8(buf)
+    guard let contents = contentsOpt else return nil
+    # `String::from_utf8` returns a real Rust `String`, not Boring's own
+    # `Arc<str>` string representation -- interpolation is what converts it
+    # (matches `zip_entry_matches`' own `"{rawName}"` conversion of a
+    # borrowed `&str` earlier in this same function).
+    "{contents}"
+

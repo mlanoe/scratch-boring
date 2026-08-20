@@ -1,0 +1,237 @@
+{
+  "targets": [
+    {
+      "isStage": true,
+      "name": "Stage",
+      "variables": {
+        "var_result_volume": [
+          "result_volume",
+          0
+        ],
+        "var_result_backdrop": [
+          "result_backdrop",
+          0
+        ],
+        "var_result_stage_clicked": [
+          "result_stage_clicked",
+          0
+        ]
+      },
+      "lists": {},
+      "broadcasts": {},
+      "blocks": {
+        "hat_flag": {
+          "opcode": "event_whenflagclicked",
+          "next": "nextbd1",
+          "parent": null,
+          "inputs": {},
+          "fields": {},
+          "shadow": false,
+          "topLevel": true,
+          "x": 0,
+          "y": 0
+        },
+        "nextbd1": {
+          "opcode": "looks_nextbackdrop",
+          "next": "set_result_backdrop",
+          "parent": "hat_flag",
+          "inputs": {},
+          "fields": {},
+          "shadow": false,
+          "topLevel": false
+        },
+        "expr_backdrop": {
+          "opcode": "looks_backdropnumbername",
+          "next": null,
+          "parent": "set_result_backdrop",
+          "inputs": {},
+          "fields": {
+            "NUMBER_NAME": [
+              "number",
+              null
+            ]
+          },
+          "shadow": false,
+          "topLevel": false
+        },
+        "set_result_backdrop": {
+          "opcode": "data_setvariableto",
+          "next": null,
+          "parent": "nextbd1",
+          "inputs": {
+            "VALUE": [
+              1,
+              "expr_backdrop"
+            ]
+          },
+          "fields": {
+            "VARIABLE": [
+              "result_backdrop",
+              "var_result_backdrop"
+            ]
+          },
+          "shadow": false,
+          "topLevel": false
+        },
+        "hat_click": {
+          "opcode": "event_whenstageclicked",
+          "next": "set_clicked",
+          "parent": null,
+          "inputs": {},
+          "fields": {},
+          "shadow": false,
+          "topLevel": true,
+          "x": 0,
+          "y": 200
+        },
+        "set_clicked": {
+          "opcode": "data_setvariableto",
+          "next": null,
+          "parent": "hat_click",
+          "inputs": {
+            "VALUE": [
+              1,
+              [
+                4,
+                "1"
+              ]
+            ]
+          },
+          "fields": {
+            "VARIABLE": [
+              "result_stage_clicked",
+              "var_result_stage_clicked"
+            ]
+          },
+          "shadow": false,
+          "topLevel": false
+        }
+      },
+      "comments": {},
+      "currentCostume": 0,
+      "costumes": [
+        {
+          "name": "a",
+          "dataFormat": "svg",
+          "assetId": "bg_a",
+          "md5ext": "bg_a.svg",
+          "rotationCenterX": 0,
+          "rotationCenterY": 0
+        },
+        {
+          "name": "b",
+          "dataFormat": "svg",
+          "assetId": "bg_b",
+          "md5ext": "bg_b.svg",
+          "rotationCenterX": 0,
+          "rotationCenterY": 0
+        },
+        {
+          "name": "c",
+          "dataFormat": "svg",
+          "assetId": "bg_c",
+          "md5ext": "bg_c.svg",
+          "rotationCenterX": 0,
+          "rotationCenterY": 0
+        }
+      ],
+      "sounds": [],
+      "volume": 100,
+      "layerOrder": 0,
+      "tempo": 60,
+      "videoTransparency": 50,
+      "videoState": "on",
+      "textToSpeechLanguage": null
+    },
+    {
+      "isStage": false,
+      "name": "Sprite1",
+      "variables": {},
+      "lists": {},
+      "broadcasts": {},
+      "blocks": {
+        "hat1": {
+          "opcode": "event_whenflagclicked",
+          "next": "setvol1",
+          "parent": null,
+          "inputs": {},
+          "fields": {},
+          "shadow": false,
+          "topLevel": true,
+          "x": 0,
+          "y": 0
+        },
+        "setvol1": {
+          "opcode": "sound_setvolumeto",
+          "next": "set_result_volume",
+          "parent": "hat1",
+          "inputs": {
+            "VOLUME": [
+              1,
+              [
+                4,
+                "55"
+              ]
+            ]
+          },
+          "fields": {},
+          "shadow": false,
+          "topLevel": false
+        },
+        "expr_volume": {
+          "opcode": "sound_volume",
+          "next": null,
+          "parent": "set_result_volume",
+          "inputs": {},
+          "fields": {},
+          "shadow": false,
+          "topLevel": false
+        },
+        "set_result_volume": {
+          "opcode": "data_setvariableto",
+          "next": null,
+          "parent": "setvol1",
+          "inputs": {
+            "VALUE": [
+              1,
+              "expr_volume"
+            ]
+          },
+          "fields": {
+            "VARIABLE": [
+              "result_volume",
+              "var_result_volume"
+            ]
+          },
+          "shadow": false,
+          "topLevel": false
+        }
+      },
+      "comments": {},
+      "currentCostume": 0,
+      "costumes": [
+        {
+          "name": "a",
+          "dataFormat": "svg",
+          "assetId": "cA",
+          "md5ext": "cA.svg",
+          "rotationCenterX": 0,
+          "rotationCenterY": 0
+        }
+      ],
+      "sounds": [],
+      "volume": 100,
+      "layerOrder": 1,
+      "visible": true,
+      "x": 0,
+      "y": 0,
+      "size": 100,
+      "direction": 90,
+      "draggable": false,
+      "rotationStyle": "all around"
+    }
+  ],
+  "monitors": [],
+  "extensions": [],
+  "meta": {}
+}

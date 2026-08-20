@@ -1,0 +1,145 @@
+{
+  "targets": [
+    {
+      "isStage": true,
+      "name": "Stage",
+      "variables": {},
+      "lists": {},
+      "broadcasts": {},
+      "blocks": {},
+      "comments": {},
+      "currentCostume": 0,
+      "costumes": [
+        {
+          "name": "backdrop1",
+          "dataFormat": "svg",
+          "assetId": "bg",
+          "md5ext": "bg.svg",
+          "rotationCenterX": 0,
+          "rotationCenterY": 0
+        }
+      ],
+      "sounds": [],
+      "volume": 100,
+      "layerOrder": 0,
+      "tempo": 60,
+      "videoTransparency": 50,
+      "videoState": "on",
+      "textToSpeechLanguage": null
+    },
+    {
+      "isStage": false,
+      "name": "Sprite1",
+      "variables": {},
+      "lists": {},
+      "broadcasts": {},
+      "blocks": {
+        "hat1": {
+          "opcode": "event_whenflagclicked",
+          "next": "goto1",
+          "parent": null,
+          "inputs": {},
+          "fields": {},
+          "shadow": false,
+          "topLevel": true,
+          "x": 0,
+          "y": 0
+        },
+        "goto1": {
+          "opcode": "motion_gotoxy",
+          "next": "setcolor",
+          "parent": "hat1",
+          "inputs": {
+            "X": [1, [4, "-100"]],
+            "Y": [1, [4, "0"]]
+          },
+          "fields": {},
+          "shadow": false,
+          "topLevel": false
+        },
+        "setcolor": {
+          "opcode": "pen_setPenColorToColor",
+          "next": "setsize",
+          "parent": "goto1",
+          "inputs": {
+            "COLOR": [
+              1,
+              "colorshadow"
+            ]
+          },
+          "fields": {},
+          "shadow": false,
+          "topLevel": false
+        },
+        "colorshadow": {
+          "opcode": "colour_picker",
+          "next": null,
+          "parent": "setcolor",
+          "inputs": {},
+          "fields": {
+            "COLOUR": ["#ff0000", null]
+          },
+          "shadow": true,
+          "topLevel": false
+        },
+        "setsize": {
+          "opcode": "pen_setPenSizeTo",
+          "next": "pendown",
+          "parent": "setcolor",
+          "inputs": {
+            "SIZE": [1, [4, "10"]]
+          },
+          "fields": {},
+          "shadow": false,
+          "topLevel": false
+        },
+        "pendown": {
+          "opcode": "pen_penDown",
+          "next": "moveafter",
+          "parent": "setsize",
+          "inputs": {},
+          "fields": {},
+          "shadow": false,
+          "topLevel": false
+        },
+        "moveafter": {
+          "opcode": "motion_gotoxy",
+          "next": null,
+          "parent": "pendown",
+          "inputs": {
+            "X": [1, [4, "100"]],
+            "Y": [1, [4, "0"]]
+          },
+          "fields": {},
+          "shadow": false,
+          "topLevel": false
+        }
+      },
+      "comments": {},
+      "currentCostume": 0,
+      "costumes": [
+        {
+          "name": "costume1",
+          "dataFormat": "svg",
+          "assetId": "c1",
+          "md5ext": "c1.svg",
+          "rotationCenterX": 0,
+          "rotationCenterY": 0
+        }
+      ],
+      "sounds": [],
+      "volume": 100,
+      "layerOrder": 1,
+      "visible": true,
+      "x": 0,
+      "y": 0,
+      "size": 100,
+      "direction": 90,
+      "draggable": false,
+      "rotationStyle": "all around"
+    }
+  ],
+  "monitors": [],
+  "extensions": ["pen"],
+  "meta": {}
+}

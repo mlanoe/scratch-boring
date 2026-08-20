@@ -1,0 +1,632 @@
+# Scratch's value model -- ScratchNumber (the exact-arithmetic 5-tier
+# Int/BigInt/Frac/BigFrac/Float wrapper, built on top of ../boring-numlib's
+# BigUint/BigInt/BigFraction) and ScratchValue (the tagged Num/Str/Bool
+# runtime value union).
+#
+# Sibling file to `scratch.br` (same directory) -- pulled in via a bare
+# `use values` there, same same-project multi-file mechanism `sb3_loader.br`
+# already uses (see that file's own header comment for the full mechanism
+# explanation: every top-level item here is spliced into the same generated
+# Rust file `scratch.br`'s own code lives in, sharing that file's `use
+# bevy.prelude.*`/`use numlib.big_num.*` -- no need to redeclare either
+# here). Split out of what used to be one large `scratch.br` once that file
+# grew past ~3100 lines -- this is the "value model" third: no dependency on
+# `Sb3Project`, `Block`, or Bevy at all, the most self-contained piece.
+
+# ============================================================================
+# ScratchNumber
+# ============================================================================
+
+# Workaround for a third new Boring transpiler bug found while integrating
+# this code (not one of the 8 already-fixed ones, nor the two workarounds
+# above). book.md (section
+# on numeric casts) documents narrowing casts as checked, "produces `nil`
+# ... if the value doesn't fit" -- and that's exactly how this file's own
+# `if let n = checked_i128_to_i64(n128):` / `guard let n = checked_i128_to_i64(n128) else ...`
+# call sites (below, in the i64-tier overflow-detection arithmetic) are
+# written, mirroring the *working* checked-narrowing pattern used elsewhere
+# in this codebase for smaller integer types. But specifically for
+# `int128 -> int64`, the transpiler emits a plain infallible `(v as i64)` as
+# the right-hand side of an `if let Some(n) = ...` / `let Some(n) = ... else`
+# -- which fails to compile in Rust (`i64` is not `Option<i64>`) regardless
+# of whether the value actually fits. This same shape (bare cast wrapped in
+# `Some(...)` pattern-matching syntax that was never actually made
+# Option-returning) reproduces with any narrowing target width, not just
+# `int64` -- `int128 -> int64` is just the one this file's overflow-checked
+# 128-bit-intermediate arithmetic technique needs throughout. Implemented by
+# hand instead: a manual range check followed by a *bare* cast (outside any
+# `if let`/`guard let`), which -- confirmed empirically -- transpiles fine as
+# a plain infallible `as i64` when not wrapped in that broken pattern.
+int64? checked_i128_to_i64(int128 v):
+    let int64 i64_min_64 = -9223372036854775807 - 1
+    let i64_min = i64_min_64 as int128
+    let i64_max = 9223372036854775807 as int128
+    if v >= i64_min and v <= i64_max:
+        v as int64
+    else:
+        nil
+
+int64 gcd_i64(int64 a, int64 b):
+    var mut x = a
+    var mut y = b
+    while y != (0 as int64):
+        let t = y.clone()
+        y = x % y
+        x = t
+    x
+
+int64 abs_i64(int64 x):
+    if x < (0 as int64):
+        (0 as int64) - x
+    else:
+        x
+
+# `type def` (a type-level/static factory method, as opposed to an instance
+# `req`/`def`) is documented and works fine inside a `struct` body -- but is
+# NOT parseable inside an `enum` body at all (confirmed empirically: even the
+# simplest `enum Foo: A(int) \n type def Foo make(): Foo.A(1)` fails to parse
+# with "expected newline, got Def", identically whether or not a blank line
+# separates it from the variant list). Every `enum ... req/def` example in
+# book.md section 9 only ever shows instance methods, never `type def` -- this
+# looks like a real, previously-undocumented parser gap, not a doc omission.
+# Worked around
+# here by giving up on option (a)'s "ScratchNumber IS the enum" shape and
+# instead wrapping the enum (`ScratchNumberKind`, unexported outside this
+# file) in a `struct ScratchNumber` that holds it in a single field: `req`
+# instance methods still dispatch via `match self.kind:` exactly like plain
+# option (a) would have, and the struct wrapper is what lets `from_i64`/
+# `from_f64`/`from_str` be real `type def` factories reachable as
+# `ScratchNumber.from_i64(...)` (the exact call-site shape the task requires).
+enum ScratchNumberKind:
+    Int(int64)
+    BigIntV(BigInt)
+    Frac(int64, int64)
+    BigFracV(BigInt, BigInt)
+    FloatV(float64)
+
+struct ScratchNumber:
+    ScratchNumberKind kind
+
+    type def ScratchNumber from_i64(int64 v):
+        ScratchNumber(kind = ScratchNumberKind.Int(v))
+
+    type def ScratchNumber from_f64(float64 v):
+        ScratchNumber(kind = ScratchNumberKind.FloatV(v))
+
+    # Boring's `int` transpiles to `isize`, a distinct type from `int64`
+    # (identical width on every 64-bit target this project builds for, but
+    # not interchangeable without an explicit cast) -- needed by list-index-
+    # shaped values (`Lists.length`/`.index_of` in scratch.br, both declared
+    # `int`) that become a `ScratchValue.Num` directly. Same rationale as
+    # value_rt.rs's old `from_isize`/`to_isize_checked`.
+    type def ScratchNumber from_isize(int v):
+        ScratchNumber(kind = ScratchNumberKind.Int(v as int64))
+
+    # `Position` (Phase 2 Motion state, see scratch.br) is `float32`-typed to
+    # match Bevy's own `Transform`/`Vec2`/`Vec3`. Same rationale as
+    # `from_isize` above, but for the float32/float64 boundary instead of
+    # int/int64.
+    type def ScratchNumber from_f32(float32 v):
+        ScratchNumber(kind = ScratchNumberKind.FloatV(v as float64))
+
+    type def ScratchNumber? from_str(string s):
+        if let iv = (s as int64):
+            return ScratchNumber(kind = ScratchNumberKind.Int(iv))
+        # `try? EXPR`, not the spelled-out `try EXPR else nil` the spike
+        # originally used here -- workaround for a fourth new Boring
+        # transpiler bug found while integrating this code (not one of the
+        # 8 already-fixed ones, nor the three workarounds above): book.md
+        # documents `try? expr` as sugar for exactly `try expr else nil`,
+        # but only the `try?` spelling transpiles correctly to `expr.ok()`
+        # when used as an `if let` condition -- the spelled-out form
+        # produces a mismatched-type `match` (an `Err` arm typed as
+        # `Option<_>` alongside an `Ok` arm typed as the raw success value)
+        # that fails to compile. Confirmed empirically to be specific to the
+        # spelled-out spelling; behaviorally identical per book.md, so this
+        # is a pure spelling swap, not a semantics change.
+        if let big = (try? BigInt.from_decimal_string(s)):
+            return demote_bigint_sn(big)
+        if let f = (s as float64):
+            return ScratchNumber(kind = ScratchNumberKind.FloatV(f))
+        nil
+
+    # Explicit `if let ... else nil` rewrap, not a bare tail call -- same
+    # double-wrap issue already called out (and worked around the same way)
+    # elsewhere in this file, e.g. `ScratchValue.try_num()`'s `Str(s)` arm:
+    # `ScratchNumber.from_str(s)` already returns `ScratchNumber?`, and a
+    # `T?`-returning function auto-wraps a *plain* tail value in `Some(...)`
+    # but doesn't know to skip that wrap when the value is already an
+    # `Option` -- confirmed here too (`Some(ScratchNumber::from_str(s)?)`-
+    # shaped mismatch) with the bare-tail-call spelling the spike originally
+    # used.
+    type def ScratchNumber? from_str_owned(string s):
+        if let v = ScratchNumber.from_str(s):
+            v
+        else:
+            nil
+
+    req bool involves_float(ScratchNumber other):
+        match self.kind:
+            FloatV(_): true
+            _:
+                match other.kind:
+                    FloatV(_): true
+                    _: false
+
+    req (int64, int64)? to_i64_num_den():
+        match self.kind:
+            Int(v): (v, 1 as int64)
+            Frac(n, d): (n, d)
+            BigIntV(b):
+                guard let i = b.to_i64_checked() else return nil
+                (i, 1 as int64)
+            BigFracV(n, d):
+                if let ni = n.to_i64_checked():
+                    if let di = d.to_i64_checked():
+                        return (ni, di)
+                nil
+            FloatV(_): nil
+
+    req (BigInt, BigInt) to_big_num_den():
+        match self.kind:
+            Int(v): (BigInt.from_i64(v), BigInt.from_i64(1))
+            BigIntV(b): (b, BigInt.from_i64(1))
+            Frac(n, d): (BigInt.from_i64(n), BigInt.from_i64(d))
+            BigFracV(n, d): (n, d)
+            FloatV(_): (BigInt.from_i64(0), BigInt.from_i64(1))
+
+    req bool is_zero():
+        match self.kind:
+            Int(v): v == (0 as int64)
+            BigIntV(b): b.is_zero()
+            Frac(n, _): n == (0 as int64)
+            BigFracV(n, _): n.is_zero()
+            FloatV(f): f == 0.0
+
+    req bool is_negative():
+        match self.kind:
+            Int(v): v < (0 as int64)
+            BigIntV(b): b.is_negative()
+            Frac(n, _): n < (0 as int64)
+            BigFracV(n, _): n.is_negative()
+            FloatV(f): f < 0.0
+
+    req float64 to_f64():
+        match self.kind:
+            Int(v): v as float64
+            BigIntV(b): b.to_f64()
+            Frac(n, d): (n as float64) / (d as float64)
+            BigFracV(n, d): n.to_f64() / d.to_f64()
+            FloatV(f): f
+
+    req int64? to_i64_checked():
+        match self.kind:
+            Int(v): v
+            BigIntV(b): b.to_i64_checked()
+            Frac(n, d):
+                if d == (1 as int64):
+                    n
+                else:
+                    nil
+            BigFracV(n, d):
+                if d.compare(BigInt.from_i64(1)) == 0:
+                    n.to_i64_checked()
+                else:
+                    nil
+            FloatV(f):
+                if f % 1.0 == 0.0 and f >= -9223372036854775808.0 and f <= 9223372036854775807.0:
+                    f as int64
+                else:
+                    nil
+
+    # Interop accessor for Bevy `f32` fields (Position.x/y/direction) --
+    # lossy the same way `to_f64` is, see that method's doc comment.
+    req float32 to_f32():
+        self.to_f64() as float32
+
+    # Same as `to_i64_checked`, but narrowed to Boring's `int` (`isize`) --
+    # needed by list-index resolution (`resolve_list_index` in scratch.br),
+    # which is `int`-typed throughout with no `as`-cast available at its
+    # call sites.
+    req int? to_isize_checked():
+        guard let i = self.to_i64_checked() else return nil
+        i as int
+
+    req ScratchNumber add_owned(ScratchNumber other):
+        if self.involves_float(other):
+            return ScratchNumber(kind = ScratchNumberKind.FloatV(self.to_f64() + other.to_f64()))
+        if let p1 = self.to_i64_num_den():
+            if let p2 = other.to_i64_num_den():
+                let (n1, d1) = p1
+                let (n2, d2) = p2
+                if let result = add_i64_tier(n1, d1, n2, d2):
+                    return result
+        let (bn1, bd1) = self.to_big_num_den()
+        let (bn2, bd2) = other.to_big_num_den()
+        add_big_tier(bn1, bd1, bn2, bd2)
+
+    req ScratchNumber sub_owned(ScratchNumber other):
+        if self.involves_float(other):
+            return ScratchNumber(kind = ScratchNumberKind.FloatV(self.to_f64() - other.to_f64()))
+        if let p1 = self.to_i64_num_den():
+            if let p2 = other.to_i64_num_den():
+                let (n1, d1) = p1
+                let (n2, d2) = p2
+                if let result = sub_i64_tier(n1, d1, n2, d2):
+                    return result
+        let (bn1, bd1) = self.to_big_num_den()
+        let (bn2, bd2) = other.to_big_num_den()
+        sub_big_tier(bn1, bd1, bn2, bd2)
+
+    req ScratchNumber mul_owned(ScratchNumber other):
+        if self.involves_float(other):
+            return ScratchNumber(kind = ScratchNumberKind.FloatV(self.to_f64() * other.to_f64()))
+        if let p1 = self.to_i64_num_den():
+            if let p2 = other.to_i64_num_den():
+                let (n1, d1) = p1
+                let (n2, d2) = p2
+                if let result = mul_i64_tier(n1, d1, n2, d2):
+                    return result
+        let (bn1, bd1) = self.to_big_num_den()
+        let (bn2, bd2) = other.to_big_num_den()
+        mul_big_tier(bn1, bd1, bn2, bd2)
+
+    req ScratchNumber div_owned(ScratchNumber other):
+        if self.involves_float(other) or other.is_zero():
+            return ScratchNumber(kind = ScratchNumberKind.FloatV(self.to_f64() / other.to_f64()))
+        if let p1 = self.to_i64_num_den():
+            if let p2 = other.to_i64_num_den():
+                let (n1, d1) = p1
+                let (n2, d2) = p2
+                if let result = div_i64_tier(n1, d1, n2, d2):
+                    return result
+        let (bn1, bd1) = self.to_big_num_den()
+        let (bn2, bd2) = other.to_big_num_den()
+        div_big_tier(bn1, bd1, bn2, bd2)
+
+    req ScratchNumber rem_owned(ScratchNumber other):
+        if self.involves_float(other) or other.is_zero():
+            return ScratchNumber(kind = ScratchNumberKind.FloatV(self.to_f64() % other.to_f64()))
+        if let p1 = self.to_i64_num_den():
+            if let p2 = other.to_i64_num_den():
+                let (n1, d1) = p1
+                let (n2, d2) = p2
+                if let result = rem_i64_tier(n1, d1, n2, d2):
+                    return result
+        let (bn1, bd1) = self.to_big_num_den()
+        let (bn2, bd2) = other.to_big_num_den()
+        rem_big_tier(bn1, bd1, bn2, bd2)
+
+    req bool eq_owned(ScratchNumber other):
+        if self.involves_float(other):
+            return self.to_f64() == other.to_f64()
+        self.compare_exact(other) == 0
+
+    req int compare_exact(ScratchNumber other):
+        if let p1 = self.to_i64_num_den():
+            if let p2 = other.to_i64_num_den():
+                let (n1, d1) = p1
+                let (n2, d2) = p2
+                if let c = compare_i64_tier(n1, d1, n2, d2):
+                    return c
+        let (bn1, bd1) = self.to_big_num_den()
+        let (bn2, bd2) = other.to_big_num_den()
+        compare_big_tier(bn1, bd1, bn2, bd2)
+
+    req bool gt_owned(ScratchNumber other):
+        if self.involves_float(other):
+            return self.to_f64() > other.to_f64()
+        self.compare_exact(other) > 0
+
+    req bool lt_owned(ScratchNumber other):
+        if self.involves_float(other):
+            return self.to_f64() < other.to_f64()
+        self.compare_exact(other) < 0
+
+    # Test-support helper only (see tests/scratch_number.rs via the
+    # `pub def scratch_number_test_*` functions near the end of this file) --
+    # exposes which tier/variant a value actually landed in, which plain
+    # `as string` deliberately hides (Frac/BigFracV display as their float
+    # approximation, see the `as string` impl below).
+    req string debug_kind():
+        match self.kind:
+            Int(v): "Int:{v}"
+            BigIntV(b): "BigIntV:{b}"
+            Frac(n, d): "Frac:{n}/{d}"
+            BigFracV(n, d): "BigFracV:{n}/{d}"
+            FloatV(f): "Float:{f}"
+
+    as string:
+        match self.kind:
+            Int(v): "{v}"
+            BigIntV(b): "{b}"
+            Frac(_, _): "{self.to_f64()}"
+            BigFracV(_, _): "{self.to_f64()}"
+            FloatV(f): "{f}"
+
+ScratchNumber demote_bigint_sn(BigInt b):
+    guard let i = b.to_i64_checked() else return ScratchNumber(kind = ScratchNumberKind.BigIntV(b))
+    ScratchNumber(kind = ScratchNumberKind.Int(i))
+
+ScratchNumber make_fraction_i64(int64 n_in, int64 d_in):
+    let i64_min = -9223372036854775807 - 1
+    if n_in == i64_min or d_in == i64_min:
+        return make_fraction_big(BigInt.from_i64(n_in), BigInt.from_i64(d_in))
+    var mut n = n_in
+    var mut d = d_in
+    if d < (0 as int64):
+        n = (0 as int64) - n
+        d = (0 as int64) - d
+    if n == (0 as int64):
+        return ScratchNumber(kind = ScratchNumberKind.Int(0 as int64))
+    let g = gcd_i64(abs_i64(n), d)
+    let rn = n / g
+    let rd = d / g
+    if rd == (1 as int64):
+        ScratchNumber(kind = ScratchNumberKind.Int(rn))
+    else:
+        ScratchNumber(kind = ScratchNumberKind.Frac(rn, rd))
+
+ScratchNumber make_fraction_big(BigInt n_in, BigInt d_in):
+    var mut n = n_in
+    var mut d = d_in
+    if d.is_negative():
+        n = n.negate()
+        d = d.negate()
+    if n.is_zero():
+        return ScratchNumber(kind = ScratchNumberKind.Int(0 as int64))
+    let g = n.magnitude.gcd(d.magnitude.clone())
+    let (n_mag, _) = try n.magnitude.divmod(g.clone()) else (BigUint.from_u64(0), BigUint.from_u64(0))
+    let (d_mag, _) = try d.magnitude.divmod(g) else (BigUint.from_u64(0), BigUint.from_u64(0))
+    let rn = BigInt(negative = n.negative and !n_mag.is_zero(), magnitude = n_mag)
+    let rd = BigInt(negative = false, magnitude = d_mag)
+    if rd.compare(BigInt.from_i64(1)) == 0:
+        demote_bigint_sn(rn)
+    else:
+        if let rni = rn.to_i64_checked():
+            if let rdi = rd.to_i64_checked():
+                return ScratchNumber(kind = ScratchNumberKind.Frac(rni, rdi))
+        ScratchNumber(kind = ScratchNumberKind.BigFracV(rn, rd))
+
+ScratchNumber? add_i64_tier(int64 n1, int64 d1, int64 n2, int64 d2):
+    if d1 == d2:
+        let n128 = (n1 as int128) + (n2 as int128)
+        if let n = checked_i128_to_i64(n128):
+            return make_fraction_i64(n, d1)
+        nil
+    else:
+        let nn1_128 = (n1 as int128) * (d2 as int128)
+        let nn2_128 = (n2 as int128) * (d1 as int128)
+        let d128 = (d1 as int128) * (d2 as int128)
+        guard let nn1 = checked_i128_to_i64(nn1_128) else return nil
+        guard let nn2 = checked_i128_to_i64(nn2_128) else return nil
+        guard let dd = checked_i128_to_i64(d128) else return nil
+        let n128b = (nn1 as int128) + (nn2 as int128)
+        guard let n = checked_i128_to_i64(n128b) else return nil
+        make_fraction_i64(n, dd)
+
+ScratchNumber add_big_tier(BigInt n1, BigInt d1, BigInt n2, BigInt d2):
+    if d1.compare(d2) == 0:
+        make_fraction_big(n1.add(n2), d1)
+    else:
+        make_fraction_big(n1.mul(d2).add(n2.mul(d1)), d1.mul(d2))
+
+ScratchNumber? sub_i64_tier(int64 n1, int64 d1, int64 n2, int64 d2):
+    if d1 == d2:
+        let n128 = (n1 as int128) - (n2 as int128)
+        if let n = checked_i128_to_i64(n128):
+            return make_fraction_i64(n, d1)
+        nil
+    else:
+        let nn1_128 = (n1 as int128) * (d2 as int128)
+        let nn2_128 = (n2 as int128) * (d1 as int128)
+        let d128 = (d1 as int128) * (d2 as int128)
+        guard let nn1 = checked_i128_to_i64(nn1_128) else return nil
+        guard let nn2 = checked_i128_to_i64(nn2_128) else return nil
+        guard let dd = checked_i128_to_i64(d128) else return nil
+        let n128b = (nn1 as int128) - (nn2 as int128)
+        guard let n = checked_i128_to_i64(n128b) else return nil
+        make_fraction_i64(n, dd)
+
+ScratchNumber sub_big_tier(BigInt n1, BigInt d1, BigInt n2, BigInt d2):
+    if d1.compare(d2) == 0:
+        make_fraction_big(n1.sub(n2), d1)
+    else:
+        make_fraction_big(n1.mul(d2).sub(n2.mul(d1)), d1.mul(d2))
+
+ScratchNumber? mul_i64_tier(int64 n1, int64 d1, int64 n2, int64 d2):
+    let n128 = (n1 as int128) * (n2 as int128)
+    let d128 = (d1 as int128) * (d2 as int128)
+    guard let n = checked_i128_to_i64(n128) else return nil
+    guard let d = checked_i128_to_i64(d128) else return nil
+    make_fraction_i64(n, d)
+
+ScratchNumber mul_big_tier(BigInt n1, BigInt d1, BigInt n2, BigInt d2):
+    make_fraction_big(n1.mul(n2), d1.mul(d2))
+
+ScratchNumber? div_i64_tier(int64 n1, int64 d1, int64 n2, int64 d2):
+    let n128 = (n1 as int128) * (d2 as int128)
+    let d128 = (d1 as int128) * (n2 as int128)
+    guard let n = checked_i128_to_i64(n128) else return nil
+    guard let d = checked_i128_to_i64(d128) else return nil
+    make_fraction_i64(n, d)
+
+ScratchNumber div_big_tier(BigInt n1, BigInt d1, BigInt n2, BigInt d2):
+    make_fraction_big(n1.mul(d2), d1.mul(n2))
+
+ScratchNumber? rem_i64_tier(int64 n1, int64 d1, int64 n2, int64 d2):
+    let na128 = (n1 as int128) * (d2 as int128)
+    let nb128 = (n2 as int128) * (d1 as int128)
+    let d128 = (d1 as int128) * (d2 as int128)
+    guard let na = checked_i128_to_i64(na128) else return nil
+    guard let nb = checked_i128_to_i64(nb128) else return nil
+    guard let dd = checked_i128_to_i64(d128) else return nil
+    let i64_min = -9223372036854775807 - 1
+    if na == i64_min and nb == ((0 as int64) - (1 as int64)):
+        return nil
+    var r = na % nb
+    if r != (0 as int64) and (r < (0 as int64)) != (nb < (0 as int64)):
+        let r128 = (r as int128) + (nb as int128)
+        guard let r2 = checked_i128_to_i64(r128) else return nil
+        r = r2
+    make_fraction_i64(r, dd)
+
+ScratchNumber rem_big_tier(BigInt n1, BigInt d1, BigInt n2, BigInt d2):
+    let na = n1.mul(d2.clone())
+    let nb = n2.mul(d1.clone())
+    let d = d1.mul(d2)
+    var r = try na.divmod(nb.clone()) else (BigInt.from_i64(0), BigInt.from_i64(0))
+    let (_, rr) = r
+    var mut rem = rr
+    if !rem.is_zero() and rem.is_negative() != nb.is_negative():
+        rem = rem.add(nb)
+    make_fraction_big(rem, d)
+
+int? compare_i64_tier(int64 n1, int64 d1, int64 n2, int64 d2):
+    if d1 == d2:
+        if n1 < n2:
+            return -1
+        elif n1 > n2:
+            return 1
+        else:
+            return 0
+    let nn1_128 = (n1 as int128) * (d2 as int128)
+    let nn2_128 = (n2 as int128) * (d1 as int128)
+    guard let nn1 = checked_i128_to_i64(nn1_128) else return nil
+    guard let nn2 = checked_i128_to_i64(nn2_128) else return nil
+    if nn1 < nn2:
+        -1
+    elif nn1 > nn2:
+        1
+    else:
+        0
+
+int compare_big_tier(BigInt n1, BigInt d1, BigInt n2, BigInt d2):
+    if d1.compare(d2) == 0:
+        n1.compare(n2)
+    else:
+        let lhs = n1.mul(d2)
+        let rhs = n2.mul(d1)
+        lhs.compare(rhs)
+
+# Real Scratch's `mod` (`operator_mod`) is *floored*, not `rem_owned`'s
+# truncated `%` -- the result always has the same sign as `b` (or is zero),
+# matching JS's own `Math.mod` used by scratch-vm's `operators.js`
+# (`result = n % modulus; if (result / modulus < 0) result += modulus`).
+# Built on `rem_owned`/`add_owned`/`is_negative`/`is_zero` rather than a
+# fresh implementation -- those already carry the exact-arithmetic
+# int/BigInt/Frac/BigFrac/Float tier dispatch, floored-mod is just a
+# sign-correction on top, the same for every tier.
+def ScratchNumber scratch_mod(ScratchNumber a, ScratchNumber b):
+    let r = a.rem_owned(b.clone())
+    if r.is_zero():
+        r
+    elif r.is_negative() != b.is_negative():
+        r.add_owned(b)
+    else:
+        r
+
+# A Scratch runtime value. Real Scratch has exactly these three shapes at
+# the value level (number/string/boolean) -- everything else (lists,
+# sprites...) is a separate concept built on top, not another value shape.
+# `ScratchNumber` (defined above) is a plain Boring struct used here as an
+# enum variant payload -- Boring auto-derives Debug/Clone/PartialEq on every
+# enum it transpiles, `ScratchValue` included, and (since `ScratchNumber` is
+# itself Boring-authored, not an external Rust type) that derive chain just
+# works with no extra plumbing.
+enum ScratchValue:
+    Num(ScratchNumber)
+    Str(string)
+    Bool(bool)
+
+    # Scratch's numeric coercion: a bool is 1/0, a string is parsed as a
+    # number if it looks like one, otherwise treated as 0 (real Scratch's
+    # `+ "abc"` gives NaN in JS, which then compares/adds as NaN -- we don't
+    # have a NaN-carrying variant in the simplified tower, so a non-numeric
+    # string coerces to Num(0) here; this is a deliberate simplification,
+    # revisit if a real project's behavior depends on NaN propagation).
+    req ScratchNumber to_num():
+        # `self.clone()` (not bare `self`): matching a `req` method's `self`
+        # directly matches on `&Self`, and Rust's match-ergonomics binding
+        # mode then binds payload fields by reference (`b: &bool`, `s:
+        # &string`) -- `if b:`/`s == "true"` then fail to type-check against
+        # a `bool`/`string`-shaped literal. Matching an owned clone instead
+        # gives owned bindings, at the cost of one clone per call (cheap:
+        # ScratchValue's variants are a small enum/scalar/Rc<str>).
+        match self.clone():
+            Num(n): n
+            Bool(b):
+                if b:
+                    ScratchNumber.from_i64(1)
+                else:
+                    ScratchNumber.from_i64(0)
+            Str(s): ScratchNumber.from_str_owned(s) else ScratchNumber.from_i64(0)
+
+    # Scratch's boolean coercion in an `if`/`repeat until` condition slot:
+    # a real Boolean reporter block always evaluates to `Bool`, but a
+    # literal/variable plugged into a boolean-shaped input can be a string
+    # or number instead (Scratch's blocks are duck-typed at the slot level).
+    # Real Scratch treats the string "true" (case-sensitive) as true and
+    # everything else -- including numbers -- per its own truthiness table;
+    # we only need this for `repeat until`'s condition operand, which in
+    # practice is always a real Boolean-shaped reporter (operator_equals,
+    # etc.) in every project we load so far, so this is the simple/obvious
+    # case, not yet stress-tested against a project relying on the string
+    # "true" or a non-Bool truthy value in a condition slot.
+    req bool truthy():
+        match self.clone():
+            Bool(b): b
+            Str(s): s == "true"
+            Num(n): !n.is_zero()
+
+    as string:
+        match self:
+            Num(n): "{n}"
+            Str(s): s
+            Bool(b): "{b}"
+
+    # `Some` only when this value is UNAMBIGUOUSLY numeric -- a `Num`/`Bool`
+    # always is, a `Str` only if it actually parses as a number. Different
+    # from `to_num()`, which always produces *some* number (defaulting a
+    # non-numeric string to 0) -- that default is right for arithmetic
+    # (`3 + "abc"` needs *a* number), but wrong for equality: two different
+    # non-numeric strings must not compare equal just because they both
+    # default to 0 (confirmed the hard way -- an earlier `loosely_equals`
+    # built on `to_num()` directly made `"x" = "z"` true, breaking
+    # `data_itemnumoflist`'s search the moment two different non-numeric
+    # items were ever compared, not just when arithmetic used them).
+    req ScratchNumber? try_num():
+        match self.clone():
+            Num(n): n
+            Bool(b):
+                if b:
+                    ScratchNumber.from_i64(1)
+                else:
+                    ScratchNumber.from_i64(0)
+            Str(s):
+                # Explicit if-let/nil rewrap, not a bare tail expression --
+                # `ScratchNumber.from_str_owned(s)` is already `Option<...>`,
+                # and a `T?`-returning function auto-wraps a *plain* tail
+                # value in `Some(...)` but doesn't know to skip that wrap
+                # when the value is already an `Option` -- confirmed
+                # earlier with `block_field_id`/`target_find_hat`, which hit
+                # the identical double-wrap and needed the same fix.
+                if let n = ScratchNumber.from_str_owned(s):
+                    n
+                else:
+                    nil
+
+    # Scratch's "loose" value equality: numeric comparison when BOTH sides
+    # are unambiguously numeric (matching real Scratch's own `operator_equals`
+    # rule), case-insensitive string comparison otherwise -- reused by
+    # `Equals`/`operator_equals` and by `list contains`/`item # of list` so
+    # both stay consistent with each other.
+    req bool loosely_equals(ScratchValue other):
+        if let a = self.try_num():
+            if let b = other.try_num():
+                a.eq_owned(b)
+            else:
+                "{self}".toLower() == "{other}".toLower()
+        else:
+            "{self}".toLower() == "{other}".toLower()
+

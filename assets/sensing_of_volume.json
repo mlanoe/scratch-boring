@@ -1,0 +1,206 @@
+{
+  "targets": [
+    {
+      "isStage": true,
+      "name": "Stage",
+      "variables": {
+        "var_result_a_volume": [
+          "result_a_volume",
+          0
+        ],
+        "var_result_stage_volume": [
+          "result_stage_volume",
+          0
+        ]
+      },
+      "lists": {},
+      "broadcasts": {},
+      "blocks": {},
+      "comments": {},
+      "currentCostume": 0,
+      "costumes": [
+        {
+          "name": "backdrop1",
+          "dataFormat": "svg",
+          "assetId": "bg",
+          "md5ext": "bg.svg",
+          "rotationCenterX": 0,
+          "rotationCenterY": 0
+        }
+      ],
+      "sounds": [],
+      "volume": 100,
+      "layerOrder": 0,
+      "tempo": 60,
+      "videoTransparency": 50,
+      "videoState": "on",
+      "textToSpeechLanguage": null
+    },
+    {
+      "isStage": false,
+      "name": "A",
+      "variables": {},
+      "lists": {},
+      "broadcasts": {},
+      "blocks": {
+        "hat1": {
+          "opcode": "event_whenflagclicked",
+          "next": "setvol1",
+          "parent": null,
+          "inputs": {},
+          "fields": {},
+          "shadow": false,
+          "topLevel": true,
+          "x": 0,
+          "y": 0
+        },
+        "setvol1": {
+          "opcode": "sound_setvolumeto",
+          "next": "set_a_volume",
+          "parent": "hat1",
+          "inputs": {
+            "VOLUME": [
+              1,
+              [
+                4,
+                "42"
+              ]
+            ]
+          },
+          "fields": {},
+          "shadow": false,
+          "topLevel": false
+        },
+        "menu_a": {
+          "opcode": "sensing_of_object_menu",
+          "next": null,
+          "parent": "expr_a_volume",
+          "inputs": {},
+          "fields": {
+            "OBJECT": [
+              "A",
+              null
+            ]
+          },
+          "shadow": true,
+          "topLevel": false
+        },
+        "expr_a_volume": {
+          "opcode": "sensing_of",
+          "next": null,
+          "parent": "set_a_volume",
+          "inputs": {
+            "OBJECT": [
+              1,
+              "menu_a"
+            ]
+          },
+          "fields": {
+            "PROPERTY": [
+              "volume",
+              null
+            ]
+          },
+          "shadow": false,
+          "topLevel": false
+        },
+        "set_a_volume": {
+          "opcode": "data_setvariableto",
+          "next": "set_stage_volume",
+          "parent": "setvol1",
+          "inputs": {
+            "VALUE": [
+              1,
+              "expr_a_volume"
+            ]
+          },
+          "fields": {
+            "VARIABLE": [
+              "result_a_volume",
+              "var_result_a_volume"
+            ]
+          },
+          "shadow": false,
+          "topLevel": false
+        },
+        "menu_stage": {
+          "opcode": "sensing_of_object_menu",
+          "next": null,
+          "parent": "expr_stage_volume",
+          "inputs": {},
+          "fields": {
+            "OBJECT": [
+              "_stage_",
+              null
+            ]
+          },
+          "shadow": true,
+          "topLevel": false
+        },
+        "expr_stage_volume": {
+          "opcode": "sensing_of",
+          "next": null,
+          "parent": "set_stage_volume",
+          "inputs": {
+            "OBJECT": [
+              1,
+              "menu_stage"
+            ]
+          },
+          "fields": {
+            "PROPERTY": [
+              "volume",
+              null
+            ]
+          },
+          "shadow": false,
+          "topLevel": false
+        },
+        "set_stage_volume": {
+          "opcode": "data_setvariableto",
+          "next": null,
+          "parent": "set_a_volume",
+          "inputs": {
+            "VALUE": [
+              1,
+              "expr_stage_volume"
+            ]
+          },
+          "fields": {
+            "VARIABLE": [
+              "result_stage_volume",
+              "var_result_stage_volume"
+            ]
+          },
+          "shadow": false,
+          "topLevel": false
+        }
+      },
+      "comments": {},
+      "currentCostume": 0,
+      "costumes": [
+        {
+          "name": "a",
+          "dataFormat": "svg",
+          "assetId": "cA",
+          "md5ext": "cA.svg",
+          "rotationCenterX": 0,
+          "rotationCenterY": 0
+        }
+      ],
+      "sounds": [],
+      "volume": 100,
+      "layerOrder": 1,
+      "visible": true,
+      "x": 0,
+      "y": 0,
+      "size": 100,
+      "direction": 90,
+      "draggable": false,
+      "rotationStyle": "all around"
+    }
+  ],
+  "monitors": [],
+  "extensions": [],
+  "meta": {}
+}

@@ -1,0 +1,178 @@
+{
+  "targets": [
+    {
+      "isStage": true,
+      "name": "Stage",
+      "variables": {
+        "var_dist_to_b": ["dist_to_b", 0],
+        "var_dist_to_mouse": ["dist_to_mouse", 0]
+      },
+      "lists": {},
+      "broadcasts": {},
+      "blocks": {},
+      "comments": {},
+      "currentCostume": 0,
+      "costumes": [
+        {
+          "name": "backdrop1",
+          "dataFormat": "svg",
+          "assetId": "bg",
+          "md5ext": "bg.svg",
+          "rotationCenterX": 0,
+          "rotationCenterY": 0
+        }
+      ],
+      "sounds": [],
+      "volume": 100,
+      "layerOrder": 0,
+      "tempo": 60,
+      "videoTransparency": 50,
+      "videoState": "on",
+      "textToSpeechLanguage": null
+    },
+    {
+      "isStage": false,
+      "name": "A",
+      "variables": {},
+      "lists": {},
+      "broadcasts": {},
+      "blocks": {
+        "hat1": {
+          "opcode": "event_whenflagclicked",
+          "next": "set_dist_to_b",
+          "parent": null,
+          "inputs": {},
+          "fields": {},
+          "shadow": false,
+          "topLevel": true,
+          "x": 0,
+          "y": 0
+        },
+        "expr_dist_to_b": {
+          "opcode": "sensing_distanceto",
+          "next": null,
+          "parent": "set_dist_to_b",
+          "inputs": {
+            "DISTANCETOMENU": [1, [10, "B"]]
+          },
+          "fields": {},
+          "shadow": false,
+          "topLevel": false
+        },
+        "set_dist_to_b": {
+          "opcode": "data_setvariableto",
+          "next": "set_dist_to_mouse",
+          "parent": "hat1",
+          "inputs": {
+            "VALUE": [1, "expr_dist_to_b"]
+          },
+          "fields": {
+            "VARIABLE": ["dist_to_b", "var_dist_to_b"]
+          },
+          "shadow": false,
+          "topLevel": false
+        },
+        "expr_dist_to_mouse": {
+          "opcode": "sensing_distanceto",
+          "next": null,
+          "parent": "set_dist_to_mouse",
+          "inputs": {
+            "DISTANCETOMENU": [1, [10, "_mouse_"]]
+          },
+          "fields": {},
+          "shadow": false,
+          "topLevel": false
+        },
+        "set_dist_to_mouse": {
+          "opcode": "data_setvariableto",
+          "next": null,
+          "parent": "set_dist_to_b",
+          "inputs": {
+            "VALUE": [1, "expr_dist_to_mouse"]
+          },
+          "fields": {
+            "VARIABLE": ["dist_to_mouse", "var_dist_to_mouse"]
+          },
+          "shadow": false,
+          "topLevel": false
+        }
+      },
+      "comments": {},
+      "currentCostume": 0,
+      "costumes": [
+        {
+          "name": "costumeA",
+          "dataFormat": "svg",
+          "assetId": "cA",
+          "md5ext": "cA.svg",
+          "rotationCenterX": 0,
+          "rotationCenterY": 0
+        }
+      ],
+      "sounds": [],
+      "volume": 100,
+      "layerOrder": 1,
+      "visible": true,
+      "x": 0,
+      "y": 0,
+      "size": 100,
+      "direction": 90,
+      "draggable": false,
+      "rotationStyle": "all around"
+    },
+    {
+      "isStage": false,
+      "name": "B",
+      "variables": {},
+      "lists": {},
+      "broadcasts": {},
+      "blocks": {},
+      "comments": {},
+      "currentCostume": 0,
+      "costumes": [
+        {
+          "name": "costumeB",
+          "dataFormat": "svg",
+          "assetId": "cB",
+          "md5ext": "cB.svg",
+          "rotationCenterX": 0,
+          "rotationCenterY": 0
+        }
+      ],
+      "sounds": [],
+      "volume": 100,
+      "layerOrder": 2,
+      "visible": true,
+      "x": 30,
+      "y": 40,
+      "size": 100,
+      "direction": 90,
+      "draggable": false,
+      "rotationStyle": "all around"
+    }
+  ],
+  "monitors": [
+    {
+      "id": "var_dist_to_b",
+      "mode": "default",
+      "opcode": "data_variable",
+      "params": {"VARIABLE": "dist_to_b"},
+      "spriteName": null,
+      "value": 0,
+      "width": 0, "height": 0, "x": 0, "y": 20,
+      "visible": true
+    },
+    {
+      "id": "var_dist_to_mouse",
+      "mode": "default",
+      "opcode": "data_variable",
+      "params": {"VARIABLE": "dist_to_mouse"},
+      "spriteName": null,
+      "value": 0,
+      "width": 0, "height": 0, "x": 0, "y": 40,
+      "visible": true
+    }
+  ],
+  "extensions": [],
+  "meta": {}
+}

@@ -1,0 +1,253 @@
+{
+  "targets": [
+    {
+      "isStage": true,
+      "name": "Stage",
+      "variables": {
+        "var_score": ["score", 42],
+        "var_result_x": ["result_x", 0],
+        "var_result_var": ["result_var", 0],
+        "var_result_backdrop": ["result_backdrop", 0]
+      },
+      "lists": {},
+      "broadcasts": {},
+      "blocks": {},
+      "comments": {},
+      "currentCostume": 0,
+      "costumes": [
+        {
+          "name": "backdrop1",
+          "dataFormat": "svg",
+          "assetId": "bg",
+          "md5ext": "bg.svg",
+          "rotationCenterX": 0,
+          "rotationCenterY": 0
+        }
+      ],
+      "sounds": [],
+      "volume": 100,
+      "layerOrder": 0,
+      "tempo": 60,
+      "videoTransparency": 50,
+      "videoState": "on",
+      "textToSpeechLanguage": null
+    },
+    {
+      "isStage": false,
+      "name": "A",
+      "variables": {},
+      "lists": {},
+      "broadcasts": {},
+      "blocks": {
+        "hat1": {
+          "opcode": "event_whenflagclicked",
+          "next": "set_result_x",
+          "parent": null,
+          "inputs": {},
+          "fields": {},
+          "shadow": false,
+          "topLevel": true,
+          "x": 0,
+          "y": 0
+        },
+        "expr_of_x": {
+          "opcode": "sensing_of",
+          "next": null,
+          "parent": "set_result_x",
+          "inputs": {
+            "OBJECT": [1, "menu_x"]
+          },
+          "fields": {
+            "PROPERTY": ["x position", null]
+          },
+          "shadow": false,
+          "topLevel": false
+        },
+        "menu_x": {
+          "opcode": "sensing_of_object_menu",
+          "next": null,
+          "parent": "expr_of_x",
+          "inputs": {},
+          "fields": {
+            "OBJECT": ["B", null]
+          },
+          "shadow": true,
+          "topLevel": false
+        },
+        "set_result_x": {
+          "opcode": "data_setvariableto",
+          "next": "set_result_var",
+          "parent": "hat1",
+          "inputs": {
+            "VALUE": [1, "expr_of_x"]
+          },
+          "fields": {
+            "VARIABLE": ["result_x", "var_result_x"]
+          },
+          "shadow": false,
+          "topLevel": false
+        },
+        "expr_of_var": {
+          "opcode": "sensing_of",
+          "next": null,
+          "parent": "set_result_var",
+          "inputs": {
+            "OBJECT": [1, "menu_stage_var"]
+          },
+          "fields": {
+            "PROPERTY": ["score", null]
+          },
+          "shadow": false,
+          "topLevel": false
+        },
+        "menu_stage_var": {
+          "opcode": "sensing_of_object_menu",
+          "next": null,
+          "parent": "expr_of_var",
+          "inputs": {},
+          "fields": {
+            "OBJECT": ["_stage_", null]
+          },
+          "shadow": true,
+          "topLevel": false
+        },
+        "set_result_var": {
+          "opcode": "data_setvariableto",
+          "next": "set_result_backdrop",
+          "parent": "set_result_x",
+          "inputs": {
+            "VALUE": [1, "expr_of_var"]
+          },
+          "fields": {
+            "VARIABLE": ["result_var", "var_result_var"]
+          },
+          "shadow": false,
+          "topLevel": false
+        },
+        "expr_of_backdrop": {
+          "opcode": "sensing_of",
+          "next": null,
+          "parent": "set_result_backdrop",
+          "inputs": {
+            "OBJECT": [1, "menu_stage_backdrop"]
+          },
+          "fields": {
+            "PROPERTY": ["backdrop #", null]
+          },
+          "shadow": false,
+          "topLevel": false
+        },
+        "menu_stage_backdrop": {
+          "opcode": "sensing_of_object_menu",
+          "next": null,
+          "parent": "expr_of_backdrop",
+          "inputs": {},
+          "fields": {
+            "OBJECT": ["_stage_", null]
+          },
+          "shadow": true,
+          "topLevel": false
+        },
+        "set_result_backdrop": {
+          "opcode": "data_setvariableto",
+          "next": null,
+          "parent": "set_result_var",
+          "inputs": {
+            "VALUE": [1, "expr_of_backdrop"]
+          },
+          "fields": {
+            "VARIABLE": ["result_backdrop", "var_result_backdrop"]
+          },
+          "shadow": false,
+          "topLevel": false
+        }
+      },
+      "comments": {},
+      "currentCostume": 0,
+      "costumes": [
+        {
+          "name": "costumeA",
+          "dataFormat": "svg",
+          "assetId": "cA",
+          "md5ext": "cA.svg",
+          "rotationCenterX": 0,
+          "rotationCenterY": 0
+        }
+      ],
+      "sounds": [],
+      "volume": 100,
+      "layerOrder": 1,
+      "visible": true,
+      "x": 0,
+      "y": 0,
+      "size": 100,
+      "direction": 90,
+      "draggable": false,
+      "rotationStyle": "all around"
+    },
+    {
+      "isStage": false,
+      "name": "B",
+      "variables": {},
+      "lists": {},
+      "broadcasts": {},
+      "blocks": {},
+      "comments": {},
+      "currentCostume": 0,
+      "costumes": [
+        {
+          "name": "costumeB",
+          "dataFormat": "svg",
+          "assetId": "cB",
+          "md5ext": "cB.svg",
+          "rotationCenterX": 0,
+          "rotationCenterY": 0
+        }
+      ],
+      "sounds": [],
+      "volume": 100,
+      "layerOrder": 2,
+      "visible": true,
+      "x": 30,
+      "y": 40,
+      "size": 100,
+      "direction": 90,
+      "draggable": false,
+      "rotationStyle": "all around"
+    }
+  ],
+  "monitors": [
+    {
+      "id": "var_result_x",
+      "mode": "default",
+      "opcode": "data_variable",
+      "params": {"VARIABLE": "result_x"},
+      "spriteName": null,
+      "value": 0,
+      "width": 0, "height": 0, "x": 0, "y": 20,
+      "visible": true
+    },
+    {
+      "id": "var_result_var",
+      "mode": "default",
+      "opcode": "data_variable",
+      "params": {"VARIABLE": "result_var"},
+      "spriteName": null,
+      "value": 0,
+      "width": 0, "height": 0, "x": 0, "y": 40,
+      "visible": true
+    },
+    {
+      "id": "var_result_backdrop",
+      "mode": "default",
+      "opcode": "data_variable",
+      "params": {"VARIABLE": "result_backdrop"},
+      "spriteName": null,
+      "value": 0,
+      "width": 0, "height": 0, "x": 0, "y": 60,
+      "visible": true
+    }
+  ],
+  "extensions": [],
+  "meta": {}
+}

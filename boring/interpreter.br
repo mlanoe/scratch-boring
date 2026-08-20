@@ -1,0 +1,1877 @@
+# The tree-walking evaluator/executor itself -- `eval` (reporters),
+# `exec_simple` (every non-control-flow stack block), `step_thread` (the
+# real pausable scheduler's actual stepping logic -- control flow,
+# including `wait`/`forever`/`wait until`, drives an explicit `Thread`
+# frame stack instead of native Rust recursion; see `Thread`/`FrameKind`'s
+# own doc comments in `runtime.br`), plus `normalize_direction`.
+#
+# `exec_simple` used to be a single `exec` handling *both* leaf statements
+# and control flow via native recursion (`exec(stmt, ...)` calling itself
+# for a loop/if's body) -- that stopped being possible once a script could
+# legitimately still be mid-body when a tick ends (nothing can "pause" a
+# real Rust call stack across two separate calls). `step_thread` is what
+# replaced it; `exec_simple` kept the name-shape for everything that
+# genuinely never spans a tick boundary (unchanged from the old `exec`'s
+# own bodies for those cases, just no longer responsible for control
+# flow).
+#
+# Sibling file to `scratch.br`, pulled in via a bare `use interpreter`
+# there -- same mechanism as `values.br`/`runtime.br` (see either's own
+# header comment). Split out once `scratch.br` grew past ~3100 lines --
+# this is the one piece that actually *operates on* `runtime.br`'s shape
+# and `linker.br`'s output `Block` AST, kept separate from both: distinct
+# from "what the data looks like" (`runtime.br`) and "how a raw project
+# becomes that data" (`linker.br`).
+#
+# `Datelike`/`Timelike` are never named directly anywhere below -- they're
+# imported purely to bring `DateTime<Local>`'s `.year()`/`.month()`/
+# `.day()`/`.weekday()`/`.hour()`/`.minute()`/`.second()` extension methods
+# into scope (`sensing_current`'s own `CurrentDateTime` case), exactly the
+# way real Rust code calling those methods needs the trait `use`d even
+# though the trait name itself never appears again.
+use chrono.Local
+use chrono.Datelike
+use chrono.Timelike
+
+# `vars` is a `var` (not `mut`) parameter deliberately: per CLAUDE.md, `var`
+# params pass `&mut T` with mutations visible at the call site, whereas `mut`
+# would pass by value (cloned on every recursive call) and every mutation
+# inside `exec` would be lost the instant that call frame returns -- fatal
+# for an interpreter that needs `set variable to`/`change by` to actually
+# stick across the whole script. Confirmed against a live `boring` bug
+# (dict `[key]` indexing + a `var` struct param cloning instead of
+# referencing, both fixed upstream) before relying on this.
+def ScratchValue eval(Block b, var Vars vars, Frame frame, ProcTable procs, var Lists lists, Broadcasts broadcasts, var Positions positions, KeyboardState keyboard, MouseState mouse, ScratchTimer timer, var Rng rng, var LooksStates looks, TargetCostumes target_costumes, TargetCostumeDims costume_dims, SoundQueue sound_queue):
+    match b.kind:
+        Literal(v): v
+        VarGet(id): vars.get(id, frame.target_id.clone())
+        ArgGet(name): frame.get(name)
+        Add(l, r):
+            ScratchValue.Num(eval(l, vars, frame, procs, lists, broadcasts, positions, keyboard, mouse, timer, rng, looks, target_costumes, costume_dims, sound_queue).to_num().add_owned(eval(r, vars, frame, procs, lists, broadcasts, positions, keyboard, mouse, timer, rng, looks, target_costumes, costume_dims, sound_queue).to_num()))
+        Sub(l, r):
+            ScratchValue.Num(eval(l, vars, frame, procs, lists, broadcasts, positions, keyboard, mouse, timer, rng, looks, target_costumes, costume_dims, sound_queue).to_num().sub_owned(eval(r, vars, frame, procs, lists, broadcasts, positions, keyboard, mouse, timer, rng, looks, target_costumes, costume_dims, sound_queue).to_num()))
+        Equals(l, r):
+            # `loosely_equals`, not `.to_num().eq_owned(...)` -- the latter
+            # coerces every non-numeric string to 0 first, making any two
+            # non-numeric strings compare equal to each other (see
+            # `loosely_equals`'s own doc comment for how that surfaced).
+            ScratchValue.Bool(eval(l, vars, frame, procs, lists, broadcasts, positions, keyboard, mouse, timer, rng, looks, target_costumes, costume_dims, sound_queue).loosely_equals(eval(r, vars, frame, procs, lists, broadcasts, positions, keyboard, mouse, timer, rng, looks, target_costumes, costume_dims, sound_queue)))
+        Gt(l, r):
+            ScratchValue.Bool(eval(l, vars, frame, procs, lists, broadcasts, positions, keyboard, mouse, timer, rng, looks, target_costumes, costume_dims, sound_queue).to_num().gt_owned(eval(r, vars, frame, procs, lists, broadcasts, positions, keyboard, mouse, timer, rng, looks, target_costumes, costume_dims, sound_queue).to_num()))
+        Lt(l, r):
+            ScratchValue.Bool(eval(l, vars, frame, procs, lists, broadcasts, positions, keyboard, mouse, timer, rng, looks, target_costumes, costume_dims, sound_queue).to_num().lt_owned(eval(r, vars, frame, procs, lists, broadcasts, positions, keyboard, mouse, timer, rng, looks, target_costumes, costume_dims, sound_queue).to_num()))
+        Mul(l, r):
+            ScratchValue.Num(eval(l, vars, frame, procs, lists, broadcasts, positions, keyboard, mouse, timer, rng, looks, target_costumes, costume_dims, sound_queue).to_num().mul_owned(eval(r, vars, frame, procs, lists, broadcasts, positions, keyboard, mouse, timer, rng, looks, target_costumes, costume_dims, sound_queue).to_num()))
+        Div(l, r):
+            ScratchValue.Num(eval(l, vars, frame, procs, lists, broadcasts, positions, keyboard, mouse, timer, rng, looks, target_costumes, costume_dims, sound_queue).to_num().div_owned(eval(r, vars, frame, procs, lists, broadcasts, positions, keyboard, mouse, timer, rng, looks, target_costumes, costume_dims, sound_queue).to_num()))
+        Mod(l, r):
+            ScratchValue.Num(scratch_mod(eval(l, vars, frame, procs, lists, broadcasts, positions, keyboard, mouse, timer, rng, looks, target_costumes, costume_dims, sound_queue).to_num(), eval(r, vars, frame, procs, lists, broadcasts, positions, keyboard, mouse, timer, rng, looks, target_costumes, costume_dims, sound_queue).to_num()))
+        And(l, r):
+            # Both sides eagerly evaluated (no short-circuit) -- matches
+            # every other binary reporter here (`Add`/`Gt`/... all
+            # unconditionally evaluate both operands too), and real Scratch
+            # blocks have no side-effecting reporters for short-circuiting
+            # to ever matter for anyway.
+            ScratchValue.Bool(eval(l, vars, frame, procs, lists, broadcasts, positions, keyboard, mouse, timer, rng, looks, target_costumes, costume_dims, sound_queue).truthy() and eval(r, vars, frame, procs, lists, broadcasts, positions, keyboard, mouse, timer, rng, looks, target_costumes, costume_dims, sound_queue).truthy())
+        Or(l, r):
+            ScratchValue.Bool(eval(l, vars, frame, procs, lists, broadcasts, positions, keyboard, mouse, timer, rng, looks, target_costumes, costume_dims, sound_queue).truthy() or eval(r, vars, frame, procs, lists, broadcasts, positions, keyboard, mouse, timer, rng, looks, target_costumes, costume_dims, sound_queue).truthy())
+        Not(v):
+            ScratchValue.Bool(!eval(v, vars, frame, procs, lists, broadcasts, positions, keyboard, mouse, timer, rng, looks, target_costumes, costume_dims, sound_queue).truthy())
+        Join(l, r):
+            ScratchValue.Str("{eval(l, vars, frame, procs, lists, broadcasts, positions, keyboard, mouse, timer, rng, looks, target_costumes, costume_dims, sound_queue)}{eval(r, vars, frame, procs, lists, broadcasts, positions, keyboard, mouse, timer, rng, looks, target_costumes, costume_dims, sound_queue)}")
+        LetterOf(idx_expr, str_expr):
+            let s = "{eval(str_expr, vars, frame, procs, lists, broadcasts, positions, keyboard, mouse, timer, rng, looks, target_costumes, costume_dims, sound_queue)}"
+            let idx = eval(idx_expr, vars, frame, procs, lists, broadcasts, positions, keyboard, mouse, timer, rng, looks, target_costumes, costume_dims, sound_queue).to_num().to_isize_checked() else 0
+            # 1-based; real Scratch reports an empty string for any
+            # out-of-range index rather than erroring or wrapping/clamping
+            # (matching `Lists.item_at`'s own out-of-range convention).
+            if idx >= 1 and idx <= s.length:
+                let idx0 = idx - 1
+                ScratchValue.Str(s[idx0..idx])
+            else:
+                ScratchValue.Str("")
+        StringLength(str_expr):
+            ScratchValue.Num(ScratchNumber.from_isize("{eval(str_expr, vars, frame, procs, lists, broadcasts, positions, keyboard, mouse, timer, rng, looks, target_costumes, costume_dims, sound_queue)}".length))
+        Contains(hay_expr, needle_expr):
+            # Case-insensitive, matching real Scratch's own `operator_contains`.
+            let hay = "{eval(hay_expr, vars, frame, procs, lists, broadcasts, positions, keyboard, mouse, timer, rng, looks, target_costumes, costume_dims, sound_queue)}".toLower()
+            let needle = "{eval(needle_expr, vars, frame, procs, lists, broadcasts, positions, keyboard, mouse, timer, rng, looks, target_costumes, costume_dims, sound_queue)}".toLower()
+            ScratchValue.Bool(hay.contains(needle.asRef()))
+        MathOp(op, num_expr):
+            let n = eval(num_expr, vars, frame, procs, lists, broadcasts, positions, keyboard, mouse, timer, rng, looks, target_costumes, costume_dims, sound_queue).to_num().to_f64()
+            # Trig functions convert degrees<->radians at the boundary
+            # (0.017453292 = pi/180, 57.29577951 = 180/pi) -- same literal-
+            # constant convention `Position.move_dx`/`move_dy` already use,
+            # matching real Scratch's own degree-based trig blocks exactly
+            # (`MathUtil` in scratch-vm works in degrees throughout).
+            let result = match op:
+                "abs": abs(n)
+                "floor": floor(n)
+                "ceiling": ceil(n)
+                # `operator_round` is a real, standalone Scratch block
+                # (its own `NUM` input, no OPERATOR field) -- not one of
+                # `operator_mathop`'s own dropdown values -- but the
+                # linker maps it into this same `MathOp` variant with a
+                # made-up `"round"` operator string rather than a whole
+                # new `BlockKind`, since the actual math is a one-line
+                # addition here. Ported directly from real scratch-vm's
+                # own `Math.round`, which floors after adding 0.5 for
+                # *every* input including negatives (`Math.round(-2.5) ==
+                # -2`, not -3) -- `floor(n + 0.5)` is the exact same
+                # formula, not an approximation of it.
+                "round": floor(n + 0.5)
+                "sqrt": sqrt(n)
+                "sin": sin(n * 0.017453292)
+                "cos": cos(n * 0.017453292)
+                "tan": tan(n * 0.017453292)
+                "asin": asin(n) * 57.29577951
+                "acos": acos(n) * 57.29577951
+                "atan": atan(n) * 57.29577951
+                "ln": log(n)
+                "log": log10(n)
+                "e ^": exp(n)
+                "10 ^": pow(10.0, n)
+                _: 0.0
+            ScratchValue.Num(ScratchNumber.from_f64(result))
+        Random(from_expr, to_expr):
+            # Ported directly from real scratch-vm's own `operator_random`
+            # (`operators.js`): equal bounds return that value outright
+            # (skips ever touching `rng` at all); otherwise, if *either*
+            # bound has a nonzero fractional part (checked on the
+            # *numeric value*, via `% 1.0`, not on which `ScratchValue`
+            # variant it happened to arrive as -- a Str "5.0" and a Num
+            # 5.0 must behave identically here, matching real Scratch),
+            # the result is a uniform float in `[min, max]`; otherwise a
+            # uniform *integer* in `[min, max]` inclusive (the `floor(r *
+            # (range + 1)) + min` shape is what makes it inclusive of
+            # `max`, not `[min, max)`).
+            let from_f = eval(from_expr, vars, frame, procs, lists, broadcasts, positions, keyboard, mouse, timer, rng, looks, target_costumes, costume_dims, sound_queue).to_num().to_f64()
+            let to_f = eval(to_expr, vars, frame, procs, lists, broadcasts, positions, keyboard, mouse, timer, rng, looks, target_costumes, costume_dims, sound_queue).to_num().to_f64()
+            if from_f == to_f:
+                ScratchValue.Num(ScratchNumber.from_f64(from_f))
+            else:
+                let min_v = if from_f < to_f: from_f else: to_f
+                let max_v = if from_f < to_f: to_f else: from_f
+                let use_float = (min_v % 1.0 != 0.0) or (max_v % 1.0 != 0.0)
+                let r = rng.next_f64_01()
+                if use_float:
+                    ScratchValue.Num(ScratchNumber.from_f64(r * (max_v - min_v) + min_v))
+                else:
+                    ScratchValue.Num(ScratchNumber.from_f64(floor(r * ((max_v - min_v) + 1.0)) + min_v))
+        ListItemAt(list_id, idx_expr):
+            let idx_val = eval(idx_expr, vars, frame, procs, lists, broadcasts, positions, keyboard, mouse, timer, rng, looks, target_costumes, costume_dims, sound_queue)
+            let len = lists.length(list_id.clone(), frame.target_id.clone())
+            let idx0 = resolve_list_index(idx_val, len, false)
+            lists.item_at(list_id, frame.target_id.clone(), idx0)
+        ListItemNum(list_id, item_expr):
+            let item = eval(item_expr, vars, frame, procs, lists, broadcasts, positions, keyboard, mouse, timer, rng, looks, target_costumes, costume_dims, sound_queue)
+            ScratchValue.Num(ScratchNumber.from_isize(lists.index_of(list_id, frame.target_id.clone(), item)))
+        ListLength(list_id):
+            ScratchValue.Num(ScratchNumber.from_isize(lists.length(list_id, frame.target_id.clone())))
+        ListContains(list_id, item_expr):
+            let item = eval(item_expr, vars, frame, procs, lists, broadcasts, positions, keyboard, mouse, timer, rng, looks, target_costumes, costume_dims, sound_queue)
+            let found = lists.has_item(list_id, frame.target_id.clone(), item)
+            ScratchValue.Bool(found)
+        XPosition:
+            ScratchValue.Num(ScratchNumber.from_f32(positions.get(frame.target_id.clone()).x))
+        YPosition:
+            ScratchValue.Num(ScratchNumber.from_f32(positions.get(frame.target_id.clone()).y))
+        Direction:
+            ScratchValue.Num(ScratchNumber.from_f32(positions.get(frame.target_id.clone()).direction))
+        KeyPressed(key_expr):
+            let key_option = "{eval(key_expr, vars, frame, procs, lists, broadcasts, positions, keyboard, mouse, timer, rng, looks, target_costumes, costume_dims, sound_queue)}"
+            ScratchValue.Bool(keyboard.is_pressed(key_option))
+        MouseX:
+            ScratchValue.Num(ScratchNumber.from_f32(mouse.x))
+        MouseY:
+            ScratchValue.Num(ScratchNumber.from_f32(mouse.y))
+        MouseDown:
+            ScratchValue.Bool(mouse.down)
+        Loudness:
+            ScratchValue.Num(ScratchNumber.from_f32(current_loudness()))
+        IsLoud:
+            ScratchValue.Bool(current_loudness() > 10.0)
+        Timer:
+            ScratchValue.Num(ScratchNumber.from_f32(timer.elapsed))
+        Answer:
+            ScratchValue.Str(vars.get_answer())
+        CurrentDateTime(which):
+            # Real local wall-clock time -- `chrono::Local::now()`, ported
+            # from real scratch-vm's own `current()` (`Scratch3SensingBlocks`).
+            # `DAYOFWEEK` is the one field needing a conversion: chrono's
+            # `num_days_from_sunday()` is already 0-based Sun=0..Sat=6,
+            # exactly matching JS's own `Date.getDay()` that real Scratch's
+            # `current()` reads -- `+ 1` for Scratch's 1-based convention.
+            # `YEAR`/`MONTH`/`DATE`/`HOUR`/`MINUTE`/`SECOND` need no such
+            # adjustment (chrono's `.month()`/`.day()` are already 1-based,
+            # same as JS's `getMonth() + 1`/`getDate()`). An unrecognized
+            # menu value reports `0`, matching real Scratch's own switch's
+            # implicit default.
+            let now = Local.now()
+            var mut int value = 0
+            if which == "YEAR":
+                value = now.year() as isize
+            elif which == "MONTH":
+                value = now.month() as isize
+            elif which == "DATE":
+                value = now.day() as isize
+            elif which == "DAYOFWEEK":
+                value = (now.weekday().num_days_from_sunday() as isize) + 1
+            elif which == "HOUR":
+                value = now.hour() as isize
+            elif which == "MINUTE":
+                value = now.minute() as isize
+            elif which == "SECOND":
+                value = now.second() as isize
+            ScratchValue.Num(ScratchNumber.from_isize(value))
+        DaysSince2000:
+            # Real scratch-vm's own `daysSince2000` (`Scratch3SensingBlocks`)
+            # reads as local-timezone-dependent: `start = new Date(2000,0,1)`
+            # (LOCAL midnight), `today = new Date()`, then a `dstAdjust`
+            # correction added back in. Worked the algebra by hand (see this
+            # round's own README/memory note) before trusting it: the
+            # correction exactly cancels `start`'s own local UTC offset,
+            # because `start.valueOf() == Date.UTC(2000,0,1) + start_offset*
+            # 60000` (how the JS engine builds a `Date` from local
+            # components) and the correction adds exactly `start_offset*
+            # 60000` back — leaving `(today.valueOf() - Date.UTC(2000,0,1))
+            # / msPerDay`, a plain elapsed-time-since-a-fixed-UTC-instant
+            # calculation with NO local-timezone dependence left at all
+            # (every viewer worldwide reports the same value at the same
+            # real instant, confirmed against real Scratch community
+            # knowledge of this reporter's own behavior). `946684800000` is
+            # that fixed constant, `Date.UTC(2000, 0, 1)`.
+            let ms_per_day = 86400000.0
+            let epoch_2000_utc_ms = 946684800000.0
+            let now_ms = Local.now().timestamp_millis() as float64
+            ScratchValue.Num(ScratchNumber.from_f64((now_ms - epoch_2000_utc_ms) / ms_per_day))
+        SizePercent:
+            ScratchValue.Num(ScratchNumber.from_f32(looks.get(frame.target_id.clone()).size))
+        Volume:
+            # `SoundQueue.volumes` is genuinely per-instance already
+            # (copied on clone creation) -- no origin resolution needed,
+            # same reasoning `sensing_of`'s own "volume" property already
+            # established (`SensingOf`'s own doc comment).
+            ScratchValue.Num(ScratchNumber.from_f32(sound_queue.get_volume(frame.target_id.clone())))
+        Touching(what_expr):
+            # Ported from real scratch-vm's own `touchingObject` dispatch
+            # (`_mouse_`/`_edge_`/a sprite name) at the AABB level -- see
+            # `Touching`'s own doc comment in `runtime.br`'s `BlockKind`
+            # for the pixel-perfect-vs-AABB trade this makes.
+            #
+            # `costume_dims.get` needs the calling instance's own *origin*
+            # name -- `TargetCostumeDims` (like `TargetCostumes`) stays
+            # keyed by origin name only (`TargetCostumeDims.get`'s own doc
+            # comment), so a live clone's own unique id would never match
+            # otherwise, silently falling back to the generic 40x40
+            # placeholder box instead of its real costume size. `eval` now
+            # has `SoundQueue`/`instance_type_of` access (threaded through
+            # the same way `TargetCostumes` itself was, earlier this
+            # session -- closes this real, previously-documented gap; see
+            # `CostumeNumberName`'s own doc comment for the sibling fix).
+            # `what` (the *other* target, when it's a sprite name rather
+            # than `"_mouse_"`/`"_edge_"`) needs no such resolution --
+            # real Scratch's own `TOUCHINGOBJECTMENU` dropdown only ever
+            # names a real origin sprite, never a live clone (same
+            # established fact `sensing_of_object_menu`'s own doc comment
+            # already relies on).
+            let what = "{eval(what_expr, vars, frame, procs, lists, broadcasts, positions, keyboard, mouse, timer, rng, looks, target_costumes, costume_dims, sound_queue)}"
+            let self_id = frame.target_id.clone()
+            let self_pos = positions.get(self_id.clone())
+            let self_looks = looks.get(self_id.clone())
+            let self_origin = sound_queue.instance_type_of(self_id.clone())
+            let self_dim = costume_dims.get(self_origin, self_looks.costume_index)
+            let self_scale = self_looks.size / 100.0
+            let self_hw = (self_dim.width * self_scale) / 2.0
+            let self_hh = (self_dim.height * self_scale) / 2.0
+            if what == "_mouse_":
+                ScratchValue.Bool(touching_point(self_pos.x, self_pos.y, self_hw, self_hh, mouse.x, mouse.y))
+            elif what == "_edge_":
+                ScratchValue.Bool(touching_stage_edge(self_pos.x, self_pos.y, self_hw, self_hh))
+            else:
+                # Real scratch-vm's own `isTouchingSprite`: a hidden
+                # sprite (either side) never touches, or is touched by,
+                # anything -- checked before ever looking at position/size.
+                let other_looks = looks.get(what.clone())
+                if !self_looks.visible or !other_looks.visible:
+                    ScratchValue.Bool(false)
+                else:
+                    let other_pos = positions.get(what.clone())
+                    let other_dim = costume_dims.get(what.clone(), other_looks.costume_index)
+                    let other_scale = other_looks.size / 100.0
+                    let other_hw = (other_dim.width * other_scale) / 2.0
+                    let other_hh = (other_dim.height * other_scale) / 2.0
+                    ScratchValue.Bool(aabb_overlap(self_pos.x, self_pos.y, self_hw, self_hh, other_pos.x, other_pos.y, other_hw, other_hh))
+        TouchingColor(color_expr):
+            # Ported from real scratch-vm's own `touchingColor`
+            # (confirmed against source) -- scans this instance's own
+            # AABB footprint (same "pixel-perfect vs AABB" trade
+            # `Touching`'s own doc comment above already makes) against
+            # `SoundQueue.scene_composite`, using real scratch-render's
+            # own pixel-comparison tolerance (`pen_colors_touch`,
+            # `runtime.br`) rather than an exact match. A hidden sprite
+            # never touches anything, same as `Touching` above.
+            let hex = "{eval(color_expr, vars, frame, procs, lists, broadcasts, positions, keyboard, mouse, timer, rng, looks, target_costumes, costume_dims, sound_queue)}"
+            let target_color = hex_to_pen_color(hex)
+            let self_id = frame.target_id.clone()
+            let self_looks = looks.get(self_id.clone())
+            if !self_looks.visible:
+                ScratchValue.Bool(false)
+            else:
+                let self_pos = positions.get(self_id.clone())
+                let self_origin = sound_queue.instance_type_of(self_id.clone())
+                let self_dim = costume_dims.get(self_origin, self_looks.costume_index)
+                let self_scale = self_looks.size / 100.0
+                let self_hw = (self_dim.width * self_scale) / 2.0
+                let self_hh = (self_dim.height * self_scale) / 2.0
+                let min_x = floor(canvas_px(self_pos.x - self_hw)) as isize
+                let max_x = floor(canvas_px(self_pos.x + self_hw)) as isize
+                let min_y = floor(canvas_py(self_pos.y + self_hh)) as isize
+                let max_y = floor(canvas_py(self_pos.y - self_hh)) as isize
+                ScratchValue.Bool(scan_scene_for_color(sound_queue, min_x, max_x, min_y, max_y, target_color))
+        DistanceTo(what_expr):
+            # Ported from real scratch-vm's own `distanceTo`: the Stage
+            # itself always reports `10000` (it has no position to measure
+            # from) -- checked first, before even evaluating `what_expr`.
+            # A named sprite that doesn't currently exist is a real,
+            # narrow gap here (real Scratch also reports `10000` for that
+            # case, but confirming existence would need `TargetCostumes`
+            # threaded through `eval` too, the same "not worth a new
+            # parameter on ~30 recursive call sites for one rare case"
+            # reasoning `CostumeNumberName`'s own "name" variant already
+            # established) -- falls through to `Positions.get`'s own
+            # (0, 0) default instead, same honest trade `GoTo`'s own
+            # nonexistent-sprite case already makes.
+            let self_id = frame.target_id.clone()
+            if self_id == "Stage":
+                ScratchValue.Num(ScratchNumber.from_f32(10000.0))
+            else:
+                let what = "{eval(what_expr, vars, frame, procs, lists, broadcasts, positions, keyboard, mouse, timer, rng, looks, target_costumes, costume_dims, sound_queue)}"
+                let self_pos = positions.get(self_id)
+                let target_x = if what == "_mouse_": mouse.x else: positions.get(what.clone()).x
+                let target_y = if what == "_mouse_": mouse.y else: positions.get(what).y
+                let dx = self_pos.x - target_x
+                let dy = self_pos.y - target_y
+                let dist_sq = (dx * dx + dy * dy) as float64
+                let dist = sqrt(dist_sq) as float32
+                ScratchValue.Num(ScratchNumber.from_f32(dist))
+        SensingOf(object_expr, property):
+            let object_name = "{eval(object_expr, vars, frame, procs, lists, broadcasts, positions, keyboard, mouse, timer, rng, looks, target_costumes, costume_dims, sound_queue)}"
+            if object_name == "_stage_":
+                if property == "backdrop #":
+                    ScratchValue.Num(ScratchNumber.from_isize(looks.get("Stage").costume_index + 1))
+                elif property == "backdrop name":
+                    let stage_names = target_costumes.get("Stage")
+                    let stage_idx = looks.get("Stage").costume_index
+                    if stage_idx >= 0 and stage_idx < stage_names.length:
+                        ScratchValue.Str(stage_names[stage_idx])
+                    else:
+                        ScratchValue.Str("")
+                elif property == "volume":
+                    # `SoundQueue.volumes` is genuinely per-*instance*
+                    # already (copied on clone creation, same as `Looks
+                    # State`) -- no origin resolution needed here, unlike
+                    # `costume name`/`backdrop name` just above. Closed
+                    # now that `eval` has `SoundQueue` access (see
+                    # `Touching`'s own doc comment for the round this
+                    # landed in).
+                    ScratchValue.Num(ScratchNumber.from_f32(sound_queue.get_volume("Stage")))
+                else:
+                    # Not a Stage builtin -- real projects use PROPERTY to
+                    # read a global variable by name here (see
+                    # `BlockKind::SensingOf`'s own doc comment).
+                    let var_id = vars.id_for_name(property.clone(), "")
+                    if var_id == "":
+                        ScratchValue.Str("")
+                    else:
+                        vars.get(var_id, frame.target_id.clone())
+            else:
+                if property == "x position":
+                    ScratchValue.Num(ScratchNumber.from_f32(positions.get(object_name).x))
+                elif property == "y position":
+                    ScratchValue.Num(ScratchNumber.from_f32(positions.get(object_name).y))
+                elif property == "direction":
+                    ScratchValue.Num(ScratchNumber.from_f32(positions.get(object_name).direction))
+                elif property == "costume #":
+                    ScratchValue.Num(ScratchNumber.from_isize(looks.get(object_name).costume_index + 1))
+                elif property == "costume name":
+                    let sprite_names = target_costumes.get(object_name.clone())
+                    let sprite_idx = looks.get(object_name).costume_index
+                    if sprite_idx >= 0 and sprite_idx < sprite_names.length:
+                        ScratchValue.Str(sprite_names[sprite_idx])
+                    else:
+                        ScratchValue.Str("")
+                elif property == "size":
+                    ScratchValue.Num(ScratchNumber.from_f32(looks.get(object_name).size))
+                elif property == "volume":
+                    # Same fix as the Stage branch's own "volume" case
+                    # above -- `object_name` is always a real origin
+                    # sprite name here (never a live clone), and `SoundQueue.
+                    # volumes` is genuinely per-instance, so this needs no
+                    # extra resolution either.
+                    ScratchValue.Num(ScratchNumber.from_f32(sound_queue.get_volume(object_name.clone())))
+                else:
+                    # Not a sprite builtin -- real Scratch's own "of"
+                    # dropdown also lists every variable visible to that
+                    # sprite: its own locals *and* every global. `id_for_
+                    # name(property, object_name)` tries `object_name`'s
+                    # own local scope first, falling back to global --
+                    # `object_name` is always a real origin sprite name
+                    # here (`sensing_of_object_menu`'s own dropdown never
+                    # names a live clone), so it's also the exact right
+                    # `calling_instance_id` for `get` below: an origin's
+                    # own instance id is its own name.
+                    let var_id = vars.id_for_name(property.clone(), object_name.clone())
+                    if var_id == "":
+                        ScratchValue.Str("")
+                    else:
+                        vars.get(var_id, object_name)
+        CostumeNumberName(which):
+            let idx = looks.get(frame.target_id.clone()).costume_index
+            if which == "name":
+                # `TargetCostumes` stays keyed by origin name only -- same
+                # fix as `Touching`'s own `costume_dims.get` just above
+                # (see that case's own doc comment). "number" needs no
+                # such resolution: `costume_index` is genuinely
+                # per-instance already.
+                let origin = sound_queue.instance_type_of(frame.target_id.clone())
+                let names = target_costumes.get(origin)
+                if idx >= 0 and idx < names.length:
+                    ScratchValue.Str(names[idx])
+                else:
+                    ScratchValue.Str("")
+            else:
+                ScratchValue.Num(ScratchNumber.from_isize(idx + 1))
+        BackdropNumberName(which):
+            let idx = looks.get("Stage").costume_index
+            if which == "name":
+                let names = target_costumes.get("Stage")
+                if idx >= 0 and idx < names.length:
+                    ScratchValue.Str(names[idx])
+                else:
+                    ScratchValue.Str("")
+            else:
+                ScratchValue.Num(ScratchNumber.from_isize(idx + 1))
+        _:
+            # Every stack-block variant is unreachable in reporter position;
+            # a well-linked project never plugs a stack block into a value
+            # slot. Fail loudly rather than silently return a bogus value --
+            # this is a linker bug, not a runtime condition to tolerate.
+            throw Error.InvalidInput
+
+# The leaf (non-control-flow) statements -- everything `step_thread`
+# doesn't need to interpret itself to decide what happens to the frame
+# stack. Every one of these still finishes within the single `step_thread`
+# call it's reached from (none of them can span a tick boundary), exactly
+# like the whole of the old, pre-scheduler `exec` did -- only `step_thread`
+# itself (below) needs to know about pausing.
+def exec_simple(Block b, var Vars vars, Frame frame, ProcTable procs, var Lists lists, Broadcasts broadcasts, var Positions positions, KeyboardState keyboard, MouseState mouse, ScratchTimer timer, var Rng rng, var LooksStates looks, var LayerOrders layer_orders, TargetCostumes target_costumes, TargetCostumeDims costume_dims, var SoundQueue sound_queue, var SpeechBubbles speech_bubbles, var [ReceiverScript] spawned):
+    match b.kind:
+        SetVar(id, expr):
+            # Compute the value into a local *before* calling `vars.set` --
+            # `vars.set(id, eval(expr, vars, frame, procs, lists, broadcasts, positions, keyboard, mouse, timer, rng, looks, target_costumes, costume_dims, sound_queue))` would need
+            # two overlapping `&mut vars` borrows alive at once (one for the
+            # argument evaluation, one for the method receiver), which
+            # Rust's borrow checker rejects (E0499).
+            let v = eval(expr, vars, frame, procs, lists, broadcasts, positions, keyboard, mouse, timer, rng, looks, target_costumes, costume_dims, sound_queue)
+            vars.set(id, frame.target_id.clone(), v)
+        ChangeVar(id, delta_expr):
+            let delta = eval(delta_expr, vars, frame, procs, lists, broadcasts, positions, keyboard, mouse, timer, rng, looks, target_costumes, costume_dims, sound_queue)
+            let current = vars.get(id.clone(), frame.target_id.clone())
+            let updated = ScratchValue.Num(current.to_num().add_owned(delta.to_num()))
+            vars.set(id, frame.target_id.clone(), updated)
+        ShowVariable(id):
+            vars.set_watcher_visible(id, true)
+        HideVariable(id):
+            vars.set_watcher_visible(id, false)
+        ShowList(id):
+            lists.set_watcher_visible(id, true)
+        HideList(id):
+            lists.set_watcher_visible(id, false)
+        Broadcast(msg_expr):
+            # Fire-and-forget, matching real Scratch exactly: every
+            # matching receiver becomes a brand-new `Thread` (via
+            # `spawned`, drained into `PendingThreads` by whichever system
+            # is driving this thread -- `run_pending_threads` for the real
+            # game, `run_script`'s own drive loop headless), and this
+            # thread carries straight on to its own next statement without
+            # waiting on them at all.
+            #
+            # Each matching template is tagged with its own *origin*
+            # sprite's name -- fanned out to every currently-live instance
+            # of that origin (`instances_of`, `runtime.br`), not just the
+            # origin itself, so a live clone responds to a broadcast its
+            # own origin listens for too, matching real Scratch.
+            let msg_val = eval(msg_expr, vars, frame, procs, lists, broadcasts, positions, keyboard, mouse, timer, rng, looks, target_costumes, costume_dims, sound_queue)
+            for script in broadcasts.get("{msg_val}"):
+                for instance_id in instances_of(sound_queue.instance_types.clone(), script.target_id.clone()):
+                    spawned.push(ReceiverScript(target_id = instance_id, body = script.body.clone()))
+        BroadcastAndWait(msg_expr):
+            # Unlike `Broadcast`, this one actually has to wait -- so
+            # every matching receiver is driven to completion right here,
+            # synchronously, via its own nested `step_thread` loop
+            # (`drive_thread_to_completion`), *before* this thread's own
+            # next statement runs. Real Scratch's own `broadcast and wait`
+            # can legitimately span many real ticks if a receiver itself
+            # waits/loops for a long time -- this doesn't reproduce that
+            # (a receiver that doesn't finish within
+            # `drive_thread_to_completion`'s own iteration cap is simply
+            # abandoned, letting this thread continue anyway) -- a real,
+            # documented, narrower gap than the old "identical to
+            # Broadcast" simplification it replaces, not a regression from
+            # it: every project this project can already run (no receiver
+            # containing `wait`/`forever`) now gets fully correct
+            # broadcast-and-wait ordering, which the old simplification
+            # never actually guaranteed once more than one thread could
+            # exist at all. Same per-instance fanout as plain `Broadcast`
+            # above -- every live clone of a matching receiver's origin
+            # gets its own driven-to-completion thread too.
+            let msg_val = eval(msg_expr, vars, frame, procs, lists, broadcasts, positions, keyboard, mouse, timer, rng, looks, target_costumes, costume_dims, sound_queue)
+            for script in broadcasts.get("{msg_val}"):
+                for instance_id in instances_of(sound_queue.instance_types.clone(), script.target_id.clone()):
+                    let receiver_script = ReceiverScript(target_id = instance_id, body = script.body.clone())
+                    var receiver = spawn_thread(receiver_script)
+                    drive_thread_to_completion(receiver, vars, procs, lists, broadcasts, positions, keyboard, mouse, timer, rng, looks, layer_orders, target_costumes, costume_dims, sound_queue, speech_bubbles, spawned)
+        ListAdd(list_id, item_expr):
+            let item = eval(item_expr, vars, frame, procs, lists, broadcasts, positions, keyboard, mouse, timer, rng, looks, target_costumes, costume_dims, sound_queue)
+            lists.add(list_id, frame.target_id.clone(), item)
+        ListDeleteAt(list_id, idx_expr):
+            let idx_val = eval(idx_expr, vars, frame, procs, lists, broadcasts, positions, keyboard, mouse, timer, rng, looks, target_costumes, costume_dims, sound_queue)
+            let len = lists.length(list_id.clone(), frame.target_id.clone())
+            let idx0 = resolve_list_index(idx_val, len, false)
+            lists.delete_at(list_id, frame.target_id.clone(), idx0)
+        ListDeleteAll(list_id):
+            lists.delete_all(list_id, frame.target_id.clone())
+        ListInsertAt(list_id, idx_expr, item_expr):
+            let idx_val = eval(idx_expr, vars, frame, procs, lists, broadcasts, positions, keyboard, mouse, timer, rng, looks, target_costumes, costume_dims, sound_queue)
+            let item = eval(item_expr, vars, frame, procs, lists, broadcasts, positions, keyboard, mouse, timer, rng, looks, target_costumes, costume_dims, sound_queue)
+            let len = lists.length(list_id.clone(), frame.target_id.clone())
+            let idx0 = resolve_list_index(idx_val, len, true)
+            lists.insert_at(list_id, frame.target_id.clone(), idx0, item)
+        ListReplaceAt(list_id, idx_expr, item_expr):
+            let idx_val = eval(idx_expr, vars, frame, procs, lists, broadcasts, positions, keyboard, mouse, timer, rng, looks, target_costumes, costume_dims, sound_queue)
+            let item = eval(item_expr, vars, frame, procs, lists, broadcasts, positions, keyboard, mouse, timer, rng, looks, target_costumes, costume_dims, sound_queue)
+            let len = lists.length(list_id.clone(), frame.target_id.clone())
+            let idx0 = resolve_list_index(idx_val, len, false)
+            lists.replace_at(list_id, frame.target_id.clone(), idx0, item)
+        MoveSteps(steps_expr):
+            let steps = eval(steps_expr, vars, frame, procs, lists, broadcasts, positions, keyboard, mouse, timer, rng, looks, target_costumes, costume_dims, sound_queue).to_num().to_f32()
+            let p = positions.get(frame.target_id.clone())
+            move_position(positions, sound_queue, frame.target_id.clone(), Position(x = p.x + p.move_dx(steps), y = p.y + p.move_dy(steps), direction = p.direction))
+        TurnRight(deg_expr):
+            let delta = eval(deg_expr, vars, frame, procs, lists, broadcasts, positions, keyboard, mouse, timer, rng, looks, target_costumes, costume_dims, sound_queue).to_num().to_f32()
+            let p = positions.get(frame.target_id.clone())
+            positions.set(frame.target_id.clone(), Position(x = p.x, y = p.y, direction = normalize_direction(p.direction + delta)))
+        TurnLeft(deg_expr):
+            let delta = eval(deg_expr, vars, frame, procs, lists, broadcasts, positions, keyboard, mouse, timer, rng, looks, target_costumes, costume_dims, sound_queue).to_num().to_f32()
+            let p = positions.get(frame.target_id.clone())
+            positions.set(frame.target_id.clone(), Position(x = p.x, y = p.y, direction = normalize_direction(p.direction - delta)))
+        PointInDirection(dir_expr):
+            let dir = eval(dir_expr, vars, frame, procs, lists, broadcasts, positions, keyboard, mouse, timer, rng, looks, target_costumes, costume_dims, sound_queue).to_num().to_f32()
+            let p = positions.get(frame.target_id.clone())
+            positions.set(frame.target_id.clone(), Position(x = p.x, y = p.y, direction = normalize_direction(dir)))
+        GotoXY(x_expr, y_expr):
+            let x = eval(x_expr, vars, frame, procs, lists, broadcasts, positions, keyboard, mouse, timer, rng, looks, target_costumes, costume_dims, sound_queue).to_num().to_f32()
+            let y = eval(y_expr, vars, frame, procs, lists, broadcasts, positions, keyboard, mouse, timer, rng, looks, target_costumes, costume_dims, sound_queue).to_num().to_f32()
+            let p = positions.get(frame.target_id.clone())
+            move_position(positions, sound_queue, frame.target_id.clone(), Position(x = x, y = y, direction = p.direction))
+        GoTo(to_expr):
+            # Ported from real scratch-vm's own `gotoObject`: "_mouse_"
+            # goes to the current mouse position, "_random_" to a
+            # uniform-random point in the stage (`Math.round(width *
+            # (random() - 0.5))`, `floor(v + 0.5)` being the exact same
+            # round-half-up formula `operator_round`'s own `eval` case
+            # above already ports), anything else the *named sprite's*
+            # own current position -- a name that matches no real sprite
+            # is a real, narrow no-op gap here (falls through to
+            # `Positions.get`'s own (0,0) default instead of truly doing
+            # nothing), since this project has no cheap "does this key
+            # exist" check on `Positions` and a malformed/nonexistent
+            # sprite reference never appears in a well-formed project's
+            # own dropdown-authored blocks anyway.
+            let to = "{eval(to_expr, vars, frame, procs, lists, broadcasts, positions, keyboard, mouse, timer, rng, looks, target_costumes, costume_dims, sound_queue)}"
+            let p = positions.get(frame.target_id.clone())
+            if to == "_mouse_":
+                move_position(positions, sound_queue, frame.target_id.clone(), Position(x = mouse.x, y = mouse.y, direction = p.direction))
+            elif to == "_random_":
+                let rx = rng.next_f64_01()
+                let ry = rng.next_f64_01()
+                let nx = floor(480.0 * (rx - 0.5) + 0.5)
+                let ny = floor(360.0 * (ry - 0.5) + 0.5)
+                move_position(positions, sound_queue, frame.target_id.clone(), Position(x = nx as float32, y = ny as float32, direction = p.direction))
+            else:
+                let other = positions.get(to.clone())
+                move_position(positions, sound_queue, frame.target_id.clone(), Position(x = other.x, y = other.y, direction = p.direction))
+        PointTowards(towards_expr):
+            # Ported from real scratch-vm's own `pointTowards`. "_random_"
+            # means a genuinely random *direction* here (unlike `GoTo`'s
+            # own "_random_", a random *position*) -- `Math.round(random()
+            # * 360) - 180`, the same round-half-up formula (`floor(v +
+            # 0.5)`) `GoTo`'s own "_random_" case and `operator_round`
+            # already port. Otherwise: real Scratch's own direction
+            # convention (0 = up, matching `Position.move_dx`/`move_dy`'s
+            # own `sin`/`cos` formulas) means the angle *to* a point is
+            # `atan2(dx, dy)`, not the standard-math `atan2(dy, dx)` --
+            # confirmed against scratch-vm's own `MathUtil.radToDeg(Math.
+            # atan2(dx, dy))` rather than assumed. `dx == dy == 0` (the
+            # target sits exactly on top of this sprite) is a real,
+            # explicit special case in scratch-vm too -- direction `90`,
+            # not `atan2(0, 0)`'s own (technically valid, but meaningless
+            # here) `0`.
+            let towards = "{eval(towards_expr, vars, frame, procs, lists, broadcasts, positions, keyboard, mouse, timer, rng, looks, target_costumes, costume_dims, sound_queue)}"
+            let p = positions.get(frame.target_id.clone())
+            if towards == "_random_":
+                let r = rng.next_f64_01()
+                let new_dir = floor(360.0 * r + 0.5) - 180.0
+                positions.set(frame.target_id.clone(), Position(x = p.x, y = p.y, direction = normalize_direction(new_dir as float32)))
+            else:
+                let target_x = if towards == "_mouse_": mouse.x else: positions.get(towards.clone()).x
+                let target_y = if towards == "_mouse_": mouse.y else: positions.get(towards).y
+                let dx = target_x - p.x
+                let dy = target_y - p.y
+                let new_dir = if dx == 0.0 and dy == 0.0: 90.0 else: (atan2(dx as float64, dy as float64) * 57.29577951) as float32
+                positions.set(frame.target_id.clone(), Position(x = p.x, y = p.y, direction = normalize_direction(new_dir)))
+        IfOnEdgeBounce:
+            # Ported from real scratch-vm's own `ifOnEdgeBounce`
+            # (`Scratch3MotionBlocks`) -- exact algorithm, not guessed:
+            # measure the (clamped-to-zero) distance from each of the
+            # four stage edges to the sprite's own bounding box, find the
+            # nearest one, and -- only if actually touching it (min
+            # distance `<= 0`) -- reflect the sprite's own facing
+            # direction away from it, then clamp its position back inside
+            # the stage ("keepInFence"). The bounding box itself is this
+            # project's own established *unrotated* AABB approximation
+            # (same trade `sensing_touchingobject`'s `Touching` case
+            # already makes, scaled by `LooksState.size` the same way),
+            # not real Scratch's rotation-aware renderer bounds -- and,
+            # unlike `Touching`'s own `eval`-side lookup, `exec_simple`
+            # DOES have `SoundQueue` in scope, so the origin-resolution
+            # fix `SwitchCostumeTo`/`NextCostume` needed (their own doc
+            # comments) is applied here from the start, not a known gap.
+            let p = positions.get(frame.target_id.clone())
+            let s = looks.get(frame.target_id.clone())
+            let origin_name = sound_queue.instance_type_of(frame.target_id.clone())
+            let dim = costume_dims.get(origin_name, s.costume_index)
+            let scale = s.size / 100.0
+            let hw = (dim.width * scale) / 2.0
+            let hh = (dim.height * scale) / 2.0
+            let left = p.x - hw
+            let right = p.x + hw
+            let top = p.y + hh
+            let bottom = p.y - hh
+            let raw_dist_left = 240.0 + left
+            let dist_left = if raw_dist_left > 0.0: raw_dist_left else: 0.0
+            let raw_dist_top = 180.0 - top
+            let dist_top = if raw_dist_top > 0.0: raw_dist_top else: 0.0
+            let raw_dist_right = 240.0 - right
+            let dist_right = if raw_dist_right > 0.0: raw_dist_right else: 0.0
+            let raw_dist_bottom = 180.0 + bottom
+            let dist_bottom = if raw_dist_bottom > 0.0: raw_dist_bottom else: 0.0
+            var mut nearest_edge = "left"
+            var mut min_dist = dist_left
+            if dist_top < min_dist:
+                min_dist = dist_top
+                nearest_edge = "top"
+            if dist_right < min_dist:
+                min_dist = dist_right
+                nearest_edge = "right"
+            if dist_bottom < min_dist:
+                min_dist = dist_bottom
+                nearest_edge = "bottom"
+            if min_dist <= 0.0:
+                let radians = (90.0 - p.direction) * 0.017453292
+                let cos_r = cos(radians)
+                let sin_r = sin(radians)
+                var mut ddx = cos_r
+                var mut ddy = 0.0 - sin_r
+                if nearest_edge == "left":
+                    let abs_dx = if ddx < 0.0: 0.0 - ddx else: ddx
+                    ddx = if abs_dx > 0.2: abs_dx else: 0.2
+                elif nearest_edge == "top":
+                    let abs_dy = if ddy < 0.0: 0.0 - ddy else: ddy
+                    ddy = if abs_dy > 0.2: abs_dy else: 0.2
+                elif nearest_edge == "right":
+                    let abs_dx = if ddx < 0.0: 0.0 - ddx else: ddx
+                    ddx = 0.0 - (if abs_dx > 0.2: abs_dx else: 0.2)
+                else:
+                    let abs_dy = if ddy < 0.0: 0.0 - ddy else: ddy
+                    ddy = 0.0 - (if abs_dy > 0.2: abs_dy else: 0.2)
+                let new_dir_raw = (atan2(ddy as float64, ddx as float64) * 57.29577951) as float32 + 90.0
+                let new_dir = normalize_direction(new_dir_raw)
+                # `keepInFence` -- clamp the *position*, not the bounding
+                # box, back inside the stage. Bounds are recomputed at the
+                # unchanged x/y (the direction change above doesn't move
+                # this project's own unrotated AABB), matching real
+                # scratch-vm's own "adjust bounds to the target position"
+                # step exactly since here the target position hasn't
+                # moved yet either.
+                var mut fence_dx = 0.0
+                var mut fence_dy = 0.0
+                if left < -240.0:
+                    fence_dx += (0.0 - 240.0) - left
+                if right > 240.0:
+                    fence_dx += 240.0 - right
+                if top > 180.0:
+                    fence_dy += 180.0 - top
+                if bottom < -180.0:
+                    fence_dy += (0.0 - 180.0) - bottom
+                move_position(positions, sound_queue, frame.target_id.clone(), Position(x = p.x + fence_dx, y = p.y + fence_dy, direction = new_dir))
+        SetRotationStyle(style):
+            # Real scratch-vm's own `RenderedTarget.setRotationStyle`
+            # silently ignores anything other than these three exact
+            # strings (confirmed against real source, not guessed) --
+            # matched here rather than writing the field unconditionally,
+            # so a garbage STYLE value is a real no-op, same as real
+            # Scratch, not a silently-invalid state this project's own
+            # rendering would have to guess how to handle.
+            if style == "all around" or style == "left-right" or style == "don't rotate":
+                sound_queue.set_rotation_style(frame.target_id.clone(), style)
+        ChangeXBy(dx_expr):
+            let dx = eval(dx_expr, vars, frame, procs, lists, broadcasts, positions, keyboard, mouse, timer, rng, looks, target_costumes, costume_dims, sound_queue).to_num().to_f32()
+            let p = positions.get(frame.target_id.clone())
+            move_position(positions, sound_queue, frame.target_id.clone(), Position(x = p.x + dx, y = p.y, direction = p.direction))
+        SetX(x_expr):
+            let x = eval(x_expr, vars, frame, procs, lists, broadcasts, positions, keyboard, mouse, timer, rng, looks, target_costumes, costume_dims, sound_queue).to_num().to_f32()
+            let p = positions.get(frame.target_id.clone())
+            move_position(positions, sound_queue, frame.target_id.clone(), Position(x = x, y = p.y, direction = p.direction))
+        ChangeYBy(dy_expr):
+            let dy = eval(dy_expr, vars, frame, procs, lists, broadcasts, positions, keyboard, mouse, timer, rng, looks, target_costumes, costume_dims, sound_queue).to_num().to_f32()
+            let p = positions.get(frame.target_id.clone())
+            move_position(positions, sound_queue, frame.target_id.clone(), Position(x = p.x, y = p.y + dy, direction = p.direction))
+        SetY(y_expr):
+            let y = eval(y_expr, vars, frame, procs, lists, broadcasts, positions, keyboard, mouse, timer, rng, looks, target_costumes, costume_dims, sound_queue).to_num().to_f32()
+            let p = positions.get(frame.target_id.clone())
+            move_position(positions, sound_queue, frame.target_id.clone(), Position(x = p.x, y = y, direction = p.direction))
+        PlaySound(sound_expr):
+            let sound_name = "{eval(sound_expr, vars, frame, procs, lists, broadcasts, positions, keyboard, mouse, timer, rng, looks, target_costumes, costume_dims, sound_queue)}"
+            let volume = sound_queue.get_volume(frame.target_id.clone())
+            # Sound assets are Type-level (a clone shares its origin's own
+            # sound list, never has its own) -- resolve `frame.target_id`
+            # (which may be a clone's own synthesized id) to the *origin*
+            # name here, at queue time, so `play_queued_sounds`' later
+            # `extract_sound_to_temp_file(..., request.target_id, ...)` zip
+            # lookup finds the right sprite's assets. Volume stays keyed by
+            # the real instance id (`get_volume` above, untouched) -- each
+            # clone can have its own independent volume.
+            let origin_name = sound_queue.instance_type_of(frame.target_id.clone())
+            let pitch = sound_queue.get_pitch(frame.target_id.clone())
+            let pan = sound_queue.get_pan(frame.target_id.clone())
+            sound_queue.play_queue.push(SoundRequest(target_id = origin_name, sound_name = sound_name, volume = volume, pitch = pitch, pan = pan))
+        StopAllSounds:
+            sound_queue.stop_all_requested = true
+        SetDragMode(is_draggable):
+            sound_queue.set_draggable(frame.target_id.clone(), is_draggable)
+        PenClear:
+            sound_queue.pen_clear_requested = true
+        PenDown:
+            let current = sound_queue.get_pen_state(frame.target_id.clone())
+            if !current.down:
+                sound_queue.set_pen_state(frame.target_id.clone(), PenState(down = true, hue = current.hue, saturation = current.saturation, brightness = current.brightness, transparency = current.transparency, diameter = current.diameter, shade = current.shade))
+            # Real Scratch's own `penDown` (`Scratch3PenBlocks.penDown`)
+            # draws an immediate dot every time it runs, not just on the
+            # down-transition -- confirmed against source (`penPoint`
+            # called unconditionally). A `PenLineRequest` with equal
+            # `from`/`to` degenerates into exactly a dot, no special case
+            # needed in `draw_pen_marks` (`pen.br`) itself.
+            let pos = positions.get(frame.target_id.clone())
+            let color = pen_color_of(current)
+            sound_queue.pen_line_requests.push(PenLineRequest(from_x = pos.x, from_y = pos.y, to_x = pos.x, to_y = pos.y, color = color, diameter = current.diameter))
+        PenUp:
+            let current = sound_queue.get_pen_state(frame.target_id.clone())
+            sound_queue.set_pen_state(frame.target_id.clone(), PenState(down = false, hue = current.hue, saturation = current.saturation, brightness = current.brightness, transparency = current.transparency, diameter = current.diameter, shade = current.shade))
+        SetPenColorToColor(color_expr):
+            let hex = "{eval(color_expr, vars, frame, procs, lists, broadcasts, positions, keyboard, mouse, timer, rng, looks, target_costumes, costume_dims, sound_queue)}"
+            let current = sound_queue.get_pen_state(frame.target_id.clone())
+            sound_queue.set_pen_state(frame.target_id.clone(), pen_state_from_hex_color(hex, current))
+        ChangePenColorParamBy(param, value_expr):
+            let v = eval(value_expr, vars, frame, procs, lists, broadcasts, positions, keyboard, mouse, timer, rng, looks, target_costumes, costume_dims, sound_queue).to_num().to_f32()
+            let current = sound_queue.get_pen_state(frame.target_id.clone())
+            sound_queue.set_pen_state(frame.target_id.clone(), apply_pen_color_param(param, v, current, true))
+        SetPenColorParamTo(param, value_expr):
+            let v = eval(value_expr, vars, frame, procs, lists, broadcasts, positions, keyboard, mouse, timer, rng, looks, target_costumes, costume_dims, sound_queue).to_num().to_f32()
+            let current = sound_queue.get_pen_state(frame.target_id.clone())
+            sound_queue.set_pen_state(frame.target_id.clone(), apply_pen_color_param(param, v, current, false))
+        ChangePenSizeBy(size_expr):
+            let v = eval(size_expr, vars, frame, procs, lists, broadcasts, positions, keyboard, mouse, timer, rng, looks, target_costumes, costume_dims, sound_queue).to_num().to_f32()
+            let current = sound_queue.get_pen_state(frame.target_id.clone())
+            sound_queue.set_pen_state(frame.target_id.clone(), PenState(down = current.down, hue = current.hue, saturation = current.saturation, brightness = current.brightness, transparency = current.transparency, diameter = clamp_pen_size(current.diameter + v), shade = current.shade))
+        SetPenSizeTo(size_expr):
+            let v = eval(size_expr, vars, frame, procs, lists, broadcasts, positions, keyboard, mouse, timer, rng, looks, target_costumes, costume_dims, sound_queue).to_num().to_f32()
+            let current = sound_queue.get_pen_state(frame.target_id.clone())
+            sound_queue.set_pen_state(frame.target_id.clone(), PenState(down = current.down, hue = current.hue, saturation = current.saturation, brightness = current.brightness, transparency = current.transparency, diameter = clamp_pen_size(v), shade = current.shade))
+        SetPenHueToNumber(hue_expr):
+            let hue_value = eval(hue_expr, vars, frame, procs, lists, broadcasts, positions, keyboard, mouse, timer, rng, looks, target_costumes, costume_dims, sound_queue).to_num().to_f32()
+            let current = sound_queue.get_pen_state(frame.target_id.clone())
+            sound_queue.set_pen_state(frame.target_id.clone(), set_pen_hue_to_number(current, hue_value))
+        ChangePenHueBy(hue_expr):
+            let hue_change = eval(hue_expr, vars, frame, procs, lists, broadcasts, positions, keyboard, mouse, timer, rng, looks, target_costumes, costume_dims, sound_queue).to_num().to_f32()
+            let current = sound_queue.get_pen_state(frame.target_id.clone())
+            sound_queue.set_pen_state(frame.target_id.clone(), change_pen_hue_by(current, hue_change))
+        SetPenShadeToNumber(shade_expr):
+            let shade_value = eval(shade_expr, vars, frame, procs, lists, broadcasts, positions, keyboard, mouse, timer, rng, looks, target_costumes, costume_dims, sound_queue).to_num().to_f32()
+            let current = sound_queue.get_pen_state(frame.target_id.clone())
+            sound_queue.set_pen_state(frame.target_id.clone(), set_pen_shade_to_number(current, shade_value))
+        ChangePenShadeBy(shade_expr):
+            let shade_change = eval(shade_expr, vars, frame, procs, lists, broadcasts, positions, keyboard, mouse, timer, rng, looks, target_costumes, costume_dims, sound_queue).to_num().to_f32()
+            let current = sound_queue.get_pen_state(frame.target_id.clone())
+            sound_queue.set_pen_state(frame.target_id.clone(), change_pen_shade_by(current, shade_change))
+        Stamp:
+            # Every field snapshotted right here, immediately -- see
+            # `StampRequest`'s own doc comment (`runtime.br`) for why
+            # deferring any of this to drain time (the original design)
+            # was a real bug, the same class `move_position`'s own doc
+            # comment already documents for pen lines.
+            let pos = positions.get(frame.target_id.clone())
+            let style = sound_queue.get_rotation_style(frame.target_id.clone())
+            let s = looks.get(frame.target_id.clone())
+            sound_queue.stamp_requests.push(StampRequest(target_id = frame.target_id.clone(), x = pos.x, y = pos.y, direction = pos.direction, rotation_style = style, ghost = s.ghost, costume_index = s.costume_index, size = s.size))
+        ResetTimer:
+            # Ported from real scratch-vm's own `resetProjectTimer` --
+            # sets the timer straight back to `0.0`. `exec_simple` has no
+            # `var ScratchTimer` access (a real, universal `boring`
+            # convention found while spiking a more direct fix: a `var`
+            # field always transpiles to a *private* Rust field, true for
+            # every `var`-fielded resource in this codebase, which would
+            # have broken every existing test that drives `ScratchTimer.
+            # elapsed` by hand through `resource_mut::<ScratchTimer>()`)
+            # -- same "queue a request, a real Bevy system does the rest"
+            # shape `SoundRequest`/`CloneRequest` already established.
+            # Folded onto `SoundQueue` (already threaded here) rather
+            # than a new resource, for the same "no free 17th param on
+            # `run_pending_threads`" reason every other fold-in there is.
+            sound_queue.reset_timer_requested = true
+        SetVolumeTo(volume_expr):
+            let v = eval(volume_expr, vars, frame, procs, lists, broadcasts, positions, keyboard, mouse, timer, rng, looks, target_costumes, costume_dims, sound_queue).to_num().to_f32()
+            sound_queue.set_volume(frame.target_id.clone(), clamp_volume(v))
+        ChangeVolumeBy(volume_expr):
+            let v = eval(volume_expr, vars, frame, procs, lists, broadcasts, positions, keyboard, mouse, timer, rng, looks, target_costumes, costume_dims, sound_queue).to_num().to_f32()
+            let current = sound_queue.get_volume(frame.target_id.clone())
+            sound_queue.set_volume(frame.target_id.clone(), clamp_volume(current + v))
+        SetSoundEffectTo(effect, value_expr):
+            # `PITCH` and, now, `PAN` are both rendered -- see `SoundQueue.
+            # pans`' own doc comment for the real Bevy spatial-audio
+            # mapping `play_queued_sounds` applies.
+            if effect == "PITCH":
+                let v = eval(value_expr, vars, frame, procs, lists, broadcasts, positions, keyboard, mouse, timer, rng, looks, target_costumes, costume_dims, sound_queue).to_num().to_f32()
+                sound_queue.set_pitch(frame.target_id.clone(), clamp_pitch(v))
+            elif effect == "PAN":
+                let v = eval(value_expr, vars, frame, procs, lists, broadcasts, positions, keyboard, mouse, timer, rng, looks, target_costumes, costume_dims, sound_queue).to_num().to_f32()
+                sound_queue.set_pan(frame.target_id.clone(), clamp_pan(v))
+        ChangeSoundEffectBy(effect, value_expr):
+            if effect == "PITCH":
+                let v = eval(value_expr, vars, frame, procs, lists, broadcasts, positions, keyboard, mouse, timer, rng, looks, target_costumes, costume_dims, sound_queue).to_num().to_f32()
+                let current = sound_queue.get_pitch(frame.target_id.clone())
+                sound_queue.set_pitch(frame.target_id.clone(), clamp_pitch(current + v))
+            elif effect == "PAN":
+                let v = eval(value_expr, vars, frame, procs, lists, broadcasts, positions, keyboard, mouse, timer, rng, looks, target_costumes, costume_dims, sound_queue).to_num().to_f32()
+                let current = sound_queue.get_pan(frame.target_id.clone())
+                sound_queue.set_pan(frame.target_id.clone(), clamp_pan(current + v))
+        ClearSoundEffects:
+            # Real Scratch's own semantics: resets *every* effect.
+            sound_queue.set_pitch(frame.target_id.clone(), 0.0)
+            sound_queue.set_pan(frame.target_id.clone(), 0.0)
+        Say(msg_expr):
+            let msg = "{eval(msg_expr, vars, frame, procs, lists, broadcasts, positions, keyboard, mouse, timer, rng, looks, target_costumes, costume_dims, sound_queue)}"
+            speech_bubbles.set(frame.target_id.clone(), SpeechBubble(text = msg, is_thought = false))
+        Think(msg_expr):
+            let msg = "{eval(msg_expr, vars, frame, procs, lists, broadcasts, positions, keyboard, mouse, timer, rng, looks, target_costumes, costume_dims, sound_queue)}"
+            speech_bubbles.set(frame.target_id.clone(), SpeechBubble(text = msg, is_thought = true))
+        Show:
+            let s = looks.get(frame.target_id.clone())
+            looks.set(frame.target_id.clone(), LooksState(visible = true, size = s.size, costume_index = s.costume_index, ghost = s.ghost))
+        Hide:
+            let s = looks.get(frame.target_id.clone())
+            looks.set(frame.target_id.clone(), LooksState(visible = false, size = s.size, costume_index = s.costume_index, ghost = s.ghost))
+        SetSizeTo(percent_expr):
+            let percent = eval(percent_expr, vars, frame, procs, lists, broadcasts, positions, keyboard, mouse, timer, rng, looks, target_costumes, costume_dims, sound_queue).to_num().to_f32()
+            let s = looks.get(frame.target_id.clone())
+            looks.set(frame.target_id.clone(), LooksState(visible = s.visible, size = percent, costume_index = s.costume_index, ghost = s.ghost))
+        ChangeSizeBy(delta_expr):
+            let delta = eval(delta_expr, vars, frame, procs, lists, broadcasts, positions, keyboard, mouse, timer, rng, looks, target_costumes, costume_dims, sound_queue).to_num().to_f32()
+            let s = looks.get(frame.target_id.clone())
+            looks.set(frame.target_id.clone(), LooksState(visible = s.visible, size = s.size + delta, costume_index = s.costume_index, ghost = s.ghost))
+        SwitchCostumeTo(costume_expr):
+            let val = eval(costume_expr, vars, frame, procs, lists, broadcasts, positions, keyboard, mouse, timer, rng, looks, target_costumes, costume_dims, sound_queue)
+            # `TargetCostumes` stays keyed by *origin* name only (a clone
+            # shares its origin's own costume list, never has its own --
+            # `SoundQueue.instance_types`' own doc comment) -- resolve
+            # `frame.target_id` (the *calling instance*, a live clone's
+            # own unique id when this runs from a clone's script) through
+            # `instance_type_of` first, same established pattern
+            # `PlaySound`'s own lookup already uses. `LooksState` itself
+            # (`looks.get`/`.set` below) stays keyed by the real calling
+            # instance id throughout -- costume_index IS per-instance.
+            let origin_name = sound_queue.instance_type_of(frame.target_id.clone())
+            let names = target_costumes.get(origin_name.clone())
+            let count = names.length
+            if count > 0:
+                let name_str = "{val}"
+                # 1-based match, matching `TargetCostumes.index_of`'s own
+                # "0 == not found" convention -- real Scratch tries an
+                # exact costume-name match first, and only falls back to
+                # its two special strings, and only after THAT to treating
+                # the value as a 1-based numeric index (see `wrap_costume_
+                # index`'s own doc comment for the wraparound rule).
+                let matched = target_costumes.index_of(origin_name, name_str.clone())
+                let s = looks.get(frame.target_id.clone())
+                if matched > 0:
+                    looks.set(frame.target_id.clone(), LooksState(visible = s.visible, size = s.size, costume_index = matched - 1, ghost = s.ghost))
+                elif name_str == "next costume":
+                    # Real Scratch's own two special strings for costume
+                    # switching (verified against scratch-vm's own
+                    # `Scratch3LooksBlocks._setCostume` -- unlike backdrop
+                    # switching just below, there's no "random costume"
+                    # special string for costumes, only these two).
+                    let new_idx = wrap_costume_index(s.costume_index + 1, count)
+                    looks.set(frame.target_id.clone(), LooksState(visible = s.visible, size = s.size, costume_index = new_idx, ghost = s.ghost))
+                elif name_str == "previous costume":
+                    let new_idx = wrap_costume_index(s.costume_index - 1, count)
+                    looks.set(frame.target_id.clone(), LooksState(visible = s.visible, size = s.size, costume_index = new_idx, ghost = s.ghost))
+                else:
+                    # NOT a "name didn't match -> no-op" fallback -- ported
+                    # from real Scratch's own `Cast.toNumber`, which never
+                    # fails: a non-numeric string (including one that just
+                    # isn't any costume's name, e.g. "nonexistent") coerces
+                    # to `0` the exact same way `to_num()` already does
+                    # here, giving `costumeIndex = 0 - 1 = -1`, wrapped
+                    # into the *last* costume -- not a no-op at all.
+                    # `to_isize_checked()` can still fail for a non-integer
+                    # numeric value (e.g. `2.5`) or one too large for
+                    # `isize` -- *that* case is the real no-op, matching
+                    # `Cast.toNumber` producing a value real Scratch's own
+                    # `MathUtil.wrapClamp` would still accept but this
+                    # simplified integer-only index math doesn't.
+                    if let n = val.to_num().to_isize_checked():
+                        let new_idx = wrap_costume_index(n - 1, count)
+                        looks.set(frame.target_id.clone(), LooksState(visible = s.visible, size = s.size, costume_index = new_idx, ghost = s.ghost))
+        SwitchBackdropTo(backdrop_expr):
+            # Identical machinery to `SwitchCostumeTo` above, hardcoded
+            # to the literal target id `"Stage"` throughout -- see
+            # `BlockKind::SwitchBackdropTo`'s own doc comment for why
+            # that's safe (real Scratch's own non-configurable stage
+            # name, not this project's own convention). Backdrop
+            # switching gets a THIRD special string costumes don't --
+            # "random backdrop" -- verified against scratch-vm's own
+            # `Scratch3LooksBlocks._setBackdrop`.
+            let val = eval(backdrop_expr, vars, frame, procs, lists, broadcasts, positions, keyboard, mouse, timer, rng, looks, target_costumes, costume_dims, sound_queue)
+            let names = target_costumes.get("Stage")
+            let count = names.length
+            if count > 0:
+                let name_str = "{val}"
+                let matched = target_costumes.index_of("Stage", name_str.clone())
+                let s = looks.get("Stage")
+                if matched > 0:
+                    looks.set("Stage", LooksState(visible = s.visible, size = s.size, costume_index = matched - 1, ghost = s.ghost))
+                elif name_str == "next backdrop":
+                    let new_idx = wrap_costume_index(s.costume_index + 1, count)
+                    looks.set("Stage", LooksState(visible = s.visible, size = s.size, costume_index = new_idx, ghost = s.ghost))
+                elif name_str == "previous backdrop":
+                    let new_idx = wrap_costume_index(s.costume_index - 1, count)
+                    looks.set("Stage", LooksState(visible = s.visible, size = s.size, costume_index = new_idx, ghost = s.ghost))
+                elif name_str == "random backdrop":
+                    # Real Scratch never picks the CURRENT backdrop again
+                    # (`MathUtil.inclusiveRandIntWithout`, ported verbatim
+                    # below as `rand_int_excluding`) -- and, per real
+                    # Scratch's own guard, does nothing at all when
+                    # there's only one backdrop to begin with (no other
+                    # value to land on).
+                    if count > 1:
+                        let new_idx = rand_int_excluding(rng, 0, count - 1, s.costume_index)
+                        looks.set("Stage", LooksState(visible = s.visible, size = s.size, costume_index = new_idx, ghost = s.ghost))
+                else:
+                    if let n = val.to_num().to_isize_checked():
+                        let new_idx = wrap_costume_index(n - 1, count)
+                        looks.set("Stage", LooksState(visible = s.visible, size = s.size, costume_index = new_idx, ghost = s.ghost))
+        SwitchBackdropToAndWait(backdrop_expr):
+            # Same backdrop-resolution machinery as `SwitchBackdropTo`
+            # above, restructured to compute `new_idx` once before calling
+            # `looks.set` (rather than inside each branch separately) so
+            # the real new backdrop *name* is available afterward to look
+            # up matching `event_whenbackdropswitchesto` hats -- ported
+            # from real scratch-vm's own `switchBackdropAndWait`, which
+            # switches the backdrop (synchronously `startHats`ing every
+            # hat matching the new name) then waits for those threads to
+            # finish. Real "drive to completion" semantics, same as
+            # `BroadcastAndWait` above (see its own doc comment for the
+            # inherited iteration-cap/abandonment trade). This project's
+            # own `event_whenbackdropswitchesto` still has its separately-
+            # documented one-tick lag for the *polling* path (`check_
+            # backdrop_switch_hats`) -- unaffected here, since this fires
+            # hats directly from the already-known new name instead of
+            # waiting for that poll to notice the change.
+            let val = eval(backdrop_expr, vars, frame, procs, lists, broadcasts, positions, keyboard, mouse, timer, rng, looks, target_costumes, costume_dims, sound_queue)
+            let names = target_costumes.get("Stage")
+            let count = names.length
+            if count > 0:
+                let name_str = "{val}"
+                let matched = target_costumes.index_of("Stage", name_str.clone())
+                let s = looks.get("Stage")
+                var mut new_idx = s.costume_index
+                if matched > 0:
+                    new_idx = matched - 1
+                elif name_str == "next backdrop":
+                    new_idx = wrap_costume_index(s.costume_index + 1, count)
+                elif name_str == "previous backdrop":
+                    new_idx = wrap_costume_index(s.costume_index - 1, count)
+                elif name_str == "random backdrop":
+                    if count > 1:
+                        new_idx = rand_int_excluding(rng, 0, count - 1, s.costume_index)
+                else:
+                    if let n = val.to_num().to_isize_checked():
+                        new_idx = wrap_costume_index(n - 1, count)
+                looks.set("Stage", LooksState(visible = s.visible, size = s.size, costume_index = new_idx, ghost = s.ghost))
+                let new_name = if new_idx >= 0 and new_idx < names.length: names[new_idx] else: ""
+                # `.clone()`'d into a local first, not iterated straight off
+                # `sound_queue`'s own field -- the loop body below also
+                # passes `sound_queue` itself (mutably) into `drive_thread_
+                # to_completion`, so iterating the field directly would
+                # borrow-conflict with that same-parameter mutation, same
+                # reasoning `check_greater_than_hats`' own `let hats =
+                # greater_than_hats.hats.clone()` already established.
+                let backdrop_hats_now = sound_queue.backdrop_switch_hats.clone()
+                for hat in backdrop_hats_now:
+                    if hat.backdrop_name == new_name:
+                        for instance_id in instances_of(sound_queue.instance_types.clone(), hat.script.target_id.clone()):
+                            let receiver_script = ReceiverScript(target_id = instance_id, body = hat.script.body.clone())
+                            var receiver = spawn_thread(receiver_script)
+                            drive_thread_to_completion(receiver, vars, procs, lists, broadcasts, positions, keyboard, mouse, timer, rng, looks, layer_orders, target_costumes, costume_dims, sound_queue, speech_bubbles, spawned)
+        NextCostume:
+            # Same origin-resolution fix as `SwitchCostumeTo` just above --
+            # `TargetCostumes` is keyed by origin name only.
+            let origin_name = sound_queue.instance_type_of(frame.target_id.clone())
+            let names = target_costumes.get(origin_name)
+            let count = names.length
+            if count > 0:
+                let s = looks.get(frame.target_id.clone())
+                let new_idx = wrap_costume_index(s.costume_index + 1, count)
+                looks.set(frame.target_id.clone(), LooksState(visible = s.visible, size = s.size, costume_index = new_idx, ghost = s.ghost))
+        NextBackdrop:
+            # The Stage's own equivalent of `NextCostume` -- hardcoded to
+            # the literal target id `"Stage"`, same convention
+            # `SwitchBackdropTo` already established (the Stage's own
+            # `TargetCostumes` entry is already keyed by its own literal
+            # name, no origin resolution needed here the way a sprite's
+            # own `NextCostume` needs for a live clone).
+            let names = target_costumes.get("Stage")
+            let count = names.length
+            if count > 0:
+                let s = looks.get("Stage")
+                let new_idx = wrap_costume_index(s.costume_index + 1, count)
+                looks.set("Stage", LooksState(visible = s.visible, size = s.size, costume_index = new_idx, ghost = s.ghost))
+        SetGraphicEffectTo(effect, value_expr):
+            # Only `ghost` is rendered (see `LooksState.ghost`'s own doc
+            # comment) -- every other effect name is a real, silent no-op:
+            # not a shortcut around missing state, there genuinely is none
+            # to update (no reporter block can ever observe the
+            # difference either way).
+            if effect == "ghost":
+                let v = eval(value_expr, vars, frame, procs, lists, broadcasts, positions, keyboard, mouse, timer, rng, looks, target_costumes, costume_dims, sound_queue).to_num().to_f32()
+                let clamped = clamp_ghost(v)
+                let s = looks.get(frame.target_id.clone())
+                looks.set(frame.target_id.clone(), LooksState(visible = s.visible, size = s.size, costume_index = s.costume_index, ghost = clamped))
+        ChangeGraphicEffectBy(effect, value_expr):
+            if effect == "ghost":
+                let v = eval(value_expr, vars, frame, procs, lists, broadcasts, positions, keyboard, mouse, timer, rng, looks, target_costumes, costume_dims, sound_queue).to_num().to_f32()
+                let s = looks.get(frame.target_id.clone())
+                let clamped = clamp_ghost(s.ghost + v)
+                looks.set(frame.target_id.clone(), LooksState(visible = s.visible, size = s.size, costume_index = s.costume_index, ghost = clamped))
+        ClearGraphicEffects:
+            # Real Scratch's own semantics: resets *every* effect, not
+            # just `ghost` -- correct here too even though the other six
+            # were never tracked in the first place, since resetting
+            # nothing is exactly the right behavior for state that was
+            # already always at its default.
+            let s = looks.get(frame.target_id.clone())
+            looks.set(frame.target_id.clone(), LooksState(visible = s.visible, size = s.size, costume_index = s.costume_index, ghost = 0.0))
+        GoToFrontBack(which):
+            if which == "front":
+                layer_orders.go_to_front(frame.target_id.clone())
+            else:
+                layer_orders.go_to_back(frame.target_id.clone())
+        GoForwardBackwardLayers(num_expr, which):
+            # "forward" moves toward the front (higher rank in
+            # `LayerOrders`' own "higher draws in front" convention) --
+            # a positive delta; "backward" the reverse. Real scratch-vm
+            # rounds NUM to the nearest whole layer count before applying
+            # it (`Math.round`, same convention this project's own
+            # `operator_round` already ports) -- a fractional glide-like
+            # NUM doesn't make sense for a discrete layer move.
+            let num = eval(num_expr, vars, frame, procs, lists, broadcasts, positions, keyboard, mouse, timer, rng, looks, target_costumes, costume_dims, sound_queue).to_num().to_isize_checked() else 0
+            # `(0 as int) - num`, not a direct unary `-num` -- matches the
+            # convention this project's own `values.br` (`abs_i64`, etc.)
+            # already uses everywhere else a fixed-width int gets negated,
+            # to work around a unary-negation bug confirmed in `boring`'s
+            # self-hosted tree-walk interpreter. Verified this project's
+            # own `--emit-rust` transpiler backend does *not* reproduce
+            # that bug here -- the generated Rust is a plain, correct
+            # `(-num)` (confirmed against `tests/motion_layers.rs`'s own
+            # "go backward" case, which already passes) -- so this is
+            # defense-in-depth for free, not a behavior fix.
+            let delta = if which == "backward": (0 as int) - num else: num
+            layer_orders.go_forward_backward(frame.target_id.clone(), delta)
+        CreateCloneOf(target_expr):
+            # Ported from real scratch-vm's own clone-creation semantics:
+            # "_myself_" clones the *calling* instance (whatever it
+            # currently is -- itself already a clone, cloning a clone is
+            # valid), a named sprite always clones that sprite's own
+            # *original*, never any currently-running clone of it even if
+            # one exists (same "_mouse_"/"_random_"/named-sprite dispatch
+            # shape as `GoTo`'s own TO expr above). Silently no-ops past
+            # real Scratch's own global 300-clone cap.
+            let target_str = "{eval(target_expr, vars, frame, procs, lists, broadcasts, positions, keyboard, mouse, timer, rng, looks, target_costumes, costume_dims, sound_queue)}"
+            let source_id = if target_str == "_myself_": frame.target_id.clone() else: target_str
+            if sound_queue.live_clone_count < 300:
+                let origin_name = sound_queue.instance_type_of(source_id.clone())
+                let new_id = "{origin_name}_clone_{sound_queue.next_clone_id}"
+                sound_queue.next_clone_id += 1
+                sound_queue.live_clone_count += 1
+                # Copy the source instance's *current* per-instance state
+                # into new entries keyed by `new_id` -- safe here (plain
+                # resource mutation, no `Commands`/`Query` needed), unlike
+                # the actual entity/thread spawn below, which `exec_simple`
+                # has no access to and must defer (see `CloneRequest`'s own
+                # doc comment).
+                positions.set(new_id.clone(), positions.get(source_id.clone()))
+                looks.set(new_id.clone(), looks.get(source_id.clone()))
+                layer_orders.set(new_id.clone(), layer_orders.get(source_id.clone()))
+                sound_queue.set_volume(new_id.clone(), sound_queue.get_volume(source_id.clone()))
+                sound_queue.set_pitch(new_id.clone(), sound_queue.get_pitch(source_id.clone()))
+                sound_queue.set_pan(new_id.clone(), sound_queue.get_pan(source_id.clone()))
+                sound_queue.set_pen_state(new_id.clone(), sound_queue.get_pen_state(source_id.clone()))
+                sound_queue.set_rotation_style(new_id.clone(), sound_queue.get_rotation_style(source_id.clone()))
+                sound_queue.set_draggable(new_id.clone(), sound_queue.get_draggable(source_id.clone()))
+                sound_queue.set_instance_type(new_id.clone(), origin_name.clone())
+                vars.copy_local(source_id.clone(), new_id.clone())
+                lists.copy_local(source_id.clone(), new_id.clone())
+                sound_queue.clone_requests.push(CloneRequest(source_instance_id = source_id, new_id = new_id, origin_name = origin_name))
+        # `DeleteThisClone` is deliberately NOT matched here -- its real
+        # semantics live entirely in `step_thread`'s own match (needs to
+        # clear the calling thread's own stack, which this function has no
+        # `Thread` access to do -- see that arm's own doc comment), and
+        # `step_thread` never falls through to `exec_simple` for it. If it
+        # somehow reached here anyway (a malformed project evaluating it as
+        # a reporter), the trailing `_:` arm below throws the same as every
+        # other stack-block-in-reporter-position case.
+        _:
+            # A reporter variant reached in statement position -- same
+            # linker-bug argument as eval()'s `else` arm above.
+            throw Error.InvalidInput
+
+# Keeps a direction in real Scratch's own `(-180, 180]` display range after
+# `turn_right`/`turn_left`/`point_in_direction` -- ported directly from
+# real Scratch's `MathUtil.wrapClamp(direction, -180, 180)` behavior (not
+# guessed): repeatedly folding by 360 rather than a single `%` because a
+# large `turn_right`/`turn_left` delta can overshoot the range by more than
+# one full turn.
+def float32 normalize_direction(float32 d):
+    var result = d
+    while result > 180.0:
+        result -= 360.0
+    while result <= -180.0:
+        result += 360.0
+    result
+
+# Wraps a costume index into `[0, count)` -- ported from real Scratch's
+# own `MathUtil.wrapClamp(costumeIndex, 0, count - 1)`, the same "double
+# mod" trick that correctly wraps a *negative* index too (real Scratch's
+# `looks_switchcostumeto` computes `costumeIndex = forceNumber - 1`
+# *before* wrapping, so a numeric argument of `0` or a negative number is
+# a real, valid input here, not a bug to guard against). `count` is
+# assumed `> 0` -- every caller already checks that first (there's no
+# valid index to wrap into an empty costume list).
+def int wrap_costume_index(int idx, int count):
+    ((idx % count) + count) % count
+
+# Picks a uniform random integer in the inclusive range `[lower, upper]`,
+# guaranteed never to equal `excluded` -- ported verbatim from real
+# Scratch's own `MathUtil.inclusiveRandIntWithout` (ported/looks_
+# switchbackdropto's "random backdrop" special string is the only caller):
+# picks uniformly among `upper - lower` values in `[lower, upper - 1]`,
+# then shifts every value `>= excluded` up by one, which skips exactly
+# `excluded` while keeping every other value in `[lower, upper]` equally
+# likely. Caller's responsibility to only call this when `upper > lower`
+# (i.e. at least two distinct values exist to pick from).
+def int rand_int_excluding(var Rng rng, int lower, int upper, int excluded):
+    let possible = (upper - lower) as float64
+    let rand_int = lower + (rng.next_f64_01() * possible) as isize
+    if rand_int >= excluded:
+        rand_int + 1
+    else:
+        rand_int
+
+# Clamps a ghost-effect value into real Scratch's own `[0, 100]` range --
+# ported from `Scratch3LooksBlocks`'s own effect clamp (a plain min/max,
+# not a wraparound the way costume indices are).
+def float32 clamp_ghost(float32 v):
+    if v < 0.0:
+        0.0
+    elif v > 100.0:
+        100.0
+    else:
+        v
+
+# Same `[0, 100]` clamp as `clamp_ghost`, ported from real scratch-vm's
+# own `Scratch3SoundBlocks` volume clamp -- a coincidentally identical
+# range to the graphic-effects one, kept as its own named function
+# rather than reused directly since they clamp conceptually unrelated
+# quantities (volume vs. a graphic effect) that just happen to share a
+# bound today.
+def float32 clamp_volume(float32 v):
+    if v < 0.0:
+        0.0
+    elif v > 100.0:
+        100.0
+    else:
+        v
+
+# Real Scratch's own PITCH effect range (`Scratch3SoundBlocks`'s own
+# `-360..360`, "-3 to 3 octaves" in its own comment -- confirmed against
+# real scratch-vm source, not guessed).
+def float32 clamp_pitch(float32 v):
+    if v < -360.0:
+        -360.0
+    elif v > 360.0:
+        360.0
+    else:
+        v
+
+# Real Scratch's own PAN effect range (`Scratch3SoundBlocks`'s own
+# `EXTENSION_ID`-adjacent `pan: {min: -100, max: 100}` -- confirmed against
+# real source, not guessed), -100 (full left) to 100 (full right). See
+# `play_queued_sounds`' own doc comment for how this maps onto Bevy's
+# spatial-audio system (the only stereo-panning primitive `bevy_audio`
+# actually has).
+def float32 clamp_pan(float32 v):
+    if v < -100.0:
+        -100.0
+    elif v > 100.0:
+        100.0
+    else:
+        v
+
+# Real Scratch's own Pen size range (`Scratch3PenBlocks.PEN_SIZE_RANGE`,
+# confirmed against source: "twice the diagonal of the stage, so that
+# even an off-stage sprite can fill it").
+def float32 clamp_pen_size(float32 v):
+    if v < 1.0:
+        1.0
+    elif v > 1200.0:
+        1200.0
+    else:
+        v
+
+# Real Scratch's own hard clamp for saturation/brightness/transparency
+# (`Scratch3PenBlocks._clampColorParam`, confirmed against source) --
+# unlike hue (below), these three saturate rather than wrap.
+def float32 clamp_pen_color_param(float32 v):
+    if v < 0.0:
+        0.0
+    elif v > 100.0:
+        100.0
+    else:
+        v
+
+# Real Scratch's own `_wrapColor`/`MathUtil.wrapClamp(value, 0, 100)`,
+# ported verbatim (confirmed against source): wraps within the *closed*
+# range [0, 100] (101 distinct steps, matching real Scratch treating hue
+# 0 and hue 100 as the exact same color) rather than a plain `% 100`
+# (which would exclude 100 itself).
+def float32 wrap_pen_color(float32 v):
+    let range = 101.0
+    v - (floor(v / range) * range)
+
+# Real Scratch's own `_setOrChangeColorParam` (confirmed against source)
+# -- `change`: add `value` to the param's own current value first (both
+# `pen_changePenColorParamBy` and `pen_setPenColorParamTo` share this one
+# helper in real scratch-vm too, just with `change` true/false).
+def PenState apply_pen_color_param(string param, float32 value, PenState current, bool change):
+    var mut hue = current.hue
+    var mut sat = current.saturation
+    var mut bright = current.brightness
+    var mut trans = current.transparency
+    if param == "color":
+        let base = if change: current.hue else: 0.0
+        hue = wrap_pen_color(value + base)
+    elif param == "saturation":
+        let base = if change: current.saturation else: 0.0
+        sat = clamp_pen_color_param(value + base)
+    elif param == "brightness":
+        let base = if change: current.brightness else: 0.0
+        bright = clamp_pen_color_param(value + base)
+    elif param == "transparency":
+        let base = if change: current.transparency else: 0.0
+        trans = clamp_pen_color_param(value + base)
+    PenState(down = current.down, hue = hue, saturation = sat, brightness = bright, transparency = trans, diameter = current.diameter, shade = current.shade)
+
+# Real Scratch's own `_legacyUpdatePenColor` (confirmed against source,
+# `scratch3_pen/index.js`), ported verbatim -- the pre-3.0 "shade" model:
+# start from the current hue at full saturation/brightness
+# (`hue100_to_full_rgb`), then mix towards black (shade 0..50) or white
+# (shade 50..100) to derive the actual displayed color. `shade` first
+# folds its own 100..200 half back down to 0..100 (`shade > 100 -> 200 -
+# shade`) -- a real, deliberate mirror, not a bug, so `changePenShadeBy`'s
+# own `% 200` wrap never produces a visible jump at the seam. The
+# resulting mixed RGB is converted straight back into this project's own
+# hue/saturation/brightness fields (overwriting them, exactly like real
+# Scratch does) -- every *other* pen-color code path (`pen_color_of`, the
+# modern color-parameter blocks) keeps reading hue/saturation/brightness/
+# transparency unchanged from here on; `shade` itself is never read
+# anywhere except here.
+def PenState legacy_update_pen_color(PenState s):
+    let full = hue100_to_full_rgb(s.hue)
+    let folded_shade = if s.shade > 100.0: 200.0 - s.shade else: s.shade
+    var mut mixed = full
+    if folded_shade < 50.0:
+        mixed = mix_rgb01(Rgb01(r = 0.0, g = 0.0, b = 0.0), full, (10.0 + folded_shade) / 60.0)
+    else:
+        mixed = mix_rgb01(full, Rgb01(r = 1.0, g = 1.0, b = 1.0), (folded_shade - 50.0) / 60.0)
+    let hsv = rgb_to_hsv100(mixed.r, mixed.g, mixed.b)
+    PenState(down = s.down, hue = hsv.hue100, saturation = hsv.sat100, brightness = hsv.val100, transparency = s.transparency, diameter = s.diameter, shade = s.shade)
+
+# Real Scratch's own `setPenHueToNumber`/`changePenHueBy` (confirmed
+# against source) -- the legacy HUE input is `0..200` (real Scratch's own
+# comment: "double the range of the 'color' param" -- hence `/ 2.0`
+# before reusing the modern `apply_pen_color_param` machinery), and
+# `setPenHueToNumber` also always forces transparency back to fully
+# opaque (real source: an unconditional `_setOrChangeColorParam(
+# TRANSPARENCY, 0, penState, false)` right after setting the hue).
+def PenState set_pen_hue_to_number(PenState s, float32 hue_value):
+    let color_value = hue_value / 2.0
+    let with_hue = apply_pen_color_param("color", color_value, s, false)
+    let opaque = apply_pen_color_param("transparency", 0.0, with_hue, false)
+    legacy_update_pen_color(opaque)
+
+def PenState change_pen_hue_by(PenState s, float32 hue_change):
+    let color_change = hue_change / 2.0
+    let with_hue = apply_pen_color_param("color", color_change, s, true)
+    legacy_update_pen_color(with_hue)
+
+# Real Scratch's own `setPenShadeToNumber`/`changePenShadeBy` (confirmed
+# against source) -- `SHADE` wraps within `0..200` via a plain `%`/`+=
+# 200` (unlike the modern color params' own closed-range `wrapClamp`,
+# real source uses a plain modulo here, confirmed not to reuse `MathUtil.
+# wrapClamp` for this one field). `changePenShadeBy` is real Scratch's
+# own `setPenShadeToNumber({SHADE: penState._shade + shadeChange}, ...)`
+# -- delegates to the "set" version with the sum already computed, not a
+# separately-derived formula.
+def PenState set_pen_shade_to_number(PenState s, float32 shade_value):
+    var mut new_shade = shade_value % 200.0
+    if new_shade < 0.0:
+        new_shade = new_shade + 200.0
+    let updated = PenState(down = s.down, hue = s.hue, saturation = s.saturation, brightness = s.brightness, transparency = s.transparency, diameter = s.diameter, shade = new_shade)
+    legacy_update_pen_color(updated)
+
+def PenState change_pen_shade_by(PenState s, float32 shade_change):
+    set_pen_shade_to_number(s, s.shade + shade_change)
+
+# The one and only place any *motion* opcode (`MoveSteps`/`GotoXY`/`GoTo`/
+# `IfOnEdgeBounce`/`ChangeXBy`/`SetX`/`ChangeYBy`/`SetY` here in
+# `exec_simple`, plus `GlideSecsToXY`/`GlideTo`/the `Gliding` tween-resume
+# case in `step_thread`) is allowed to actually move a target -- queues a
+# `PenLineRequest` (`pen.br`'s own `draw_pen_marks` drains these, same as
+# `PenDown`'s own immediate-dot request above) whenever the target's pen is
+# down and the position genuinely changed.
+#
+# This exists because real Scratch draws pen trails *synchronously inside
+# each individual motion statement* (`RenderedTarget.setXY` -> `_onTarget
+# Moved` -> `Scratch3PenBlocks._onTargetMoved`, confirmed against source) --
+# a script that does many `goto`s in one atomic ("warp") run, e.g. replaying
+# a whole recorded point history every frame (a common real-world pattern:
+# a downloaded Scratch project, "Simple Pen Drawing Tool" from the official
+# site's own Pen studio, does exactly this to support undo), draws one line
+# segment *per goto*, not one segment for the whole run. The old design here
+# instead had a single per-*tick* Bevy system (`draw_pen_marks`) diff `Positions`
+# against a remembered `PenCanvas.last_position` after every script had
+# already finished running -- correct only for the common case of a single,
+# unbatched motion per tick (this project's own original `pen_draw.rs` test
+# and every hand-authored fixture only ever did that), but wrong for any
+# script that moves the *same* target more than once in one tick: only the
+# tick's own *net* start/end position was ever visible to that diff, so a
+# multi-point replay collapsed into one long, wrong-looking straight line
+# from wherever the target was last tick to wherever the whole replay ended
+# up -- exactly the "des traits qui apparaissent... dans des positions non
+# attendues" bug this function fixes. `PenCanvas.last_position` and its
+# whole diff loop are gone now (`pen.br`) -- this per-mutation queue is a
+# strict superset, so there is nothing left for that diff to correctly add.
+def move_position(var Positions positions, var SoundQueue sound_queue, string target_id, Position new_pos):
+    let old = positions.get(target_id.clone())
+    positions.set(target_id.clone(), new_pos)
+    if old.x != new_pos.x or old.y != new_pos.y:
+        let state = sound_queue.get_pen_state(target_id.clone())
+        if state.down:
+            let color = pen_color_of(state)
+            sound_queue.pen_line_requests.push(PenLineRequest(from_x = old.x, from_y = old.y, to_x = new_pos.x, to_y = new_pos.y, color = color, diameter = state.diameter))
+
+# Real scratch-vm's own `thread.warp` -- true once execution is anywhere
+# inside a `warp`-flagged ("Run without screen refresh") custom-block
+# call, reconstructed by scanning the *whole* persisted frame stack for a
+# `ProcCallFrame(true)` rather than tracked as a separate counter, so it
+# comes out right even when `step_thread` resumes a thread that yielded
+# (for a real reason -- `wait`/`ask and wait`/`broadcast and wait` all
+# still genuinely yield even in warp mode) partway through a warp call on
+# an earlier tick. See `FrameKind::ProcCallFrame`'s own doc comment for
+# why "contagious downward, any warp ancestor counts" (not just the
+# innermost call) is the real semantics this ports.
+def bool thread_in_warp([ExecFrame] stack):
+    var mut found = false
+    for f in stack:
+        let this_is_warp = match f.kind:
+            ProcCallFrame(w): w
+            _: false
+        if this_is_warp:
+            found = true
+    found
+
+# Advances one `Thread` by executing statements until it either finishes
+# entirely (its frame stack empties -- returns `true`) or hits a real
+# yield point and needs another call later to keep going (returns
+# `false`): the end of a `repeat`/`forever`/`repeat until` iteration, or a
+# `wait`/`wait until` whose condition isn't satisfied yet. This is a
+# strict superset of the old run-to-completion `exec`, not a slowdown for
+# scripts that never use the three new blocks: a script whose frame stack
+# never contains a loop/wait frame simply runs its entire body in one
+# `while true:` pass here and returns `true` on the very first call,
+# identical to what a direct `exec` call used to do -- the `while true:`
+# loop only actually spans more than one call when a real yield point is
+# hit. See `Thread`/`FrameKind`'s own doc comments for the state shape
+# this walks; see README.md's "Scheduler" design section for why this
+# replaces `exec`'s old native-recursion approach at all.
+def bool step_thread(var Thread thread, var Vars vars, ProcTable procs, var Lists lists, Broadcasts broadcasts, var Positions positions, KeyboardState keyboard, MouseState mouse, ScratchTimer timer, var Rng rng, var LooksStates looks, var LayerOrders layer_orders, TargetCostumes target_costumes, TargetCostumeDims costume_dims, var SoundQueue sound_queue, var SpeechBubbles speech_bubbles):
+    # Every read/mutation below works against this local copy, never
+    # `thread.stack` directly -- indexed *assignment* into an array field
+    # reached through a `var` parameter (`thread.stack[i] = ...`) hits the
+    # same class of transpiler bug already found and worked around for
+    # dict fields (see `SpeechBubbles.set`'s own doc comment, and
+    # `check_greater_than_hats`' own comment naming this exact risk for a
+    # plain list index too, before this confirmed it for real) -- `mut
+    # stack`, a genuine local variable, doesn't have that problem, so
+    # every mutation happens here instead and `thread.stack = stack`
+    # writes the whole field back in one shot at every `return` below.
+    mut stack = thread.stack.clone()
+    # A `warp`-flagged custom block's own loops (`RepeatN`/`RepeatUntilCond`/
+    # `Forever` below, guarded by `thread_in_warp`) skip their ordinary
+    # per-iteration yield entirely, matching real Scratch's "Run without
+    # screen refresh" semantics -- but a genuinely-infinite `forever`
+    # loop inside a warp call would then never yield *at all*, hanging
+    # this whole native app forever (real Scratch has this exact footgun
+    # too, freezing the browser tab -- not something worth reproducing
+    # here). `warp_guard` is the same bounded-give-up shape `drive_
+    # thread_to_completion`'s own `iteration_cap`/`run_script`'s own
+    # `safety` already establish elsewhere in this file: once a single
+    # `step_thread` call has skipped this many warp-mode yields without
+    # the thread actually finishing, force a real yield anyway. Set high
+    # enough that no legitimate warp workload this project has seen (e.g.
+    # "Simple Pen Drawing Tool"'s own full-history redraw, thousands of
+    # points) ever gets anywhere near it.
+    var mut warp_guard = 0
+    let warp_guard_cap = 1000000
+    # Tracks how many `ProcCallFrame`s are currently nested on `stack`
+    # (incremented on push below, decremented on pop in the
+    # `ProcCallFrame(_)` arm just below), independent of `warp` --
+    # unlike `RepeatN`/`RepeatUntilCond`/`Forever`, an ordinary (non-warp)
+    # `ProcCall` never yields on its own (pushing a callee frame and
+    # continuing this same `while true:` pass is exactly right for a
+    # normal, non-recursive call), so a custom block that calls itself
+    # directly with no loop/wait in between would otherwise grow `stack`
+    # without bound *inside this one `step_thread` call*, never
+    # returning to let the next Bevy tick run at all -- a real, total
+    # freeze (not just a slow abandon like `warp_guard`/`iteration_cap`
+    # elsewhere in this file, since nothing here ever calls back into
+    # Bevy until this function returns). Counting actual current nesting
+    # (not a monotonic total) matters: a script that calls the same
+    # (non-recursive) custom block many times in a row from a `repeat`
+    # loop must not trip this, since each call finishes and pops before
+    # the next one starts.
+    var mut proc_call_depth = 0
+    let proc_call_depth_cap = 10000
+    while true:
+        if stack.length == 0:
+            thread.stack = stack
+            return true
+        let top = stack.length - 1
+        let frame = stack[top]
+        if frame.index >= frame.body.length:
+            # Fell off the end of this frame's own body -- what happens
+            # next depends entirely on what *kind* of frame this is (see
+            # `FrameKind`'s own doc comment).
+            match frame.kind:
+                TopLevel:
+                    stack.remove(top)
+                ProcCallFrame(_):
+                    proc_call_depth -= 1
+                    stack.remove(top)
+                RepeatN(remaining):
+                    if remaining <= 0:
+                        stack.remove(top)
+                    else:
+                        stack[top] = ExecFrame(body = frame.body, index = 0, kind = FrameKind.RepeatN(remaining - 1), scope = frame.scope)
+                        if thread_in_warp(stack) and warp_guard < warp_guard_cap:
+                            warp_guard += 1
+                        else:
+                            thread.stack = stack
+                            return false
+                RepeatUntilCond(cond):
+                    if eval(cond, vars, frame.scope, procs, lists, broadcasts, positions, keyboard, mouse, timer, rng, looks, target_costumes, costume_dims, sound_queue).truthy():
+                        stack.remove(top)
+                    else:
+                        stack[top] = ExecFrame(body = frame.body, index = 0, kind = FrameKind.RepeatUntilCond(cond), scope = frame.scope)
+                        if thread_in_warp(stack) and warp_guard < warp_guard_cap:
+                            warp_guard += 1
+                        else:
+                            thread.stack = stack
+                            return false
+                Forever:
+                    stack[top] = ExecFrame(body = frame.body, index = 0, kind = FrameKind.Forever, scope = frame.scope)
+                    if thread_in_warp(stack) and warp_guard < warp_guard_cap:
+                        warp_guard += 1
+                    else:
+                        thread.stack = stack
+                        return false
+                WaitingUntil(target):
+                    if timer.elapsed >= target:
+                        stack.remove(top)
+                    else:
+                        thread.stack = stack
+                        return false
+                WaitingUntilCond(cond):
+                    if eval(cond, vars, frame.scope, procs, lists, broadcasts, positions, keyboard, mouse, timer, rng, looks, target_costumes, costume_dims, sound_queue).truthy():
+                        stack.remove(top)
+                    else:
+                        thread.stack = stack
+                        return false
+                WaitingUntilThenClearBubble(target):
+                    if timer.elapsed >= target:
+                        speech_bubbles.set(frame.scope.target_id.clone(), SpeechBubble(text = "", is_thought = false))
+                        stack.remove(top)
+                    else:
+                        thread.stack = stack
+                        return false
+                Gliding(start_time, duration, start_x, start_y, end_x, end_y):
+                    let elapsed = timer.elapsed - start_time
+                    let cur_dir = positions.get(frame.scope.target_id.clone()).direction
+                    if elapsed >= duration:
+                        move_position(positions, sound_queue, frame.scope.target_id.clone(), Position(x = end_x, y = end_y, direction = cur_dir))
+                        stack.remove(top)
+                    else:
+                        # Linear interpolation, ported straight from real
+                        # scratch-vm's own `glide` -- `frac` in `[0, 1)`
+                        # here (the `>= duration` branch above already
+                        # handles the `frac >= 1` case with the *exact*
+                        # end position, not an interpolated one that might
+                        # be a hair off from floating-point rounding).
+                        let frac = elapsed / duration
+                        move_position(positions, sound_queue, frame.scope.target_id.clone(), Position(x = start_x + frac * (end_x - start_x), y = start_y + frac * (end_y - start_y), direction = cur_dir))
+                        thread.stack = stack
+                        return false
+                WaitingForAnswer(ask_id):
+                    # Resolved entirely by a real Bevy system
+                    # (`handle_ask_text_input`, `scratch.br`) advancing
+                    # `vars.last_answered_id` once the on-screen input for
+                    # this frame's own `ask_id` gets submitted -- nothing
+                    # for `step_thread` itself to check beyond that single
+                    # counter comparison (see `FrameKind::WaitingForAnswer`'s
+                    # own doc comment for why this can't resume based on
+                    # anything already available here the way `WaitingUntil`
+                    # (Cond)` can).
+                    if ask_id <= vars.last_answered_id:
+                        stack.remove(top)
+                    else:
+                        thread.stack = stack
+                        return false
+        else:
+            let stmt = frame.body[frame.index]
+            let scope = frame.scope
+            stack[top] = ExecFrame(body = frame.body, index = frame.index + 1, kind = frame.kind, scope = frame.scope)
+            match stmt.kind:
+                If(cond, body):
+                    if eval(cond, vars, scope.clone(), procs, lists, broadcasts, positions, keyboard, mouse, timer, rng, looks, target_costumes, costume_dims, sound_queue).truthy():
+                        stack.push(ExecFrame(body = body, index = 0, kind = FrameKind.TopLevel, scope = scope))
+                IfElse(cond, then_body, else_body):
+                    if eval(cond, vars, scope.clone(), procs, lists, broadcasts, positions, keyboard, mouse, timer, rng, looks, target_costumes, costume_dims, sound_queue).truthy():
+                        stack.push(ExecFrame(body = then_body, index = 0, kind = FrameKind.TopLevel, scope = scope))
+                    else:
+                        stack.push(ExecFrame(body = else_body, index = 0, kind = FrameKind.TopLevel, scope = scope))
+                Seq(stmts):
+                    stack.push(ExecFrame(body = stmts, index = 0, kind = FrameKind.TopLevel, scope = scope))
+                Repeat(count_expr, body):
+                    # Same "non-integral/huge count -> 0 iterations" clamp
+                    # the old recursive `exec` used -- a malformed repeat
+                    # count degrades to skipping the loop entirely, not a
+                    # crash. `to_isize_checked` (not `to_i64_checked`) to
+                    # match `FrameKind::RepeatN`'s own `int` (`isize`)
+                    # field -- every other loop-count-shaped value in this
+                    # codebase (list lengths, index resolution) is `int`
+                    # for the same reason.
+                    let times = eval(count_expr, vars, scope.clone(), procs, lists, broadcasts, positions, keyboard, mouse, timer, rng, looks, target_costumes, costume_dims, sound_queue).to_num().to_isize_checked() else 0
+                    if times > 0:
+                        stack.push(ExecFrame(body = body, index = 0, kind = FrameKind.RepeatN(times - 1), scope = scope))
+                RepeatUntil(cond, body):
+                    # Real Scratch checks the condition *before* the first
+                    # iteration too -- an already-true condition skips the
+                    # loop entirely rather than running the body once
+                    # unconditionally.
+                    if !eval(cond.clone(), vars, scope.clone(), procs, lists, broadcasts, positions, keyboard, mouse, timer, rng, looks, target_costumes, costume_dims, sound_queue).truthy():
+                        stack.push(ExecFrame(body = body, index = 0, kind = FrameKind.RepeatUntilCond(cond), scope = scope))
+                Forever(body):
+                    stack.push(ExecFrame(body = body, index = 0, kind = FrameKind.Forever, scope = scope))
+                Wait(seconds_expr):
+                    let secs = eval(seconds_expr, vars, scope.clone(), procs, lists, broadcasts, positions, keyboard, mouse, timer, rng, looks, target_costumes, costume_dims, sound_queue).to_num().to_f32()
+                    let target = timer.elapsed + secs
+                    # Pushed unconditionally, even for `wait 0` or a
+                    # negative/malformed duration -- real Scratch's own
+                    # `wait` always yields at least one frame no matter the
+                    # duration, it never inlines into a same-tick no-op.
+                    stack.push(ExecFrame(body = [], index = 0, kind = FrameKind.WaitingUntil(target), scope = scope))
+                    thread.stack = stack
+                    return false
+                PlayUntilDone(sound_expr):
+                    # Queues the actual playback exactly like plain
+                    # `PlaySound`'s own `exec_simple` case does (same
+                    # volume/pitch snapshot, same instance->origin
+                    # resolution for the zip lookup) -- `step_thread`
+                    # already has `var SoundQueue sound_queue` for the
+                    # same reason `exec_simple` does. The wait duration
+                    # comes from `SoundQueue.sound_durations`, precomputed
+                    # once at link time from the sound's own saved sb3
+                    # metadata (`SoundQueue.sound_durations`' own doc
+                    # comment) -- no real audio-completion callback exists
+                    # in this project's scheduler, so a fixed Timer-based
+                    # wait (exactly `Wait`'s own shape) is the closest fit.
+                    let sound_name = "{eval(sound_expr, vars, scope.clone(), procs, lists, broadcasts, positions, keyboard, mouse, timer, rng, looks, target_costumes, costume_dims, sound_queue)}"
+                    let origin_name = sound_queue.instance_type_of(scope.target_id.clone())
+                    let volume = sound_queue.get_volume(scope.target_id.clone())
+                    let pitch = sound_queue.get_pitch(scope.target_id.clone())
+                    let pan = sound_queue.get_pan(scope.target_id.clone())
+                    sound_queue.play_queue.push(SoundRequest(target_id = origin_name.clone(), sound_name = sound_name.clone(), volume = volume, pitch = pitch, pan = pan))
+                    let duration = sound_queue.get_sound_duration(origin_name, sound_name)
+                    # Unlike `Wait`'s own "always yields at least one
+                    # frame no matter the duration" rule, a `duration <=
+                    # 0.0` here -- either a genuinely zero-length sound or
+                    # (`get_sound_duration`'s own fallback) a sound name
+                    # that doesn't match any of this target's own sounds
+                    # -- skips the wait entirely, matching real scratch-
+                    # vm's own `playSoundAndWaitUntilDone`: an unresolved
+                    # sound index returns synchronously with no promise to
+                    # await at all, the same "nothing to wait for" outcome
+                    # `motion_glidesecstoxy`'s own `duration <= 0` case
+                    # already established for a different opcode.
+                    if duration > 0.0:
+                        let target = timer.elapsed + duration
+                        stack.push(ExecFrame(body = [], index = 0, kind = FrameKind.WaitingUntil(target), scope = scope))
+                        thread.stack = stack
+                        return false
+                WaitUntil(cond):
+                    if !eval(cond.clone(), vars, scope.clone(), procs, lists, broadcasts, positions, keyboard, mouse, timer, rng, looks, target_costumes, costume_dims, sound_queue).truthy():
+                        stack.push(ExecFrame(body = [], index = 0, kind = FrameKind.WaitingUntilCond(cond), scope = scope))
+                        thread.stack = stack
+                        return false
+                AskAndWait(question_expr):
+                    # Pushed unconditionally, same "always yields at least
+                    # one frame" reasoning as `Wait` above -- real Scratch's
+                    # own ask box always shows (and always waits for a real
+                    # submit), even for an empty QUESTION. `my_id` captured
+                    # *before* incrementing `next_ask_id` -- the newly
+                    # queued `PendingAsk` and this frame's own resume check
+                    # must agree on the same id.
+                    let question = "{eval(question_expr, vars, scope.clone(), procs, lists, broadcasts, positions, keyboard, mouse, timer, rng, looks, target_costumes, costume_dims, sound_queue)}"
+                    let my_id = vars.next_ask_id
+                    vars.next_ask_id += 1
+                    vars.ask_queue.push(PendingAsk(ask_id = my_id, target_id = scope.target_id.clone(), question = question))
+                    stack.push(ExecFrame(body = [], index = 0, kind = FrameKind.WaitingForAnswer(my_id), scope = scope))
+                    thread.stack = stack
+                    return false
+                SayForSecs(msg_expr, secs_expr):
+                    # Set the bubble immediately (same leaf side effect as
+                    # plain `Say`), then park on a `WaitingUntilThenClear
+                    # Bubble` frame the same way `Wait` parks on a plain
+                    # `WaitingUntil` one -- pushed unconditionally, even
+                    # for 0/negative/malformed `secs`, matching `Wait`'s
+                    # own "always yields at least one frame" doc comment.
+                    let msg = "{eval(msg_expr, vars, scope.clone(), procs, lists, broadcasts, positions, keyboard, mouse, timer, rng, looks, target_costumes, costume_dims, sound_queue)}"
+                    speech_bubbles.set(scope.target_id.clone(), SpeechBubble(text = msg, is_thought = false))
+                    let secs = eval(secs_expr, vars, scope.clone(), procs, lists, broadcasts, positions, keyboard, mouse, timer, rng, looks, target_costumes, costume_dims, sound_queue).to_num().to_f32()
+                    let target = timer.elapsed + secs
+                    stack.push(ExecFrame(body = [], index = 0, kind = FrameKind.WaitingUntilThenClearBubble(target), scope = scope))
+                    thread.stack = stack
+                    return false
+                ThinkForSecs(msg_expr, secs_expr):
+                    let msg = "{eval(msg_expr, vars, scope.clone(), procs, lists, broadcasts, positions, keyboard, mouse, timer, rng, looks, target_costumes, costume_dims, sound_queue)}"
+                    speech_bubbles.set(scope.target_id.clone(), SpeechBubble(text = msg, is_thought = true))
+                    let secs = eval(secs_expr, vars, scope.clone(), procs, lists, broadcasts, positions, keyboard, mouse, timer, rng, looks, target_costumes, costume_dims, sound_queue).to_num().to_f32()
+                    let target = timer.elapsed + secs
+                    stack.push(ExecFrame(body = [], index = 0, kind = FrameKind.WaitingUntilThenClearBubble(target), scope = scope))
+                    thread.stack = stack
+                    return false
+                GlideSecsToXY(secs_expr, x_expr, y_expr):
+                    # Ported from real scratch-vm's own `glide`: a
+                    # `duration <= 0` glide moves instantly and never
+                    # yields at all (no `Gliding` frame pushed) -- same
+                    # real semantics as `Wait`'s own "always yields at
+                    # least one frame" doc comment describes for *that*
+                    # block, but the opposite conclusion here, confirmed
+                    # directly against scratch-vm's own source rather than
+                    # assumed by analogy.
+                    let secs = eval(secs_expr, vars, scope.clone(), procs, lists, broadcasts, positions, keyboard, mouse, timer, rng, looks, target_costumes, costume_dims, sound_queue).to_num().to_f32()
+                    let target_x = eval(x_expr, vars, scope.clone(), procs, lists, broadcasts, positions, keyboard, mouse, timer, rng, looks, target_costumes, costume_dims, sound_queue).to_num().to_f32()
+                    let target_y = eval(y_expr, vars, scope.clone(), procs, lists, broadcasts, positions, keyboard, mouse, timer, rng, looks, target_costumes, costume_dims, sound_queue).to_num().to_f32()
+                    let cur = positions.get(scope.target_id.clone())
+                    if secs <= 0.0:
+                        move_position(positions, sound_queue, scope.target_id.clone(), Position(x = target_x, y = target_y, direction = cur.direction))
+                    else:
+                        stack.push(ExecFrame(body = [], index = 0, kind = FrameKind.Gliding(timer.elapsed, secs, cur.x, cur.y, target_x, target_y), scope = scope))
+                        thread.stack = stack
+                        return false
+                GlideTo(secs_expr, to_expr):
+                    # Same real tween as `GlideSecsToXY` just above -- the
+                    # only difference is resolving the target position
+                    # from a TO menu-shadow instead of raw X/Y exprs, the
+                    # exact same "_mouse_"/"_random_"/a sprite name
+                    # dispatch `GoTo`'s own `exec_simple` case already
+                    # uses (`getTargetXY`, real scratch-vm's own shared
+                    # helper). Resolved *once*, here, before the glide
+                    # starts -- confirmed against source that `glideTo`
+                    # never re-samples a moving mouse/sprite mid-glide.
+                    let secs = eval(secs_expr, vars, scope.clone(), procs, lists, broadcasts, positions, keyboard, mouse, timer, rng, looks, target_costumes, costume_dims, sound_queue).to_num().to_f32()
+                    let to = "{eval(to_expr, vars, scope.clone(), procs, lists, broadcasts, positions, keyboard, mouse, timer, rng, looks, target_costumes, costume_dims, sound_queue)}"
+                    let cur = positions.get(scope.target_id.clone())
+                    var mut target_x = cur.x
+                    var mut target_y = cur.y
+                    if to == "_mouse_":
+                        target_x = mouse.x
+                        target_y = mouse.y
+                    elif to == "_random_":
+                        let rx = rng.next_f64_01()
+                        let ry = rng.next_f64_01()
+                        target_x = floor(480.0 * (rx - 0.5) + 0.5) as float32
+                        target_y = floor(360.0 * (ry - 0.5) + 0.5) as float32
+                    else:
+                        let other = positions.get(to.clone())
+                        target_x = other.x
+                        target_y = other.y
+                    if secs <= 0.0:
+                        move_position(positions, sound_queue, scope.target_id.clone(), Position(x = target_x, y = target_y, direction = cur.direction))
+                    else:
+                        stack.push(ExecFrame(body = [], index = 0, kind = FrameKind.Gliding(timer.elapsed, secs, cur.x, cur.y, target_x, target_y), scope = scope))
+                        thread.stack = stack
+                        return false
+                Stop(option):
+                    # "other scripts in sprite" is a documented no-op for
+                    # now (see `Thread`'s own doc comment on `spawned` for
+                    # the analogous broadcast-fidelity gap) -- everything
+                    # else ends the current thread outright, by clearing
+                    # its own stack directly (no exception machinery
+                    # needed at all in this model, unlike the old `throws
+                    # StopSignal`/`catch` approach: a thread's frame stack
+                    # *is* the thing that decides whether it's still
+                    # running, so emptying it IS "stop").
+                    if option != "other scripts in sprite":
+                        stack = []
+                DeleteThisClone:
+                    # Same "clear the stack directly, no exception
+                    # machinery" shape as `Stop`, handled here rather than
+                    # `exec_simple` for the identical reason: this needs
+                    # `thread`/the local `stack`, which `exec_simple` never
+                    # receives (see `exec_simple`'s own comment on why it's
+                    # not matched there). Unlike `Stop`, no "other scripts
+                    # in sprite" carve-out at all -- real Scratch's `delete
+                    # this clone` always ends *every* script this clone is
+                    # running, unconditionally.
+                    #
+                    # A silent no-op if the calling instance isn't actually
+                    # a clone (`instance_type_of` resolves to itself) --
+                    # matches real Scratch's own behavior calling this from
+                    # an original sprite/Stage. Otherwise queue the actual
+                    # despawn (`despawn_pending_clones` has the
+                    # `Commands`/`Query` access this function doesn't) and
+                    # release its slot in the 300-clone cap.
+                    if sound_queue.instance_type_of(scope.target_id.clone()) != scope.target_id:
+                        sound_queue.despawn_requests.push(scope.target_id.clone())
+                        sound_queue.live_clone_count -= 1
+                        stack = []
+                ProcCall(proc_name, arg_exprs):
+                    # Evaluate every argument expression using the
+                    # *caller's* scope -- an argument expression can itself
+                    # reference the caller's own parameters (the nested-
+                    # call case: outer calls inner(x + 1), where `x` is
+                    # outer's own ArgGet) -- before building the callee's
+                    # fresh scope. Missing/unresolved procedure calls
+                    # degrade to a no-op (empty param_names/body) rather
+                    # than crashing the whole script on a malformed
+                    # project.
+                    let proc = procs.table[proc_name] else Proc(param_names = [], body = [], warp = false)
+                    mut new_params = {=}
+                    var i = 0
+                    for arg_expr in arg_exprs:
+                        let v = eval(arg_expr, vars, scope.clone(), procs, lists, broadcasts, positions, keyboard, mouse, timer, rng, looks, target_costumes, costume_dims, sound_queue)
+                        if i < proc.param_names.length:
+                            new_params[proc.param_names[i]] = v
+                        i += 1
+                    # `target_id` carries over from the caller's own scope
+                    # unchanged -- see `Frame`'s own doc comment for why
+                    # (My Blocks execute in the calling sprite's context,
+                    # not the defining sprite's).
+                    let new_scope = Frame(params = new_params, target_id = scope.target_id.clone())
+                    # A custom block directly (or transitively) calling
+                    # itself with no loop/wait as a base case would
+                    # otherwise push a fresh `ProcCallFrame` every pass
+                    # through this same `while true:` loop forever --
+                    # see `proc_call_depth`'s own doc comment just above
+                    # for why this can't reuse `warp_guard`'s "skip a
+                    # yield" shape instead. Past the cap, the call
+                    # degrades to a no-op (same graceful-degradation
+                    # precedent as an unresolved `proc_name` above, rather
+                    # than an unresolved procedure) instead of growing
+                    # `stack` any further -- the caller's own next
+                    # statement (`frame.index` already advanced above)
+                    # just runs next, same as if this call had returned
+                    # immediately.
+                    if proc_call_depth < proc_call_depth_cap:
+                        proc_call_depth += 1
+                        stack.push(ExecFrame(body = proc.body, index = 0, kind = FrameKind.ProcCallFrame(proc.warp), scope = new_scope))
+                _:
+                    exec_simple(stmt, vars, scope, procs, lists, broadcasts, positions, keyboard, mouse, timer, rng, looks, layer_orders, target_costumes, costume_dims, sound_queue, speech_bubbles, thread.spawned)
+    # Unreachable in practice (every path through the loop above returns
+    # early) -- needed anyway because `while true:` isn't recognized as a
+    # diverging/never-completing construct the way a bare `loop:` would
+    # be, so the function's own tail expression still has to satisfy its
+    # `bool` return type on paper. Same idiom `boring`'s own self-hosted
+    # interpreter uses for the identical shape (see e.g. `exec.br`'s
+    # `exec_while_let_pattern`, a trailing `nil` after its own `while
+    # true:` with every real path returning from inside the loop).
+    false
+
+
+# Drives one `Thread` all the way to completion via repeated `step_thread`
+# calls, right here, synchronously -- used by `BroadcastAndWait` (a
+# receiver that itself broadcasts something is handled correctly too:
+# that nested call recurses back into this same function) and by
+# `run_script`'s own headless drive loop (`scheduler.br`), which needs
+# every thread a green-flag script (transitively) starts to finish before
+# a headless test can read out a final value, the same way the old
+# recursive `exec` used to guarantee just by returning.
+#
+# `iteration_cap` is a safety net, not a real design constraint -- a
+# script with no real `wait`/`forever` always finishes in exactly one
+# `step_thread` call, so the cap only ever matters for a thread that
+# genuinely never finishes (a bare `forever` with no `stop` inside it,
+# `wait`ing on a timer that never advances in a headless caller that
+# never ticks `ScratchTimer`, ...); those are abandoned rather than
+# hung forever on, matching this function's own callers' "best effort,
+# not a hard real-time guarantee" contract.
+#
+# Every script this thread starts via a *plain* `Broadcast` while running
+# (not `BroadcastAndWait`, which recurses into this same function instead)
+# still only ever gets fire-and-forget semantics -- collected into
+# `outer_spawned` so whoever ultimately owns the real thread pool
+# (`run_pending_threads`, or `run_script`'s own drive loop) picks them up
+# afterward, exactly like a top-level thread's own `spawned` field would.
+def drive_thread_to_completion(var Thread thread, var Vars vars, ProcTable procs, var Lists lists, Broadcasts broadcasts, var Positions positions, KeyboardState keyboard, MouseState mouse, ScratchTimer timer, var Rng rng, var LooksStates looks, var LayerOrders layer_orders, TargetCostumes target_costumes, TargetCostumeDims costume_dims, var SoundQueue sound_queue, var SpeechBubbles speech_bubbles, var [ReceiverScript] outer_spawned):
+    var mut done = false
+    var mut iterations = 0
+    let iteration_cap = 100000
+    while !done and iterations < iteration_cap:
+        done = step_thread(thread, vars, procs, lists, broadcasts, positions, keyboard, mouse, timer, rng, looks, layer_orders, target_costumes, costume_dims, sound_queue, speech_bubbles)
+        for script in thread.spawned.clone():
+            outer_spawned.push(script)
+        thread.spawned = []
+        iterations += 1

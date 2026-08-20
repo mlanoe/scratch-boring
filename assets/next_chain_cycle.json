@@ -1,0 +1,74 @@
+{
+  "targets": [
+    {
+      "isStage": true,
+      "name": "Stage",
+      "variables": {
+        "varCycleDone": ["cycleDone", 0],
+        "varCycleDone2": ["cycleDone2", 0]
+      },
+      "lists": {},
+      "broadcasts": {},
+      "blocks": {},
+      "comments": {},
+      "currentCostume": 0,
+      "costumes": [],
+      "sounds": [],
+      "volume": 100,
+      "layerOrder": 0
+    },
+    {
+      "isStage": false,
+      "name": "Sprite1",
+      "variables": {},
+      "lists": {},
+      "broadcasts": {},
+      "blocks": {
+        "hat1": {
+          "opcode": "event_whenflagclicked",
+          "next": "blockX",
+          "parent": null,
+          "inputs": {},
+          "fields": {},
+          "shadow": false,
+          "topLevel": true,
+          "x": 0,
+          "y": 0
+        },
+        "blockX": {
+          "opcode": "data_setvariableto",
+          "next": "blockY",
+          "parent": "hat1",
+          "inputs": {
+            "VALUE": [1, [4, "1"]]
+          },
+          "fields": {
+            "VARIABLE": ["cycleDone", "varCycleDone"]
+          },
+          "shadow": false,
+          "topLevel": false
+        },
+        "blockY": {
+          "opcode": "data_setvariableto",
+          "next": "blockX",
+          "parent": "blockX",
+          "inputs": {
+            "VALUE": [1, [4, "2"]]
+          },
+          "fields": {
+            "VARIABLE": ["cycleDone2", "varCycleDone2"]
+          },
+          "shadow": false,
+          "topLevel": false
+        }
+      },
+      "comments": {},
+      "currentCostume": 0,
+      "costumes": [],
+      "sounds": [],
+      "volume": 100,
+      "layerOrder": 1
+    }
+  ],
+  "monitors": []
+}

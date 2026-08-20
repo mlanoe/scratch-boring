@@ -1,0 +1,241 @@
+{
+  "targets": [
+    {
+      "isStage": true,
+      "name": "Stage",
+      "variables": {
+        "varid1": [
+          "finalX",
+          0
+        ]
+      },
+      "lists": {},
+      "broadcasts": {},
+      "blocks": {},
+      "comments": {},
+      "currentCostume": 0,
+      "costumes": [
+        {
+          "name": "backdrop1",
+          "dataFormat": "svg",
+          "assetId": "a",
+          "md5ext": "a.svg",
+          "rotationCenterX": 0,
+          "rotationCenterY": 0
+        }
+      ],
+      "sounds": [],
+      "volume": 100,
+      "layerOrder": 0,
+      "tempo": 60,
+      "videoTransparency": 50,
+      "videoState": "on",
+      "textToSpeechLanguage": null
+    },
+    {
+      "isStage": false,
+      "name": "Sprite1",
+      "variables": {},
+      "lists": {},
+      "broadcasts": {},
+      "blocks": {
+        "hat1": {
+          "opcode": "event_whenflagclicked",
+          "next": "move1",
+          "parent": null,
+          "inputs": {},
+          "fields": {},
+          "shadow": false,
+          "topLevel": true,
+          "x": 0,
+          "y": 0
+        },
+        "move1": {
+          "opcode": "motion_movesteps",
+          "next": "turn1",
+          "parent": "hat1",
+          "inputs": {
+            "STEPS": [
+              1,
+              [
+                4,
+                "10"
+              ]
+            ]
+          },
+          "fields": {},
+          "shadow": false,
+          "topLevel": false
+        },
+        "turn1": {
+          "opcode": "motion_turnright",
+          "next": "move2",
+          "parent": "move1",
+          "inputs": {
+            "DEGREES": [
+              1,
+              [
+                4,
+                "90"
+              ]
+            ]
+          },
+          "fields": {},
+          "shadow": false,
+          "topLevel": false
+        },
+        "move2": {
+          "opcode": "motion_movesteps",
+          "next": "gotoxy1",
+          "parent": "turn1",
+          "inputs": {
+            "STEPS": [
+              1,
+              [
+                4,
+                "5"
+              ]
+            ]
+          },
+          "fields": {},
+          "shadow": false,
+          "topLevel": false
+        },
+        "gotoxy1": {
+          "opcode": "motion_gotoxy",
+          "next": "changex1",
+          "parent": "move2",
+          "inputs": {
+            "X": [
+              1,
+              [
+                4,
+                "100"
+              ]
+            ],
+            "Y": [
+              1,
+              [
+                4,
+                "50"
+              ]
+            ]
+          },
+          "fields": {},
+          "shadow": false,
+          "topLevel": false
+        },
+        "changex1": {
+          "opcode": "motion_changexby",
+          "next": "changey1",
+          "parent": "gotoxy1",
+          "inputs": {
+            "DX": [
+              1,
+              [
+                4,
+                "5"
+              ]
+            ]
+          },
+          "fields": {},
+          "shadow": false,
+          "topLevel": false
+        },
+        "changey1": {
+          "opcode": "motion_changeyby",
+          "next": "point1",
+          "parent": "changex1",
+          "inputs": {
+            "DY": [
+              1,
+              [
+                4,
+                "-10"
+              ]
+            ]
+          },
+          "fields": {},
+          "shadow": false,
+          "topLevel": false
+        },
+        "point1": {
+          "opcode": "motion_pointindirection",
+          "next": "setxvar",
+          "parent": "changey1",
+          "inputs": {
+            "DIRECTION": [
+              1,
+              [
+                4,
+                "200"
+              ]
+            ]
+          },
+          "fields": {},
+          "shadow": false,
+          "topLevel": false
+        },
+        "setxvar": {
+          "opcode": "data_setvariableto",
+          "next": null,
+          "parent": "point1",
+          "inputs": {
+            "VALUE": [
+              3,
+              "xreporter",
+              [
+                4,
+                "0"
+              ]
+            ]
+          },
+          "fields": {
+            "VARIABLE": [
+              "finalX",
+              "varid1"
+            ]
+          },
+          "shadow": false,
+          "topLevel": false
+        },
+        "xreporter": {
+          "opcode": "motion_xposition",
+          "next": null,
+          "parent": "setxvar",
+          "inputs": {},
+          "fields": {},
+          "shadow": false,
+          "topLevel": false
+        }
+      },
+      "comments": {},
+      "currentCostume": 0,
+      "costumes": [
+        {
+          "name": "costume1",
+          "dataFormat": "svg",
+          "assetId": "b",
+          "md5ext": "b.svg",
+          "rotationCenterX": 0,
+          "rotationCenterY": 0
+        }
+      ],
+      "sounds": [],
+      "volume": 100,
+      "layerOrder": 1,
+      "visible": true,
+      "x": 0,
+      "y": 0,
+      "size": 100,
+      "direction": 90,
+      "draggable": false,
+      "rotationStyle": "all around"
+    }
+  ],
+  "monitors": [],
+  "extensions": [],
+  "meta": {
+    "semver": "3.0.0"
+  }
+}

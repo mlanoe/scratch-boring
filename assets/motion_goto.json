@@ -1,0 +1,390 @@
+{
+  "targets": [
+    {
+      "isStage": true,
+      "name": "Stage",
+      "variables": {
+        "var_result_x_after_b": [
+          "result_x_after_b",
+          0
+        ],
+        "var_result_y_after_b": [
+          "result_y_after_b",
+          0
+        ],
+        "var_result_x_after_mouse": [
+          "result_x_after_mouse",
+          0
+        ],
+        "var_result_y_after_mouse": [
+          "result_y_after_mouse",
+          0
+        ],
+        "var_result_x_after_random": [
+          "result_x_after_random",
+          0
+        ],
+        "var_result_y_after_random": [
+          "result_y_after_random",
+          0
+        ],
+        "var_result_round": [
+          "result_round",
+          0
+        ]
+      },
+      "lists": {},
+      "broadcasts": {},
+      "blocks": {},
+      "comments": {},
+      "currentCostume": 0,
+      "costumes": [
+        {
+          "name": "backdrop1",
+          "dataFormat": "svg",
+          "assetId": "bg",
+          "md5ext": "bg.svg",
+          "rotationCenterX": 0,
+          "rotationCenterY": 0
+        }
+      ],
+      "sounds": [],
+      "volume": 100,
+      "layerOrder": 0,
+      "tempo": 60,
+      "videoTransparency": 50,
+      "videoState": "on",
+      "textToSpeechLanguage": null
+    },
+    {
+      "isStage": false,
+      "name": "A",
+      "variables": {},
+      "lists": {},
+      "broadcasts": {},
+      "blocks": {
+        "hat1": {
+          "opcode": "event_whenflagclicked",
+          "next": "goto1",
+          "parent": null,
+          "inputs": {},
+          "fields": {},
+          "shadow": false,
+          "topLevel": true,
+          "x": 0,
+          "y": 0
+        },
+        "goto1": {
+          "opcode": "motion_goto",
+          "next": "set_result_x_after_b",
+          "parent": "hat1",
+          "inputs": {
+            "TO": [
+              1,
+              [
+                10,
+                "B"
+              ]
+            ]
+          },
+          "fields": {},
+          "shadow": false,
+          "topLevel": false
+        },
+        "expr_result_x_after_b": {
+          "opcode": "motion_xposition",
+          "next": null,
+          "parent": "set_result_x_after_b",
+          "inputs": {},
+          "fields": {},
+          "shadow": false,
+          "topLevel": false
+        },
+        "set_result_x_after_b": {
+          "opcode": "data_setvariableto",
+          "next": "set_result_y_after_b",
+          "parent": "goto1",
+          "inputs": {
+            "VALUE": [
+              1,
+              "expr_result_x_after_b"
+            ]
+          },
+          "fields": {
+            "VARIABLE": [
+              "result_x_after_b",
+              "var_result_x_after_b"
+            ]
+          },
+          "shadow": false,
+          "topLevel": false
+        },
+        "expr_result_y_after_b": {
+          "opcode": "motion_yposition",
+          "next": null,
+          "parent": "set_result_y_after_b",
+          "inputs": {},
+          "fields": {},
+          "shadow": false,
+          "topLevel": false
+        },
+        "set_result_y_after_b": {
+          "opcode": "data_setvariableto",
+          "next": "goto2",
+          "parent": "set_result_x_after_b",
+          "inputs": {
+            "VALUE": [
+              1,
+              "expr_result_y_after_b"
+            ]
+          },
+          "fields": {
+            "VARIABLE": [
+              "result_y_after_b",
+              "var_result_y_after_b"
+            ]
+          },
+          "shadow": false,
+          "topLevel": false
+        },
+        "goto2": {
+          "opcode": "motion_goto",
+          "next": "set_result_x_after_mouse",
+          "parent": "set_result_y_after_b",
+          "inputs": {
+            "TO": [
+              1,
+              [
+                10,
+                "_mouse_"
+              ]
+            ]
+          },
+          "fields": {},
+          "shadow": false,
+          "topLevel": false
+        },
+        "expr_result_x_after_mouse": {
+          "opcode": "motion_xposition",
+          "next": null,
+          "parent": "set_result_x_after_mouse",
+          "inputs": {},
+          "fields": {},
+          "shadow": false,
+          "topLevel": false
+        },
+        "set_result_x_after_mouse": {
+          "opcode": "data_setvariableto",
+          "next": "set_result_y_after_mouse",
+          "parent": "goto2",
+          "inputs": {
+            "VALUE": [
+              1,
+              "expr_result_x_after_mouse"
+            ]
+          },
+          "fields": {
+            "VARIABLE": [
+              "result_x_after_mouse",
+              "var_result_x_after_mouse"
+            ]
+          },
+          "shadow": false,
+          "topLevel": false
+        },
+        "expr_result_y_after_mouse": {
+          "opcode": "motion_yposition",
+          "next": null,
+          "parent": "set_result_y_after_mouse",
+          "inputs": {},
+          "fields": {},
+          "shadow": false,
+          "topLevel": false
+        },
+        "set_result_y_after_mouse": {
+          "opcode": "data_setvariableto",
+          "next": "goto3",
+          "parent": "set_result_x_after_mouse",
+          "inputs": {
+            "VALUE": [
+              1,
+              "expr_result_y_after_mouse"
+            ]
+          },
+          "fields": {
+            "VARIABLE": [
+              "result_y_after_mouse",
+              "var_result_y_after_mouse"
+            ]
+          },
+          "shadow": false,
+          "topLevel": false
+        },
+        "goto3": {
+          "opcode": "motion_goto",
+          "next": "set_result_x_after_random",
+          "parent": "set_result_y_after_mouse",
+          "inputs": {
+            "TO": [
+              1,
+              [
+                10,
+                "_random_"
+              ]
+            ]
+          },
+          "fields": {},
+          "shadow": false,
+          "topLevel": false
+        },
+        "expr_result_x_after_random": {
+          "opcode": "motion_xposition",
+          "next": null,
+          "parent": "set_result_x_after_random",
+          "inputs": {},
+          "fields": {},
+          "shadow": false,
+          "topLevel": false
+        },
+        "set_result_x_after_random": {
+          "opcode": "data_setvariableto",
+          "next": "set_result_y_after_random",
+          "parent": "goto3",
+          "inputs": {
+            "VALUE": [
+              1,
+              "expr_result_x_after_random"
+            ]
+          },
+          "fields": {
+            "VARIABLE": [
+              "result_x_after_random",
+              "var_result_x_after_random"
+            ]
+          },
+          "shadow": false,
+          "topLevel": false
+        },
+        "expr_result_y_after_random": {
+          "opcode": "motion_yposition",
+          "next": null,
+          "parent": "set_result_y_after_random",
+          "inputs": {},
+          "fields": {},
+          "shadow": false,
+          "topLevel": false
+        },
+        "set_result_y_after_random": {
+          "opcode": "data_setvariableto",
+          "next": "set_result_round",
+          "parent": "set_result_x_after_random",
+          "inputs": {
+            "VALUE": [
+              1,
+              "expr_result_y_after_random"
+            ]
+          },
+          "fields": {
+            "VARIABLE": [
+              "result_y_after_random",
+              "var_result_y_after_random"
+            ]
+          },
+          "shadow": false,
+          "topLevel": false
+        },
+        "expr_result_round": {
+          "opcode": "operator_round",
+          "next": null,
+          "parent": "set_result_round",
+          "inputs": {
+            "NUM": [
+              1,
+              [
+                4,
+                "-2.5"
+              ]
+            ]
+          },
+          "fields": {},
+          "shadow": false,
+          "topLevel": false
+        },
+        "set_result_round": {
+          "opcode": "data_setvariableto",
+          "next": null,
+          "parent": "set_result_y_after_random",
+          "inputs": {
+            "VALUE": [
+              1,
+              "expr_result_round"
+            ]
+          },
+          "fields": {
+            "VARIABLE": [
+              "result_round",
+              "var_result_round"
+            ]
+          },
+          "shadow": false,
+          "topLevel": false
+        }
+      },
+      "comments": {},
+      "currentCostume": 0,
+      "costumes": [
+        {
+          "name": "costumeA",
+          "dataFormat": "svg",
+          "assetId": "cA",
+          "md5ext": "cA.svg",
+          "rotationCenterX": 0,
+          "rotationCenterY": 0
+        }
+      ],
+      "sounds": [],
+      "volume": 100,
+      "layerOrder": 1,
+      "visible": true,
+      "x": 0,
+      "y": 0,
+      "size": 100,
+      "direction": 90,
+      "draggable": false,
+      "rotationStyle": "all around"
+    },
+    {
+      "isStage": false,
+      "name": "B",
+      "variables": {},
+      "lists": {},
+      "broadcasts": {},
+      "blocks": {},
+      "comments": {},
+      "currentCostume": 0,
+      "costumes": [
+        {
+          "name": "costumeB",
+          "dataFormat": "svg",
+          "assetId": "cB",
+          "md5ext": "cB.svg",
+          "rotationCenterX": 0,
+          "rotationCenterY": 0
+        }
+      ],
+      "sounds": [],
+      "volume": 100,
+      "layerOrder": 2,
+      "visible": true,
+      "x": 50,
+      "y": 60,
+      "size": 100,
+      "direction": 90,
+      "draggable": false,
+      "rotationStyle": "all around"
+    }
+  ],
+  "monitors": [],
+  "extensions": [],
+  "meta": {}
+}

@@ -1,0 +1,119 @@
+{
+  "targets": [
+    {
+      "isStage": true,
+      "name": "Stage",
+      "variables": {},
+      "lists": {},
+      "broadcasts": {},
+      "blocks": {},
+      "comments": {},
+      "currentCostume": 0,
+      "costumes": [
+        {
+          "name": "backdrop1",
+          "dataFormat": "svg",
+          "assetId": "bg",
+          "md5ext": "bg.svg",
+          "rotationCenterX": 0,
+          "rotationCenterY": 0
+        }
+      ],
+      "sounds": [],
+      "volume": 100,
+      "layerOrder": 0,
+      "tempo": 60,
+      "videoTransparency": 50,
+      "videoState": "on",
+      "textToSpeechLanguage": null
+    },
+    {
+      "isStage": false,
+      "name": "Sprite1",
+      "variables": {},
+      "lists": {},
+      "broadcasts": {},
+      "blocks": {
+        "hat1": {
+          "opcode": "event_whenflagclicked",
+          "next": "goto1",
+          "parent": null,
+          "inputs": {},
+          "fields": {},
+          "shadow": false,
+          "topLevel": true,
+          "x": 0,
+          "y": 0
+        },
+        "goto1": {
+          "opcode": "motion_gotoxy",
+          "next": "setsize1",
+          "parent": "hat1",
+          "inputs": {
+            "X": [1, [4, "10"]],
+            "Y": [1, [4, "20"]]
+          },
+          "fields": {},
+          "shadow": false,
+          "topLevel": false
+        },
+        "setsize1": {
+          "opcode": "looks_setsizeto",
+          "next": "clone1",
+          "parent": "goto1",
+          "inputs": {
+            "SIZE": [1, [4, "150"]]
+          },
+          "fields": {},
+          "shadow": false,
+          "topLevel": false
+        },
+        "clone1": {
+          "opcode": "control_create_clone_of",
+          "next": "delete_self1",
+          "parent": "setsize1",
+          "inputs": {
+            "CLONE_OPTION": [1, [10, "_myself_"]]
+          },
+          "fields": {},
+          "shadow": false,
+          "topLevel": false
+        },
+        "delete_self1": {
+          "opcode": "control_delete_this_clone",
+          "next": null,
+          "parent": "clone1",
+          "inputs": {},
+          "fields": {},
+          "shadow": false,
+          "topLevel": false
+        }
+      },
+      "comments": {},
+      "currentCostume": 0,
+      "costumes": [
+        {
+          "name": "costume1",
+          "dataFormat": "svg",
+          "assetId": "c1",
+          "md5ext": "c1.svg",
+          "rotationCenterX": 0,
+          "rotationCenterY": 0
+        }
+      ],
+      "sounds": [],
+      "volume": 100,
+      "layerOrder": 1,
+      "visible": true,
+      "x": 0,
+      "y": 0,
+      "size": 100,
+      "direction": 90,
+      "draggable": false,
+      "rotationStyle": "all around"
+    }
+  ],
+  "monitors": [],
+  "extensions": [],
+  "meta": {}
+}

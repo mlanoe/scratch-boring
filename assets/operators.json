@@ -1,0 +1,959 @@
+{
+  "targets": [
+    {
+      "isStage": true,
+      "name": "Stage",
+      "variables": {
+        "var_mul_result": [
+          "mul_result",
+          0
+        ],
+        "var_div_result": [
+          "div_result",
+          0
+        ],
+        "var_mod_result": [
+          "mod_result",
+          0
+        ],
+        "var_mod_result2": [
+          "mod_result2",
+          0
+        ],
+        "var_and_result": [
+          "and_result",
+          0
+        ],
+        "var_or_result": [
+          "or_result",
+          0
+        ],
+        "var_not_result": [
+          "not_result",
+          0
+        ],
+        "var_join_result": [
+          "join_result",
+          0
+        ],
+        "var_letter_result": [
+          "letter_result",
+          0
+        ],
+        "var_letter_oob_result": [
+          "letter_oob_result",
+          0
+        ],
+        "var_length_result": [
+          "length_result",
+          0
+        ],
+        "var_contains_result": [
+          "contains_result",
+          0
+        ],
+        "var_contains_false_result": [
+          "contains_false_result",
+          0
+        ],
+        "var_abs_result": [
+          "abs_result",
+          0
+        ],
+        "var_floor_result": [
+          "floor_result",
+          0
+        ],
+        "var_ceiling_result": [
+          "ceiling_result",
+          0
+        ],
+        "var_sqrt_result": [
+          "sqrt_result",
+          0
+        ]
+      },
+      "lists": {},
+      "broadcasts": {},
+      "blocks": {},
+      "comments": {},
+      "currentCostume": 0,
+      "costumes": [
+        {
+          "name": "backdrop1",
+          "dataFormat": "svg",
+          "assetId": "a",
+          "md5ext": "a.svg",
+          "rotationCenterX": 0,
+          "rotationCenterY": 0
+        }
+      ],
+      "sounds": [],
+      "volume": 100,
+      "layerOrder": 0,
+      "tempo": 60,
+      "videoTransparency": 50,
+      "videoState": "on",
+      "textToSpeechLanguage": null
+    },
+    {
+      "isStage": false,
+      "name": "Sprite1",
+      "variables": {},
+      "lists": {},
+      "broadcasts": {},
+      "blocks": {
+        "expr_mul_result": {
+          "opcode": "operator_multiply",
+          "next": null,
+          "parent": "set_mul_result",
+          "inputs": {
+            "NUM1": [
+              1,
+              [
+                4,
+                "6"
+              ]
+            ],
+            "NUM2": [
+              1,
+              [
+                4,
+                "7"
+              ]
+            ]
+          },
+          "fields": {},
+          "shadow": false,
+          "topLevel": false
+        },
+        "set_mul_result": {
+          "opcode": "data_setvariableto",
+          "next": "set_div_result",
+          "parent": "hat1",
+          "inputs": {
+            "VALUE": [
+              1,
+              "expr_mul_result"
+            ]
+          },
+          "fields": {
+            "VARIABLE": [
+              "mul_result",
+              "var_mul_result"
+            ]
+          },
+          "shadow": false,
+          "topLevel": false
+        },
+        "expr_div_result": {
+          "opcode": "operator_divide",
+          "next": null,
+          "parent": "set_div_result",
+          "inputs": {
+            "NUM1": [
+              1,
+              [
+                4,
+                "10"
+              ]
+            ],
+            "NUM2": [
+              1,
+              [
+                4,
+                "4"
+              ]
+            ]
+          },
+          "fields": {},
+          "shadow": false,
+          "topLevel": false
+        },
+        "set_div_result": {
+          "opcode": "data_setvariableto",
+          "next": "set_mod_result",
+          "parent": "set_mul_result",
+          "inputs": {
+            "VALUE": [
+              1,
+              "expr_div_result"
+            ]
+          },
+          "fields": {
+            "VARIABLE": [
+              "div_result",
+              "var_div_result"
+            ]
+          },
+          "shadow": false,
+          "topLevel": false
+        },
+        "expr_mod_result": {
+          "opcode": "operator_mod",
+          "next": null,
+          "parent": "set_mod_result",
+          "inputs": {
+            "NUM1": [
+              1,
+              [
+                4,
+                "-7"
+              ]
+            ],
+            "NUM2": [
+              1,
+              [
+                4,
+                "3"
+              ]
+            ]
+          },
+          "fields": {},
+          "shadow": false,
+          "topLevel": false
+        },
+        "set_mod_result": {
+          "opcode": "data_setvariableto",
+          "next": "set_mod_result2",
+          "parent": "set_div_result",
+          "inputs": {
+            "VALUE": [
+              1,
+              "expr_mod_result"
+            ]
+          },
+          "fields": {
+            "VARIABLE": [
+              "mod_result",
+              "var_mod_result"
+            ]
+          },
+          "shadow": false,
+          "topLevel": false
+        },
+        "expr_mod_result2": {
+          "opcode": "operator_mod",
+          "next": null,
+          "parent": "set_mod_result2",
+          "inputs": {
+            "NUM1": [
+              1,
+              [
+                4,
+                "7"
+              ]
+            ],
+            "NUM2": [
+              1,
+              [
+                4,
+                "-3"
+              ]
+            ]
+          },
+          "fields": {},
+          "shadow": false,
+          "topLevel": false
+        },
+        "set_mod_result2": {
+          "opcode": "data_setvariableto",
+          "next": "set_and_result",
+          "parent": "set_mod_result",
+          "inputs": {
+            "VALUE": [
+              1,
+              "expr_mod_result2"
+            ]
+          },
+          "fields": {
+            "VARIABLE": [
+              "mod_result2",
+              "var_mod_result2"
+            ]
+          },
+          "shadow": false,
+          "topLevel": false
+        },
+        "gt_5_3_a": {
+          "opcode": "operator_gt",
+          "next": null,
+          "parent": "expr_and_result",
+          "inputs": {
+            "OPERAND1": [
+              1,
+              [
+                4,
+                "5"
+              ]
+            ],
+            "OPERAND2": [
+              1,
+              [
+                4,
+                "3"
+              ]
+            ]
+          },
+          "fields": {},
+          "shadow": false,
+          "topLevel": false
+        },
+        "lt_5_3_a": {
+          "opcode": "operator_lt",
+          "next": null,
+          "parent": "expr_and_result",
+          "inputs": {
+            "OPERAND1": [
+              1,
+              [
+                4,
+                "5"
+              ]
+            ],
+            "OPERAND2": [
+              1,
+              [
+                4,
+                "3"
+              ]
+            ]
+          },
+          "fields": {},
+          "shadow": false,
+          "topLevel": false
+        },
+        "expr_and_result": {
+          "opcode": "operator_and",
+          "next": null,
+          "parent": "set_and_result",
+          "inputs": {
+            "OPERAND1": [
+              1,
+              "gt_5_3_a"
+            ],
+            "OPERAND2": [
+              1,
+              "lt_5_3_a"
+            ]
+          },
+          "fields": {},
+          "shadow": false,
+          "topLevel": false
+        },
+        "set_and_result": {
+          "opcode": "data_setvariableto",
+          "next": "set_or_result",
+          "parent": "set_mod_result2",
+          "inputs": {
+            "VALUE": [
+              1,
+              "expr_and_result"
+            ]
+          },
+          "fields": {
+            "VARIABLE": [
+              "and_result",
+              "var_and_result"
+            ]
+          },
+          "shadow": false,
+          "topLevel": false
+        },
+        "gt_1_5_b": {
+          "opcode": "operator_gt",
+          "next": null,
+          "parent": "expr_or_result",
+          "inputs": {
+            "OPERAND1": [
+              1,
+              [
+                4,
+                "1"
+              ]
+            ],
+            "OPERAND2": [
+              1,
+              [
+                4,
+                "5"
+              ]
+            ]
+          },
+          "fields": {},
+          "shadow": false,
+          "topLevel": false
+        },
+        "lt_1_5_b": {
+          "opcode": "operator_lt",
+          "next": null,
+          "parent": "expr_or_result",
+          "inputs": {
+            "OPERAND1": [
+              1,
+              [
+                4,
+                "1"
+              ]
+            ],
+            "OPERAND2": [
+              1,
+              [
+                4,
+                "5"
+              ]
+            ]
+          },
+          "fields": {},
+          "shadow": false,
+          "topLevel": false
+        },
+        "expr_or_result": {
+          "opcode": "operator_or",
+          "next": null,
+          "parent": "set_or_result",
+          "inputs": {
+            "OPERAND1": [
+              1,
+              "gt_1_5_b"
+            ],
+            "OPERAND2": [
+              1,
+              "lt_1_5_b"
+            ]
+          },
+          "fields": {},
+          "shadow": false,
+          "topLevel": false
+        },
+        "set_or_result": {
+          "opcode": "data_setvariableto",
+          "next": "set_not_result",
+          "parent": "set_and_result",
+          "inputs": {
+            "VALUE": [
+              1,
+              "expr_or_result"
+            ]
+          },
+          "fields": {
+            "VARIABLE": [
+              "or_result",
+              "var_or_result"
+            ]
+          },
+          "shadow": false,
+          "topLevel": false
+        },
+        "gt_1_5_c": {
+          "opcode": "operator_gt",
+          "next": null,
+          "parent": "expr_not_result",
+          "inputs": {
+            "OPERAND1": [
+              1,
+              [
+                4,
+                "1"
+              ]
+            ],
+            "OPERAND2": [
+              1,
+              [
+                4,
+                "5"
+              ]
+            ]
+          },
+          "fields": {},
+          "shadow": false,
+          "topLevel": false
+        },
+        "expr_not_result": {
+          "opcode": "operator_not",
+          "next": null,
+          "parent": "set_not_result",
+          "inputs": {
+            "OPERAND": [
+              1,
+              "gt_1_5_c"
+            ]
+          },
+          "fields": {},
+          "shadow": false,
+          "topLevel": false
+        },
+        "set_not_result": {
+          "opcode": "data_setvariableto",
+          "next": "set_join_result",
+          "parent": "set_or_result",
+          "inputs": {
+            "VALUE": [
+              1,
+              "expr_not_result"
+            ]
+          },
+          "fields": {
+            "VARIABLE": [
+              "not_result",
+              "var_not_result"
+            ]
+          },
+          "shadow": false,
+          "topLevel": false
+        },
+        "expr_join_result": {
+          "opcode": "operator_join",
+          "next": null,
+          "parent": "set_join_result",
+          "inputs": {
+            "STRING1": [
+              1,
+              [
+                10,
+                "foo"
+              ]
+            ],
+            "STRING2": [
+              1,
+              [
+                10,
+                "bar"
+              ]
+            ]
+          },
+          "fields": {},
+          "shadow": false,
+          "topLevel": false
+        },
+        "set_join_result": {
+          "opcode": "data_setvariableto",
+          "next": "set_letter_result",
+          "parent": "set_not_result",
+          "inputs": {
+            "VALUE": [
+              1,
+              "expr_join_result"
+            ]
+          },
+          "fields": {
+            "VARIABLE": [
+              "join_result",
+              "var_join_result"
+            ]
+          },
+          "shadow": false,
+          "topLevel": false
+        },
+        "expr_letter_result": {
+          "opcode": "operator_letter_of",
+          "next": null,
+          "parent": "set_letter_result",
+          "inputs": {
+            "LETTER": [
+              1,
+              [
+                4,
+                "2"
+              ]
+            ],
+            "STRING": [
+              1,
+              [
+                10,
+                "hello"
+              ]
+            ]
+          },
+          "fields": {},
+          "shadow": false,
+          "topLevel": false
+        },
+        "set_letter_result": {
+          "opcode": "data_setvariableto",
+          "next": "set_letter_oob_result",
+          "parent": "set_join_result",
+          "inputs": {
+            "VALUE": [
+              1,
+              "expr_letter_result"
+            ]
+          },
+          "fields": {
+            "VARIABLE": [
+              "letter_result",
+              "var_letter_result"
+            ]
+          },
+          "shadow": false,
+          "topLevel": false
+        },
+        "expr_letter_oob_result": {
+          "opcode": "operator_letter_of",
+          "next": null,
+          "parent": "set_letter_oob_result",
+          "inputs": {
+            "LETTER": [
+              1,
+              [
+                4,
+                "99"
+              ]
+            ],
+            "STRING": [
+              1,
+              [
+                10,
+                "hello"
+              ]
+            ]
+          },
+          "fields": {},
+          "shadow": false,
+          "topLevel": false
+        },
+        "set_letter_oob_result": {
+          "opcode": "data_setvariableto",
+          "next": "set_length_result",
+          "parent": "set_letter_result",
+          "inputs": {
+            "VALUE": [
+              1,
+              "expr_letter_oob_result"
+            ]
+          },
+          "fields": {
+            "VARIABLE": [
+              "letter_oob_result",
+              "var_letter_oob_result"
+            ]
+          },
+          "shadow": false,
+          "topLevel": false
+        },
+        "expr_length_result": {
+          "opcode": "operator_length",
+          "next": null,
+          "parent": "set_length_result",
+          "inputs": {
+            "STRING": [
+              1,
+              [
+                10,
+                "hello"
+              ]
+            ]
+          },
+          "fields": {},
+          "shadow": false,
+          "topLevel": false
+        },
+        "set_length_result": {
+          "opcode": "data_setvariableto",
+          "next": "set_contains_result",
+          "parent": "set_letter_oob_result",
+          "inputs": {
+            "VALUE": [
+              1,
+              "expr_length_result"
+            ]
+          },
+          "fields": {
+            "VARIABLE": [
+              "length_result",
+              "var_length_result"
+            ]
+          },
+          "shadow": false,
+          "topLevel": false
+        },
+        "expr_contains_result": {
+          "opcode": "operator_contains",
+          "next": null,
+          "parent": "set_contains_result",
+          "inputs": {
+            "STRING1": [
+              1,
+              [
+                10,
+                "Hello World"
+              ]
+            ],
+            "STRING2": [
+              1,
+              [
+                10,
+                "world"
+              ]
+            ]
+          },
+          "fields": {},
+          "shadow": false,
+          "topLevel": false
+        },
+        "set_contains_result": {
+          "opcode": "data_setvariableto",
+          "next": "set_contains_false_result",
+          "parent": "set_length_result",
+          "inputs": {
+            "VALUE": [
+              1,
+              "expr_contains_result"
+            ]
+          },
+          "fields": {
+            "VARIABLE": [
+              "contains_result",
+              "var_contains_result"
+            ]
+          },
+          "shadow": false,
+          "topLevel": false
+        },
+        "expr_contains_false_result": {
+          "opcode": "operator_contains",
+          "next": null,
+          "parent": "set_contains_false_result",
+          "inputs": {
+            "STRING1": [
+              1,
+              [
+                10,
+                "Hello World"
+              ]
+            ],
+            "STRING2": [
+              1,
+              [
+                10,
+                "xyz"
+              ]
+            ]
+          },
+          "fields": {},
+          "shadow": false,
+          "topLevel": false
+        },
+        "set_contains_false_result": {
+          "opcode": "data_setvariableto",
+          "next": "set_abs_result",
+          "parent": "set_contains_result",
+          "inputs": {
+            "VALUE": [
+              1,
+              "expr_contains_false_result"
+            ]
+          },
+          "fields": {
+            "VARIABLE": [
+              "contains_false_result",
+              "var_contains_false_result"
+            ]
+          },
+          "shadow": false,
+          "topLevel": false
+        },
+        "expr_abs_result": {
+          "opcode": "operator_mathop",
+          "next": null,
+          "parent": "set_abs_result",
+          "inputs": {
+            "NUM": [
+              1,
+              [
+                4,
+                "-5"
+              ]
+            ]
+          },
+          "fields": {
+            "OPERATOR": [
+              "abs",
+              null
+            ]
+          },
+          "shadow": false,
+          "topLevel": false
+        },
+        "set_abs_result": {
+          "opcode": "data_setvariableto",
+          "next": "set_floor_result",
+          "parent": "set_contains_false_result",
+          "inputs": {
+            "VALUE": [
+              1,
+              "expr_abs_result"
+            ]
+          },
+          "fields": {
+            "VARIABLE": [
+              "abs_result",
+              "var_abs_result"
+            ]
+          },
+          "shadow": false,
+          "topLevel": false
+        },
+        "expr_floor_result": {
+          "opcode": "operator_mathop",
+          "next": null,
+          "parent": "set_floor_result",
+          "inputs": {
+            "NUM": [
+              1,
+              [
+                4,
+                "3.7"
+              ]
+            ]
+          },
+          "fields": {
+            "OPERATOR": [
+              "floor",
+              null
+            ]
+          },
+          "shadow": false,
+          "topLevel": false
+        },
+        "set_floor_result": {
+          "opcode": "data_setvariableto",
+          "next": "set_ceiling_result",
+          "parent": "set_abs_result",
+          "inputs": {
+            "VALUE": [
+              1,
+              "expr_floor_result"
+            ]
+          },
+          "fields": {
+            "VARIABLE": [
+              "floor_result",
+              "var_floor_result"
+            ]
+          },
+          "shadow": false,
+          "topLevel": false
+        },
+        "expr_ceiling_result": {
+          "opcode": "operator_mathop",
+          "next": null,
+          "parent": "set_ceiling_result",
+          "inputs": {
+            "NUM": [
+              1,
+              [
+                4,
+                "3.2"
+              ]
+            ]
+          },
+          "fields": {
+            "OPERATOR": [
+              "ceiling",
+              null
+            ]
+          },
+          "shadow": false,
+          "topLevel": false
+        },
+        "set_ceiling_result": {
+          "opcode": "data_setvariableto",
+          "next": "set_sqrt_result",
+          "parent": "set_floor_result",
+          "inputs": {
+            "VALUE": [
+              1,
+              "expr_ceiling_result"
+            ]
+          },
+          "fields": {
+            "VARIABLE": [
+              "ceiling_result",
+              "var_ceiling_result"
+            ]
+          },
+          "shadow": false,
+          "topLevel": false
+        },
+        "expr_sqrt_result": {
+          "opcode": "operator_mathop",
+          "next": null,
+          "parent": "set_sqrt_result",
+          "inputs": {
+            "NUM": [
+              1,
+              [
+                4,
+                "16"
+              ]
+            ]
+          },
+          "fields": {
+            "OPERATOR": [
+              "sqrt",
+              null
+            ]
+          },
+          "shadow": false,
+          "topLevel": false
+        },
+        "set_sqrt_result": {
+          "opcode": "data_setvariableto",
+          "next": null,
+          "parent": "set_ceiling_result",
+          "inputs": {
+            "VALUE": [
+              1,
+              "expr_sqrt_result"
+            ]
+          },
+          "fields": {
+            "VARIABLE": [
+              "sqrt_result",
+              "var_sqrt_result"
+            ]
+          },
+          "shadow": false,
+          "topLevel": false
+        },
+        "hat1": {
+          "opcode": "event_whenflagclicked",
+          "next": "set_mul_result",
+          "parent": null,
+          "inputs": {},
+          "fields": {},
+          "shadow": false,
+          "topLevel": true,
+          "x": 0,
+          "y": 0
+        }
+      },
+      "comments": {},
+      "currentCostume": 0,
+      "costumes": [
+        {
+          "name": "costume1",
+          "dataFormat": "svg",
+          "assetId": "b",
+          "md5ext": "b.svg",
+          "rotationCenterX": 0,
+          "rotationCenterY": 0
+        }
+      ],
+      "sounds": [],
+      "volume": 100,
+      "layerOrder": 1,
+      "visible": true,
+      "x": 0,
+      "y": 0,
+      "size": 100,
+      "direction": 90,
+      "draggable": false,
+      "rotationStyle": "all around"
+    }
+  ],
+  "monitors": [],
+  "extensions": [],
+  "meta": {}
+}

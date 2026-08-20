@@ -1,0 +1,303 @@
+{
+  "targets": [
+    {
+      "isStage": true,
+      "name": "Stage",
+      "variables": {
+        "var_result_origin": [
+          "result_origin",
+          0
+        ],
+        "var_result_c1_next": [
+          "result_c1_next",
+          0
+        ],
+        "var_result_c1_by_name": [
+          "result_c1_by_name",
+          0
+        ],
+        "var_result_c1_name": [
+          "result_c1_name",
+          0
+        ]
+      },
+      "lists": {},
+      "broadcasts": {},
+      "blocks": {},
+      "comments": {},
+      "currentCostume": 0,
+      "costumes": [
+        {
+          "name": "backdrop1",
+          "dataFormat": "svg",
+          "assetId": "bg",
+          "md5ext": "bg.svg",
+          "rotationCenterX": 0,
+          "rotationCenterY": 0
+        }
+      ],
+      "sounds": [],
+      "volume": 100,
+      "layerOrder": 0,
+      "tempo": 60,
+      "videoTransparency": 50,
+      "videoState": "on",
+      "textToSpeechLanguage": null
+    },
+    {
+      "isStage": false,
+      "name": "Sprite1",
+      "variables": {},
+      "lists": {},
+      "broadcasts": {},
+      "blocks": {
+        "hat1": {
+          "opcode": "event_whenflagclicked",
+          "next": "clone1",
+          "parent": null,
+          "inputs": {},
+          "fields": {},
+          "shadow": false,
+          "topLevel": true,
+          "x": 0,
+          "y": 0
+        },
+        "clone1": {
+          "opcode": "control_create_clone_of",
+          "next": "set_origin",
+          "parent": "hat1",
+          "inputs": {
+            "CLONE_OPTION": [
+              1,
+              [
+                10,
+                "_myself_"
+              ]
+            ]
+          },
+          "fields": {},
+          "shadow": false,
+          "topLevel": false
+        },
+        "expr_origin": {
+          "opcode": "looks_costumenumbername",
+          "next": null,
+          "parent": "set_origin",
+          "inputs": {},
+          "fields": {
+            "NUMBER_NAME": [
+              "number",
+              null
+            ]
+          },
+          "shadow": false,
+          "topLevel": false
+        },
+        "set_origin": {
+          "opcode": "data_setvariableto",
+          "next": null,
+          "parent": "clone1",
+          "inputs": {
+            "VALUE": [
+              1,
+              "expr_origin"
+            ]
+          },
+          "fields": {
+            "VARIABLE": [
+              "result_origin",
+              "var_result_origin"
+            ]
+          },
+          "shadow": false,
+          "topLevel": false
+        },
+        "clonehat1": {
+          "opcode": "control_start_as_clone",
+          "next": "sw1",
+          "parent": null,
+          "inputs": {},
+          "fields": {},
+          "shadow": false,
+          "topLevel": true,
+          "x": 0,
+          "y": 100
+        },
+        "sw1": {
+          "opcode": "looks_switchcostumeto",
+          "next": "set_c1",
+          "parent": "clonehat1",
+          "inputs": {
+            "COSTUME": [
+              1,
+              [
+                10,
+                "next costume"
+              ]
+            ]
+          },
+          "fields": {},
+          "shadow": false,
+          "topLevel": false
+        },
+        "expr_c1": {
+          "opcode": "looks_costumenumbername",
+          "next": null,
+          "parent": "set_c1",
+          "inputs": {},
+          "fields": {
+            "NUMBER_NAME": [
+              "number",
+              null
+            ]
+          },
+          "shadow": false,
+          "topLevel": false
+        },
+        "set_c1": {
+          "opcode": "data_setvariableto",
+          "next": "sw2",
+          "parent": "sw1",
+          "inputs": {
+            "VALUE": [
+              1,
+              "expr_c1"
+            ]
+          },
+          "fields": {
+            "VARIABLE": [
+              "result_c1_next",
+              "var_result_c1_next"
+            ]
+          },
+          "shadow": false,
+          "topLevel": false
+        },
+        "sw2": {
+          "opcode": "looks_switchcostumeto",
+          "next": "set_c2",
+          "parent": "set_c1",
+          "inputs": {
+            "COSTUME": [
+              1,
+              [
+                10,
+                "c"
+              ]
+            ]
+          },
+          "fields": {},
+          "shadow": false,
+          "topLevel": false
+        },
+        "expr_c2": {
+          "opcode": "looks_costumenumbername",
+          "next": null,
+          "parent": "set_c2",
+          "inputs": {},
+          "fields": {
+            "NUMBER_NAME": [
+              "number",
+              null
+            ]
+          },
+          "shadow": false,
+          "topLevel": false
+        },
+        "set_c2": {
+          "opcode": "data_setvariableto",
+          "next": "set_c2name",
+          "parent": "sw2",
+          "inputs": {
+            "VALUE": [
+              1,
+              "expr_c2"
+            ]
+          },
+          "fields": {
+            "VARIABLE": [
+              "result_c1_by_name",
+              "var_result_c1_by_name"
+            ]
+          },
+          "shadow": false,
+          "topLevel": false
+        },
+        "expr_c2name": {
+          "opcode": "looks_costumenumbername",
+          "next": null,
+          "parent": "set_c2name",
+          "inputs": {},
+          "fields": {
+            "NUMBER_NAME": [
+              "name",
+              null
+            ]
+          },
+          "shadow": false,
+          "topLevel": false
+        },
+        "set_c2name": {
+          "opcode": "data_setvariableto",
+          "next": null,
+          "parent": "set_c2",
+          "inputs": {
+            "VALUE": [
+              1,
+              "expr_c2name"
+            ]
+          },
+          "fields": {
+            "VARIABLE": [
+              "result_c1_name",
+              "var_result_c1_name"
+            ]
+          },
+          "shadow": false,
+          "topLevel": false
+        }
+      },
+      "comments": {},
+      "currentCostume": 0,
+      "costumes": [
+        {
+          "name": "a",
+          "dataFormat": "svg",
+          "assetId": "cA",
+          "md5ext": "cA.svg",
+          "rotationCenterX": 0,
+          "rotationCenterY": 0
+        },
+        {
+          "name": "b",
+          "dataFormat": "svg",
+          "assetId": "cB",
+          "md5ext": "cB.svg",
+          "rotationCenterX": 0,
+          "rotationCenterY": 0
+        },
+        {
+          "name": "c",
+          "dataFormat": "svg",
+          "assetId": "cC",
+          "md5ext": "cC.svg",
+          "rotationCenterX": 0,
+          "rotationCenterY": 0
+        }
+      ],
+      "sounds": [],
+      "volume": 100,
+      "layerOrder": 1,
+      "visible": true,
+      "x": 0,
+      "y": 0,
+      "size": 100,
+      "direction": 90,
+      "draggable": false,
+      "rotationStyle": "all around"
+    }
+  ],
+  "monitors": [],
+  "extensions": [],
+  "meta": {}
+}

@@ -1,0 +1,1559 @@
+# The linker -- everything that turns a loaded `Sb3Project` (raw structs
+# from `sb3_loader.br`, faithfully reflecting the on-disk JSON shape) into
+# real runtime resources and a real `Block` AST: `build_vars`/`build_lists`/
+# `build_positions`/`build_procs`, `build_broadcasts`/`build_key_press_hats`/
+# `build_greater_than_hats`, the on-stage watcher builders
+# (`build_variable_watchers`/`build_reporter_watchers`/`build_list_watchers`,
+# plus their `find_stage_*_name_by_id`/`list_watcher_display_string`
+# helpers), and the block-resolution machinery (`dispatch_reporter`/
+# `resolve_stack_block`/`resolve_stack`/`resolve_input`/`resolve_primitive`)
+# that walks a target's raw block graph into a real `[Block]` script body.
+#
+# Sibling file to `scratch.br`, pulled in via a bare `use linker` there --
+# same mechanism as `values.br`/`runtime.br`/`sb3_loader.br` (see any of
+# their own header comments). Split out once `scratch.br` grew past ~3100
+# lines. Two originally-separate regions of that file are concatenated
+# here, in this order -- the resource builders (broadcasts/hats/watchers)
+# used to sit physically *before* `interpreter.br`'s `eval`/`exec` in the
+# old single file, and the block/Vars/Lists-focused half (still under its
+# own original "Linker" section marker below) sat physically *after* --
+# both are the same "Sb3Project -> runtime shape" job, just added to the
+# file at different times, so they're reunited here into one real file
+# rather than kept apart just because `eval`/`exec` used to sit between
+# them.
+
+# Scans every target (broadcasts are project-wide, not scoped to whichever
+# target happens to host the green-flag script) for `event_whenbroadcastreceived`
+# hats and links each one's body, grouped by message name.
+def Broadcasts build_broadcasts(Sb3Project project):
+    mut table = {=}
+    for target in project.targets:
+        for blk in target.all_blocks():
+            if block_opcode_is(blk.clone(), "event_whenbroadcastreceived"):
+                if let msg_name = block_field_value(blk.clone(), "BROADCAST_OPTION"):
+                    if let start = blk.next_id():
+                        let body = resolve_stack(target.clone(), "{start}")
+                        mut scripts = table[msg_name.clone()] else []
+                        scripts.push(ReceiverScript(target_id = "{target.name_string()}", body = body))
+                        table[msg_name] = scripts
+    Broadcasts(table = table)
+
+# Scans every target for `control_start_as_clone` hats and links each
+# one's body, grouped by *owning* target name (a sprite can have more than
+# one of these hats, same as broadcasts can have more than one receiver
+# for the same message) -- direct mirror of `build_broadcasts` just above,
+# substituting "which target owns this hat" for "which message this hat
+# listens for" as the grouping key. Every template's own `ReceiverScript.
+# target_id` still names the *origin* sprite, same as every other hat
+# builder in this file -- `spawn_pending_clones` (`scratch.br`) is what
+# substitutes each new clone's own id in before actually spawning a thread
+# from one of these templates.
+def StartAsCloneHats build_start_as_clone_hats(Sb3Project project):
+    mut table = {=}
+    for target in project.targets:
+        for blk in target.all_blocks():
+            if block_opcode_is(blk.clone(), "control_start_as_clone"):
+                if let start = blk.next_id():
+                    let body = resolve_stack(target.clone(), "{start}")
+                    let target_name = "{target.name_string()}"
+                    mut scripts = table[target_name.clone()] else []
+                    scripts.push(ReceiverScript(target_id = target_name.clone(), body = body))
+                    table[target_name] = scripts
+    StartAsCloneHats(table = table)
+
+# Scans every target for `event_whenkeypressed` hats and links each one's
+# body, tagged with its KEY_OPTION field (a plain field on the hat itself,
+# like `event_whenbroadcastreceived`'s BROADCAST_OPTION -- not a menu-shadow
+# *input*, unlike `sensing_keypressed`'s KEY_OPTION, see `dispatch_reporter`'s
+# own comment on that one) and owning target.
+def [KeyPressHat] build_key_press_hats(Sb3Project project):
+    mut hats = []
+    for target in project.targets:
+        for blk in target.all_blocks():
+            if block_opcode_is(blk.clone(), "event_whenkeypressed"):
+                if let key_option = block_field_value(blk.clone(), "KEY_OPTION"):
+                    if let start = blk.next_id():
+                        let body = resolve_stack(target.clone(), "{start}")
+                        hats.push(KeyPressHat(key_option = "{key_option}", script = ReceiverScript(target_id = "{target.name_string()}", body = body)))
+    hats
+
+# Scans every target for `event_whenthisspriteclicked` hats -- no field
+# to read off the hat itself (unlike `event_whenkeypressed`'s KEY_OPTION),
+# since it always means "this hat's own owning target", already carried
+# by `ReceiverScript.target_id`. Also matches `event_whenstageclicked` --
+# a genuinely *separate* opcode real Scratch's own editor saves when this
+# exact block is dragged onto the Stage specifically (confirmed against
+# real scratch-vm source, `Scratch3EventBlocks.getHats()`: `event_
+# whenstageclicked` and `event_whenthisspriteclicked` are two distinct
+# registered hats, not one opcode reused for both) -- found via a full
+# scratch-vm source audit; this project only ever matched the sprite
+# variant before, meaning a project's own "when Stage clicked" script
+# silently never ran at all. Real semantics are identical either way
+# (this hat's own owning target, "Stage" here), so both opcodes share
+# this exact same handling.
+def [ClickHat] build_click_hats(Sb3Project project):
+    mut hats = []
+    for target in project.targets:
+        for blk in target.all_blocks():
+            if block_opcode_is(blk.clone(), "event_whenthisspriteclicked") or block_opcode_is(blk.clone(), "event_whenstageclicked"):
+                if let start = blk.next_id():
+                    let body = resolve_stack(target.clone(), "{start}")
+                    hats.push(ClickHat(script = ReceiverScript(target_id = "{target.name_string()}", body = body)))
+    hats
+
+# Every `event_whentouchingobject` hat -- `touching_block` is the WHOLE
+# already-linked `Block(kind = BlockKind.Touching(...))`, built by
+# resolving the same TOUCHINGOBJECTMENU input `sensing_touchingobject`
+# itself resolves (same menu-shadow shape, "_mouse_"/"_edge_"/a sprite
+# name), so `check_touching_object_hats` can `eval()` it completely
+# unchanged and reuse all of `Touching`'s own AABB/mouse/edge dispatch
+# wholesale instead of duplicating any of it.
+def [TouchingObjectHat] build_touching_object_hats(Sb3Project project):
+    mut hats = []
+    for target in project.targets:
+        for blk in target.all_blocks():
+            if block_opcode_is(blk.clone(), "event_whentouchingobject"):
+                if let start = blk.next_id():
+                    let touching_block = Block(kind = BlockKind.Touching(resolve_input(target.clone(), blk.clone(), "TOUCHINGOBJECTMENU", 0)))
+                    let body = resolve_stack(target.clone(), "{start}")
+                    hats.push(TouchingObjectHat(touching_block = touching_block, was_true_by_instance = {=}, script = ReceiverScript(target_id = "{target.name_string()}", body = body)))
+    hats
+
+# Every `event_whengreaterthan` hat, tagged with its owning target, its
+# WHENGREATERTHANMENU field ("TIMER"/"LOUDNESS", a plain field -- not a
+# menu-shadow *input* the way `sensing_keypressed`'s KEY_OPTION is), and
+# its linked VALUE expression (a real input, can be any reporter, not
+# just a literal). `was_true` starts `false` -- a project's very first
+# tick always counts as "transitioning into" whatever the condition's
+# initial state is, matching real Scratch (a script that's true from
+# frame 0 fires once at frame 0, exactly like `edge-triggered-hat.sb3`,
+# the official scratch-vm fixture this feature was built against, relies
+# on: `timer > -1` is true from the very first frame).
+def [GreaterThanHat] build_greater_than_hats(Sb3Project project):
+    mut hats = []
+    for target in project.targets:
+        for blk in target.all_blocks():
+            if block_opcode_is(blk.clone(), "event_whengreaterthan"):
+                if let menu = block_field_value(blk.clone(), "WHENGREATERTHANMENU"):
+                    if let start = blk.next_id():
+                        let value_expr = resolve_input(target.clone(), blk.clone(), "VALUE", 0)
+                        let body = resolve_stack(target.clone(), "{start}")
+                        hats.push(GreaterThanHat(menu = "{menu}", value_expr = value_expr, was_true = false, script = ReceiverScript(target_id = "{target.name_string()}", body = body)))
+    hats
+
+# Every `event_whenbackdropswitchesto` hat -- BACKDROP is a plain field
+# (a dropdown of backdrop names), same shape as `event_whenkeypressed`'s
+# own KEY_OPTION just above.
+def [BackdropSwitchHat] build_backdrop_switch_hats(Sb3Project project):
+    mut hats = []
+    for target in project.targets:
+        for blk in target.all_blocks():
+            if block_opcode_is(blk.clone(), "event_whenbackdropswitchesto"):
+                if let backdrop = block_field_value(blk.clone(), "BACKDROP"):
+                    if let start = blk.next_id():
+                        let body = resolve_stack(target.clone(), "{start}")
+                        hats.push(BackdropSwitchHat(backdrop_name = "{backdrop}", script = ReceiverScript(target_id = "{target.name_string()}", body = body)))
+    hats
+
+# The Stage's own real *initial* backdrop name -- `BackdropSwitchHats.
+# last_backdrop_name`'s own seed value, see that field's doc comment for
+# why it can't just start as `""`.
+def string initial_backdrop_name(Sb3Project project):
+    for target in project.targets:
+        if target.is_stage:
+            let idx = target.current_costume
+            if idx >= 0 and idx < target.costumes.length:
+                return target.costumes[idx].name
+    ""
+
+# Every *visible* variable watcher (list watchers need multi-line
+# rendering this pass doesn't attempt -- see `VariableWatcher`'s own doc
+# comment) declared in the project's top-level `monitors` array, converted
+# from Scratch's own top-left-origin stage-pixel coordinates (real
+# Scratch's virtual stage is always a fixed 480x360 regardless of the
+# actual window size -- same reasoning as `Sb3Target.x_or`/`y_or`, but
+# against that fixed logical size, not the real window, since Scratch
+# monitor positions are saved in stage-pixel space, not window-pixel
+# space) into this project's centered, y-up world coordinates (matching
+# every sprite's own `Transform`, which already uses Scratch stage units
+# 1:1 as Bevy world units with no scaling to the real window).
+# A *Stage* variable's current name, resolved by id -- `None` both for an
+# id that doesn't resolve at all AND for a genuinely sprite-local variable
+# (deliberately not distinguished, see `build_variable_watchers`' own
+# comment on why "not a Stage variable" always means "skip this watcher",
+# never "show it anyway with a fallback label"). Also deliberately not the
+# monitor's own `params.VARIABLE`/`Sb3Monitor.variable_name()` (a snapshot
+# taken when the monitor was created, which stays stale if the variable is
+# later renamed -- confirmed via a real scratch-vm test fixture,
+# `list-monitor-rename.sb3`, where a monitor's own `params.LIST` field
+# ("old global") genuinely disagrees with the list's actual current name
+# ("renamed global"); the analogous case for a plain variable monitor
+# isn't covered by any fixture seen so far, but the same staleness applies
+# identically, so this is fixed proactively rather than only once a
+# variable-specific repro turns up).
+
+# Any target's variable name, Stage or sprite-local -- scans every
+# target, not just the Stage (see `Vars.var_owner`/`Vars.local_table`,
+# which now genuinely track sprite-local variables too, not just a
+# documented gap). `nil` only for an id that doesn't resolve to any real
+# variable at all.
+def string? find_variable_name_by_id(Sb3Project project, string var_id):
+    for target in project.targets:
+        for v in target.variables:
+            if "{v.id_string()}" == var_id:
+                return "{v.name_string()}"
+    nil
+
+def [VariableWatcher] build_variable_watchers(Sb3Project project):
+    mut watchers = []
+    # Cloned once, up front -- the loop below consumes `project.monitors`
+    # by iterating it directly (`for m in project.monitors:`), which moves
+    # that field out of `project`; a later `project.clone()` inside the
+    # loop body would then be cloning a partially-moved value.
+    let project_for_lookup = project.clone()
+    for m in project.monitors:
+        # No longer gated on `m.is_visible()` -- an entity is now spawned
+        # for *every* Stage variable's monitor entry regardless of its
+        # initial visibility, with the real, dynamic on/off state read
+        # from `Vars.watcher_visible` each tick (`sync_variable_watchers`,
+        # scratch.br) instead of baked in once here at link time. Needed
+        # once `data_showvariable`/`data_hidevariable` could toggle a
+        # variable that started hidden -- there'd be no entity to ever
+        # show if this stayed gated on the *initial* state.
+        if m.is_variable_watcher():
+            let var_id = "{m.variable_id()}"
+            # A watcher entity is now spawned for a sprite-local variable
+            # too, not just Stage ones -- confirmed real and necessary
+            # against a real scratch-vm test fixture, `monitors.sb3`,
+            # which has several visible `data_variable` monitors on
+            # sprite-local variables ("tee" on target "Shirt-T", "hearty"
+            # on target "Heart"). `Vars` genuinely tracks sprite-local
+            # variables now (`var_owner`/`local_table`, see their own doc
+            # comments) -- `sync_variable_watchers` resolves the right
+            # owning instance live via `Vars.owner_of` at read time, this
+            # builder only needs the variable's own name. `nil` here only
+            # means the id doesn't resolve to any real variable at all
+            # (a genuinely broken/stale monitor reference).
+            if let name = find_variable_name_by_id(project_for_lookup.clone(), var_id.clone()):
+                watchers.push(VariableWatcher(variable_id = var_id, label = name, x = m.x_pos() - 240.0, y = 180.0 - m.y_pos()))
+    watchers
+
+# Builds this project's Motion reporter watchers -- see `ReporterWatcher`'s
+# own doc comment for exactly which three opcodes and why only those.
+# Unlike `build_variable_watchers`, there's no id-lookup/staleness concern
+# here: `sprite_name_string()` is the monitor's *only* notion of which
+# sprite it watches (there's no separate "current name" to go stale
+# against, the way a renamed variable/list can drift from a monitor's
+# cached `params.VARIABLE`/`params.LIST` snapshot).
+def [ReporterWatcher] build_reporter_watchers(Sb3Project project):
+    mut watchers = []
+    for m in project.monitors:
+        if m.is_visible():
+            let target_id = "{m.sprite_name_string()}"
+            let x = m.x_pos() - 240.0
+            let y = 180.0 - m.y_pos()
+            if m.is_motion_xposition_watcher():
+                watchers.push(ReporterWatcher(target_id = target_id, expr = Block(kind = BlockKind.XPosition), label = "{target_id} x position", x = x, y = y))
+            elif m.is_motion_yposition_watcher():
+                watchers.push(ReporterWatcher(target_id = target_id, expr = Block(kind = BlockKind.YPosition), label = "{target_id} y position", x = x, y = y))
+            elif m.is_motion_direction_watcher():
+                watchers.push(ReporterWatcher(target_id = target_id, expr = Block(kind = BlockKind.Direction), label = "{target_id} direction", x = x, y = y))
+            elif m.is_sensing_timer_watcher():
+                # `target_id = ""`, never `target_id` (always empty here
+                # anyway, per `Sb3Monitor::is_sensing_timer_watcher`'s own
+                # doc comment) -- `eval`'s `Timer` case never reads
+                # `frame.target_id` at all, so this is just documenting
+                # "this reporter has no target" at the call site rather
+                # than plugging in a value that would look meaningful but
+                # isn't. "timer" (lowercase) matches real Scratch's own
+                # on-stage label for this monitor.
+                watchers.push(ReporterWatcher(target_id = "", expr = Block(kind = BlockKind.Timer), label = "timer", x = x, y = y))
+            elif m.is_looks_size_watcher():
+                watchers.push(ReporterWatcher(target_id = target_id, expr = Block(kind = BlockKind.SizePercent), label = "{target_id} size", x = x, y = y))
+            elif m.is_looks_costumenumbername_watcher():
+                let which = m.number_name_param()
+                let suffix = if which == "name": "costume name" else: "costume #"
+                watchers.push(ReporterWatcher(target_id = target_id, expr = Block(kind = BlockKind.CostumeNumberName(which)), label = "{target_id} {suffix}", x = x, y = y))
+            elif m.is_looks_backdropnumbername_watcher():
+                # Target-agnostic, same as `SwitchBackdropTo`'s own
+                # hardcoded `"Stage"` convention (`BlockKind::
+                # SwitchBackdropTo`'s own doc comment) -- real Scratch's
+                # own on-stage label has no sprite-name prefix either,
+                # unlike `looks_costumenumbername`'s (confirmed against a
+                # real project: the watcher just reads "backdrop #"/
+                # "backdrop name" alone).
+                let which = m.number_name_param()
+                let suffix = if which == "name": "backdrop name" else: "backdrop #"
+                watchers.push(ReporterWatcher(target_id = "Stage", expr = Block(kind = BlockKind.BackdropNumberName(which)), label = suffix, x = x, y = y))
+            elif m.is_sound_volume_watcher():
+                # Sprite-specific, same convention as the three Motion
+                # reporters -- `sound_volume`'s own `getMonitored`
+                # entry is `isSpriteSpecific: true`, confirmed against
+                # real source (unlike `sensing_current`/`timer`, both
+                # target-agnostic).
+                watchers.push(ReporterWatcher(target_id = target_id, expr = Block(kind = BlockKind.Volume), label = "{target_id} volume", x = x, y = y))
+            elif m.is_sensing_current_watcher():
+                # Target-agnostic, same as `sensing_timer`'s own "timer"
+                # watcher (real scratch-vm's own fixture confirms
+                # `spriteName: null` for every `sensing_current` monitor)
+                # -- `target_id = ""` here too, `CurrentDateTime`'s own
+                # `eval` case never reads `frame.target_id`. Label is the
+                # lowercase menu word alone, matching real Scratch's own
+                # on-stage text for this block ("year"/"month"/etc, not
+                # the uppercase CURRENTMENU value).
+                let menu = m.current_menu_param()
+                var mut label = "current"
+                if menu == "YEAR":
+                    label = "year"
+                elif menu == "MONTH":
+                    label = "month"
+                elif menu == "DATE":
+                    label = "date"
+                elif menu == "DAYOFWEEK":
+                    label = "day of week"
+                elif menu == "HOUR":
+                    label = "hour"
+                elif menu == "MINUTE":
+                    label = "minute"
+                elif menu == "SECOND":
+                    label = "second"
+                watchers.push(ReporterWatcher(target_id = "", expr = Block(kind = BlockKind.CurrentDateTime(menu)), label = label, x = x, y = y))
+            elif m.is_sensing_dayssince2000_watcher():
+                # Target-agnostic, same as `sensing_timer`/`sensing_current`
+                # -- not in real scratch-vm's own `getMonitored` at all (no
+                # special id-mapping entry needed, unlike `sensing_current`'s
+                # multi-param one), so it falls back to the block's own
+                # default monitor id/label, real Scratch's own on-stage text
+                # "days since 2000".
+                watchers.push(ReporterWatcher(target_id = "", expr = Block(kind = BlockKind.DaysSince2000), label = "days since 2000", x = x, y = y))
+            elif m.is_sensing_loudness_watcher():
+                # Target-agnostic, same as `sensing_timer` -- real scratch-vm's
+                # own `getMonitored` entry (`sensing_loudness: { getId: () =>
+                # 'loudness' }`, confirmed against source) has no
+                # `isSpriteSpecific` flag at all, matching `sensing_timer`'s
+                # own target-agnostic convention rather than `sound_volume`'s
+                # per-sprite one.
+                watchers.push(ReporterWatcher(target_id = "", expr = Block(kind = BlockKind.Loudness), label = "loudness", x = x, y = y))
+    watchers
+
+# List counterpart of `find_variable_name_by_id` -- same reasoning
+# (a list watcher's label must track the list's *current* name, never a
+# monitor's stale cached `params.LIST`; confirmed disagreeing for real
+# against `list-monitor-rename.sb3`, see that struct's own doc comment).
+
+# Any target's list name, Stage or sprite-local -- see `find_variable_
+# name_by_id`'s own doc comment for the identical reasoning (`Lists`
+# genuinely tracks sprite-local lists now, `list_owner`/`local_table`).
+def string? find_list_name_by_id(Sb3Project project, string list_id):
+    for target in project.targets:
+        for lst in target.lists:
+            if "{lst.id_string()}" == list_id:
+                return "{lst.name_string()}"
+    nil
+
+# One visible list watcher -- real Scratch's multi-line box showing every
+# item of a list, `VariableWatcher`'s sibling. Same shape as `build_
+# variable_watchers` -- a watcher entity is now spawned for a sprite-local
+# list too (`Lists.list_owner`/`.local_table` genuinely track them now,
+# see their own doc comment), verified against `list-monitor-rename.sb3`,
+# which has one visible Stage list ("renamed global") and one visible
+# sprite-local list ("renamed local" on "Sprite1") -- both now survive.
+struct ListWatcher:
+    string list_id
+    string label
+    float32 x
+    float32 y
+
+def [ListWatcher] build_list_watchers(Sb3Project project):
+    mut watchers = []
+    let project_for_lookup = project.clone()
+    for m in project.monitors:
+        # No longer gated on `m.is_visible()` -- same upgrade `build_
+        # variable_watchers`' own doc comment already documents: an
+        # entity is now spawned for every list watcher regardless of its
+        # initial visibility, with the real, dynamic on/off state read
+        # from `Lists.watcher_visible` each tick (`sync_list_watchers`)
+        # instead of baked in once here at link time. Needed once
+        # `data_showlist`/`data_hidelist` could toggle a list that
+        # started hidden.
+        if m.is_list_watcher():
+            let list_id = "{m.variable_id()}"
+            if let name = find_list_name_by_id(project_for_lookup.clone(), list_id.clone()):
+                watchers.push(ListWatcher(list_id = list_id, label = name, x = m.x_pos() - 240.0, y = 180.0 - m.y_pos()))
+    watchers
+
+# Real Scratch's own `data_listcontents` join rule (`_getListContents` in
+# scratch-vm): every item on its own line, *except* when every item is a
+# single-character string, in which case they're joined with no separator
+# at all (e.g. a list of individual letters reads as one word, not a
+# vertical stack of one-letter lines). Deliberately its own function
+# rather than reusing `list_contents_string` (a comma-joined test-only
+# convenience for `run_greenflag_and_report_list*`, see its own doc
+# comment -- never meant to match real Scratch's display rule, unlike
+# this one, which is what the on-stage watcher itself now needs).
+def string list_watcher_display_string(Lists lists, string list_id):
+    # A sprite-local list's watcher only ever shows the *origin*'s own
+    # current items -- same "resolve the owner live via `owner_of`" shape
+    # `sync_variable_watchers`'s own doc comment already established for
+    # `Vars`, resolved directly here rather than threading a `calling_
+    # instance_id` parameter through this function's own signature.
+    let items = lists.get(list_id.clone(), lists.owner_of(list_id))
+    var all_single_char = true
+    for item in items:
+        match item:
+            Str(s):
+                if s.length != 1:
+                    all_single_char = false
+            Num(n):
+                all_single_char = false
+            Bool(b):
+                all_single_char = false
+    let sep = if all_single_char: "" else: "\n"
+    var result = ""
+    var first = true
+    for item in items:
+        if first:
+            result = "{item}"
+            first = false
+        else:
+            result = "{result}{sep}{item}"
+    result
+
+# ─── Linker: Sb3Project (raw, from sb3_loader.br) -> Block AST + Vars ───────
+#
+# Scoped to exactly what jscratch's own Fibonacci_1.sb3/Fibonacci_2.sb3
+# fixtures use: a single `when green flag clicked` script on some sprite,
+# reading/writing only Stage-scoped (global) variables -- see Vars's own doc
+# comment for why that's enough for this phase, and README.md's roadmap for
+# what a real multi-sprite/clone-aware linker still needs (Type/Instance
+# slot arrays, per-sprite local variables, procedures, broadcasts).
+#
+# Every `sb3_loader` accessor called here takes an owned `Arc<str>` and/or
+# returns a plain `String`/`bool`/`Option<T>` -- see that file's own
+# "Boring-integration glue" section for why (Boring has no manual-borrow
+# syntax for external call arguments, and can't pattern-match external enums
+# like `Sb3InputValue`/`Sb3Primitive` directly). `"{s}"` interpolation is
+# used throughout to turn a plain Rust `String` crossing that boundary into
+# a real Boring `string` (`Arc<str>`) -- the same trick the language itself
+# recommends in place of a `string(x)` conversion function.
+
+# Thin forwarding wrappers around the three `sb3_loader` glue methods that
+# take an opcode/field-name argument. Calling one of these external methods
+# directly with a bare string literal (`blk.opcode_is("operator_add")`)
+# transpiles the literal as a raw `&'static str`, not a Boring `string`
+# (`Arc<str>`) -- a documented `boring` limitation (docs/book.md, "Advanced
+# -- String literals as external call arguments"): the Arc-wrapping only
+# happens when the literal flows through a known Boring parameter type, which
+# an external call's signature never gives the transpiler. A `"..." as
+# string` cast at the call site fixes it inline too, but these accessors are
+# each called a dozen-plus times below (`block_opcode_is` alone: 16), so one
+# `string`-typed wrapper parameter beats casting at every call site.
+def bool block_opcode_is(Sb3Block blk, string op):
+    blk.opcode_is(op)
+
+def string? block_input_block_id(Sb3Block blk, string name):
+    if let id = blk.input_block_id(name):
+        "{id}"
+    else:
+        nil
+
+def string? block_field_id(Sb3Block blk, string name):
+    # Not a bare `blk.field_id(name)` tail expression: that already returns
+    # `Option<String>`, and a `T?`-returning Boring function auto-wraps its
+    # tail expression in `Some(...)` unconditionally -- doubling it to
+    # `Option<Option<String>>` instead of passing it through. Re-wrapping
+    # explicitly via `if let`/`nil` avoids the double-wrap.
+    if let v = blk.field_id(name):
+        "{v}"
+    else:
+        nil
+
+def Sb3Block? target_find_hat(Sb3Target target, string opcode):
+    if let hat = target.find_top_level_hat(opcode):
+        hat
+    else:
+        nil
+
+# Like `block_field_id`, but for a field's *value* rather than its id --
+# `argument_reporter_string_number`/`argument_reporter_boolean`'s
+# `fields.VALUE` holds the parameter's *name* directly (there's no id to
+# look up; parameters aren't variables), so `field_value`, not `field_id`,
+# is the right accessor here.
+def string? block_field_value(Sb3Block blk, string name):
+    if let v = blk.field_value(name):
+        "{v}"
+    else:
+        nil
+
+def ScratchValue var_initial_value(Sb3Variable v):
+    if let s = v.initial_as_number_string():
+        ScratchValue.Num(ScratchNumber.from_str_owned("{s}") else ScratchNumber.from_i64(0))
+    elif let s = v.initial_as_text():
+        ScratchValue.Str("{s}")
+    elif let b = v.initial_as_bool():
+        ScratchValue.Bool(b)
+    else:
+        ScratchValue.Num(ScratchNumber.from_i64(0))
+
+# Every Stage variable, keyed by id -- see Vars's doc comment for why only
+# Stage variables are in scope for this phase (both Fibonacci fixtures read/
+# write only Stage-scoped globals). `"{v.id_string()}"` (not the bare
+# `String` result) so the dict's key type is inferred as a real Boring
+# `string` (`Arc<str>`, matching `Vars.table`'s declared type) from the very
+# first insertion, rather than `HashMap<String, _>`.
+def Vars build_vars(Sb3Project project):
+    mut table = {=}
+    mut var_name_lookup = {=}
+    mut var_owner = {=}
+    mut local_table = {=}
+    mut local_var_name_lookup = {=}
+    for target in project.targets:
+        if target.is_stage:
+            for v in target.variables:
+                table["{v.id_string()}"] = var_initial_value(v)
+                var_name_lookup["{v.name_string()}"] = v.id_string()
+        else:
+            # Sprite-local variables. `target.name_string()` read first,
+            # not last -- iterating `target.variables` below moves that
+            # field out of `target`, same partial-move caution `build_
+            # target_costumes`'s own doc comment already documents for a
+            # sibling case. An origin sprite's own instance id is its own
+            # name (identity-seeded, same convention `SoundQueue.
+            # instance_types` already established), so `local_table`/
+            # `local_var_name_lookup` are keyed by that name directly --
+            # every real sprite gets an entry here, even an empty one
+            # (zero local variables), matching this project's own "every
+            # real target is seeded, not just ones that need it" habit.
+            let origin_name = "{target.name_string()}"
+            mut by_id = {=}
+            mut by_name = {=}
+            for v in target.variables:
+                by_id["{v.id_string()}"] = var_initial_value(v)
+                by_name["{v.name_string()}"] = v.id_string()
+                var_owner["{v.id_string()}"] = origin_name.clone()
+            local_table[origin_name.clone()] = by_id
+            local_var_name_lookup[origin_name] = by_name
+    # Seeds `watcher_visible` from each variable's own saved monitor
+    # entry -- a separate loop over `project.monitors`, after the
+    # `project.targets` one above (not before): different fields, so no
+    # partial-move conflict, but keeping the established "read what a
+    # later step needs before it's touched" discipline this project uses
+    # elsewhere doesn't apply here since neither loop needs the other's
+    # field. Already scope-independent -- filtered only on `m.is_
+    # variable_watcher()`, never `target.is_stage` -- so a sprite-local
+    # variable's own saved visibility was already captured here even
+    # before this round, just never read since no watcher entity existed
+    # to apply it to (see `build_variable_watchers`'s own doc comment).
+    mut watcher_visible = {=}
+    for m in project.monitors:
+        if m.is_variable_watcher():
+            watcher_visible["{m.variable_id()}"] = m.is_visible()
+    Vars(table = table, watcher_visible = watcher_visible, answer = "", ask_queue = [], ask_buffer = "", next_ask_id = 0, last_answered_id = -1, var_name_lookup = var_name_lookup, var_owner = var_owner, local_table = local_table, local_var_name_lookup = local_var_name_lookup)
+
+def ScratchValue list_item_initial_value(Sb3List lst, int i):
+    if let s = lst.item_as_number_string(i):
+        ScratchValue.Num(ScratchNumber.from_str_owned("{s}") else ScratchNumber.from_i64(0))
+    elif let s = lst.item_as_text(i):
+        ScratchValue.Str("{s}")
+    elif let b = lst.item_as_bool(i):
+        ScratchValue.Bool(b)
+    else:
+        ScratchValue.Num(ScratchNumber.from_i64(0))
+
+def [ScratchValue] build_list_items(Sb3List lst):
+    mut items = []
+    var i = 0
+    let count = lst.item_count()
+    while i < count:
+        items.push(list_item_initial_value(lst.clone(), i))
+        i += 1
+    items
+
+# Every Stage list, keyed by id -- same Stage-only scoping simplification as
+# `build_vars` (see `Vars`/`Lists`' own doc comments).
+def Lists build_lists(Sb3Project project):
+    mut table = {=}
+    mut list_owner = {=}
+    mut local_table = {=}
+    for target in project.targets:
+        if target.is_stage:
+            for lst in target.lists:
+                table["{lst.id_string()}"] = build_list_items(lst)
+        else:
+            # Sprite-local lists -- same shape as `build_vars`' own
+            # non-Stage branch (see its own doc comment for the partial-
+            # move-order reasoning behind reading `target.name_string()`
+            # before iterating `target.lists`).
+            let origin_name = "{target.name_string()}"
+            mut by_id = {=}
+            for lst in target.lists:
+                by_id["{lst.id_string()}"] = build_list_items(lst)
+                list_owner["{lst.id_string()}"] = origin_name.clone()
+            local_table[origin_name] = by_id
+    # Seeds `watcher_visible` from each list's own saved monitor
+    # visibility -- same shape as `build_vars`' own seeding loop for
+    # `Vars.watcher_visible`, a separate pass over `project.monitors`
+    # after the `project.targets` one above for the identical reason
+    # (different fields, no partial-move conflict, and neither loop
+    # needs the other's own result). Already scope-independent, same as
+    # `Vars.watcher_visible`'s own seeding -- see that field's doc comment.
+    mut watcher_visible = {=}
+    for m in project.monitors:
+        if m.is_list_watcher():
+            watcher_visible["{m.variable_id()}"] = m.is_visible()
+    Lists(table = table, watcher_visible = watcher_visible, list_owner = list_owner, local_table = local_table)
+
+# One `Position` per target, keyed by name (see `Positions`' own doc
+# comment for why name, not a synthetic id). Every target gets an entry,
+# Stage included -- `target.x_or`/`y_or`/`direction_or` fall back to their
+# defaults on the Stage's own always-`None` fields, so this never fails,
+# even though nothing is expected to ever read the Stage's own entry.
+def Positions build_positions(Sb3Project project):
+    mut table = {=}
+    for target in project.targets:
+        let p = Position(x = target.x_or(0.0), y = target.y_or(0.0), direction = target.direction_or(90.0))
+        table["{target.name_string()}"] = p
+    Positions(table = table)
+
+# `visible`/`size` default to `true`/`100.0` for both the Stage (whose own
+# `Sb3Target.visible`/`.size` fields are always `nil` -- real Scratch has
+# no concept of hiding/resizing the Stage itself) and any sprite that
+# simply never set either away from its own defaults -- matching
+# `Sb3Target.visible_or`/`.size_or`'s own fallback values exactly.
+def LooksStates build_looks_states(Sb3Project project):
+    mut table = {=}
+    for target in project.targets:
+        let s = LooksState(visible = target.visible_or(true), size = target.size_or(100.0), costume_index = target.current_costume, ghost = 0.0)
+        table["{target.name_string()}"] = s
+    LooksStates(table = table)
+
+def LayerOrders build_layer_orders(Sb3Project project):
+    mut table = {=}
+    for target in project.targets:
+        table["{target.name_string()}"] = target.layer_order
+    LayerOrders(table = table)
+
+# A plain `{string=string}` table, not its own resource -- see
+# `SoundQueue.rotation_styles`' own doc comment (`runtime.br`) for why:
+# folded into whichever `SoundQueue` each caller constructs, same
+# "`run_pending_threads`/`step_thread` already at Bevy's/their own hard
+# parameter ceiling" reason `volumes`/`pitches` themselves are.
+def {string=string} build_target_rotation_styles(Sb3Project project):
+    mut table = {=}
+    for target in project.targets:
+        table["{target.name_string()}"] = target.rotation_style_or_default()
+    table
+
+# Every origin target's own saved `draggable` sb3 field (real Scratch's
+# own editor "make this sprite draggable" checkbox, saved per-sprite) --
+# `sensing_setdragmode`'s own seed value, same as `rotation_style_or_
+# default`'s just above. Defaults to `false` -- the sb3 format's own
+# convention for a sprite that's never had the checkbox touched (and the
+# Stage itself, which has no `draggable` field at all -- `target.draggable
+# else false` covers both cases identically).
+def {string=bool} build_target_draggable(Sb3Project project):
+    mut table = {=}
+    for target in project.targets:
+        table["{target.name_string()}"] = target.draggable else false
+    table
+
+# A plain `{string=float32}` table, not its own resource -- see
+# `SoundQueue.volumes`' own doc comment (`runtime.br`) for why volume
+# lives there instead: `run_pending_threads` is already at Bevy's hard
+# 16-parameter `SystemParam` limit, so this is seeded straight into
+# whichever `SoundQueue` each caller constructs.
+def {string=float32} build_sound_volume_table(Sb3Project project):
+    mut table = {=}
+    for target in project.targets:
+        # `let float raw = target.volume` first, not `target.volume as
+        # float32` inline -- the same class of `boring` transpiler bug
+        # `png_dimensions`' own doc comment (`assets.br`) documents for
+        # array-indexed casts (emits the *string*-parsing form of `as`
+        # instead of a plain numeric widen) turns out to also reproduce
+        # for a plain external struct *field* access cast directly at
+        # the call site, a real `E0599` ("no method `trim` found for
+        # type `f64`") confirmed with `cargo build`. An explicitly-typed
+        # intermediate local sidesteps it here too.
+        let float raw = target.volume
+        table["{target.name_string()}"] = raw as float32
+    table
+
+# Seeds `SoundQueue.instance_types` with the identity mapping every
+# original target starts with (its own id *is* its own name) -- the
+# starting point `control_create_clone_of` grows from at runtime by adding
+# one new entry per clone. See `SoundQueue.instance_types`'s own doc
+# comment for why every live instance (original or clone) needs an entry
+# here before any per-instance resource lookup involving it is safe.
+def {string=string} build_instance_types_table(Sb3Project project):
+    mut table = {=}
+    for target in project.targets:
+        let name = "{target.name_string()}"
+        table[name] = name
+    table
+
+# Every target's costume *names*, in on-disk order -- see `TargetCostumes`'
+# own doc comment (`runtime.br`) for why this exists at all (letting
+# `looks_switchcostumeto`/`looks_nextcostume` resolve a name or wrap an
+# index at runtime without ever needing the whole `Sb3Project` threaded
+# through the interpreter).
+def TargetCostumes build_target_costumes(Sb3Project project):
+    mut table = {=}
+    for target in project.targets:
+        # `target.name_string()` first, not last -- iterating
+        # `target.costumes` below moves that field out of `target`
+        # (same partial-move shape `build_variable_watchers`' own
+        # `project_for_lookup.clone()` comment already documents for a
+        # sibling case), so anything else still needed from `target`
+        # has to be read before that loop starts, not after.
+        let target_id = "{target.name_string()}"
+        mut names = []
+        for c in target.costumes:
+            names.push(c.name)
+        table[target_id] = names
+    TargetCostumes(table = table)
+
+# `sound_playuntildone`'s own duration lookup -- see `SoundQueue.sound_
+# durations`' own doc comment for why this lives folded onto that
+# resource rather than its own. Pure sb3-metadata arithmetic, no zip/
+# audio-decode access needed at all (unlike `build_target_costume_dims`,
+# which genuinely needs real asset bytes) -- straight from each sound's
+# own saved `rate`/`sampleCount`, so this belongs here in `linker.br`
+# alongside `build_target_costumes`, not `assets.br`.
+def {string={string=float32}} build_target_sound_durations(Sb3Project project):
+    mut table = {=}
+    for target in project.targets:
+        let target_id = "{target.name_string()}"
+        mut by_name = {=}
+        for s in target.sounds:
+            # `rate` is real Scratch's own saved sample rate (Hz),
+            # `sample_count` its total frame count -- `0.0` for a
+            # malformed/zero rate rather than a divide-by-zero `inf`,
+            # same defensive posture every other lookup in this file
+            # takes for data that "shouldn't" happen but isn't worth a
+            # crash over.
+            let dur = if s.rate > 0.0: (s.sample_count / s.rate) as float32 else: 0.0
+            by_name[s.name] = dur
+        table[target_id] = by_name
+    table
+
+def Block resolve_primitive(Sb3Primitive prim):
+    if let s = prim.as_number_str():
+        Block(kind = BlockKind.Literal(ScratchValue.Num(ScratchNumber.from_str_owned("{s}") else ScratchNumber.from_i64(0))))
+    elif let s = prim.as_text():
+        Block(kind = BlockKind.Literal(ScratchValue.Str("{s}")))
+    elif let var_id = prim.as_variable_id():
+        Block(kind = BlockKind.VarGet("{var_id}"))
+    elif let name = prim.as_broadcast_name():
+        # The broadcast menu's own selected value, as a plain string literal
+        # -- this is what `event_broadcast`/`event_broadcastandwait`'s
+        # `BROADCAST_INPUT` normally resolves to (a shadow-only primitive,
+        # never a real block in practice), evaluated at runtime just like
+        # any other expression to get the message name.
+        Block(kind = BlockKind.Literal(ScratchValue.Str("{name}")))
+    else:
+        # List-contents primitives and the unimplemented color-picker aren't
+        # reachable from any reporter slot Fibonacci uses -- see README.md's
+        # roadmap for when Lists/Sensing need this filled in.
+        Block(kind = BlockKind.Literal(ScratchValue.Num(ScratchNumber.from_i64(0))))
+
+# See `resolve_expr_block`'s own doc comment just below for what this
+# bounds. Deliberately much more conservative than `resolve_stack`'s own
+# no-cap-needed cycle guard: each level of *this* recursion is a real
+# native call chain three functions deep (`resolve_expr_block` ->
+# `dispatch_reporter` -> `resolve_input`), and `dispatch_reporter`'s own
+# stack frame is unusually large (one giant `if`/`elif` chain covering
+# ~150 opcodes). Tried empirically against a real debug (unoptimized)
+# `cargo test` build (a spawned test thread's default stack, smaller than
+# a process main thread's) with the cyclic fixture `reporter_cycle_guard.
+# rs` exercises: 500 and 64 both still genuinely overflowed the stack
+# (~1500/~192 real stack frames respectively -- `dispatch_reporter`'s
+# frame is that large), 32 still overflowed, 20 did not. 16 keeps a real
+# safety margin under that empirically-found threshold while staying an
+# order of magnitude above any real, non-cyclic Scratch project's own
+# reporter nesting (a handful of levels deep at most).
+let int MAX_REPORTER_DEPTH = 16
+
+# `depth` bounds the mutual recursion below (`resolve_expr_block` ->
+# `dispatch_reporter` -> `resolve_input` -> `resolve_expr_block`, ...) --
+# every real call site of `resolve_input` (both inside `dispatch_reporter`
+# and every top-level caller: `resolve_stack_block`'s own input
+# resolutions, `build_touching_object_hats`/`build_greater_than_hats`)
+# passes it through unchanged, and only `resolve_input`'s own recursive
+# step into `resolve_expr_block` increments it -- so `depth` is exactly
+# "how many reporter blocks deep is this expression tree". A hand-forged
+# `project.json` can make a reporter's own input (by block id) point back
+# at a block that, transitively, points back at itself (A's input is B,
+# B's input is A) -- with no cycle/depth guard at all, resolving either
+# one recurses forever and crashes the whole load with a stack overflow,
+# reachable just by opening the malicious project, before any script ever
+# runs. `MAX_REPORTER_DEPTH` (16) is comfortably above any real,
+# non-cyclic Scratch project's own reporter nesting (real projects rarely
+# exceed a handful of levels), so this never trips on legitimate content,
+# but is nowhere near deep enough to itself risk a stack overflow the way
+# an unbounded recursion would. Past the limit, this falls back to the
+# same `Literal(0)` every other malformed-block case in this file already
+# uses (see `resolve_stack_block`'s own fallback for a missing/unknown
+# opcode) rather than crashing.
+def Block resolve_expr_block(Sb3Target target, string block_id, int depth):
+    if depth > MAX_REPORTER_DEPTH:
+        return Block(kind = BlockKind.Literal(ScratchValue.Num(ScratchNumber.from_i64(0))))
+    if let blk = target.get_block(block_id):
+        dispatch_reporter(target, blk, depth)
+    else:
+        Block(kind = BlockKind.Literal(ScratchValue.Num(ScratchNumber.from_i64(0))))
+
+# Resolves one named input slot to an expression `Block` -- either a real
+# block plugged in (recurse via `resolve_expr_block`) or an inline literal/
+# variable-reporter primitive. `input_name.clone()` on the first attempt:
+# `input_block_id`/`input_primitive` each take `input_name` *by value*
+# (matching every other sb3_loader glue method, see its own doc comment),
+# and the transpiler doesn't auto-clone a plain identifier passed into an
+# external call the way it does for Boring-declared function calls -- so
+# without an explicit clone here, the first (unconditional) call in an
+# `if`/`elif` chain consumes `input_name` even along the branch where its
+# result is discarded, leaving nothing for the second attempt (E0382).
+# `depth` only actually increments right here, on the one real recursive
+# step into `resolve_expr_block` -- see that function's own doc comment.
+def Block resolve_input(Sb3Target target, Sb3Block blk, string input_name, int depth):
+    if let block_id = blk.input_block_id(input_name.clone()):
+        resolve_expr_block(target, "{block_id}", depth + 1)
+    elif let prim = blk.input_primitive(input_name):
+        resolve_primitive(prim)
+    else:
+        Block(kind = BlockKind.Literal(ScratchValue.Num(ScratchNumber.from_i64(0))))
+
+def Block dispatch_reporter(Sb3Target target, Sb3Block blk, int depth):
+    if block_opcode_is(blk, "operator_add"):
+        Block(kind = BlockKind.Add(resolve_input(target, blk, "NUM1", depth), resolve_input(target, blk, "NUM2", depth)))
+    elif block_opcode_is(blk, "operator_subtract"):
+        Block(kind = BlockKind.Sub(resolve_input(target, blk, "NUM1", depth), resolve_input(target, blk, "NUM2", depth)))
+    elif block_opcode_is(blk, "operator_equals"):
+        Block(kind = BlockKind.Equals(resolve_input(target, blk, "OPERAND1", depth), resolve_input(target, blk, "OPERAND2", depth)))
+    elif block_opcode_is(blk, "operator_gt"):
+        Block(kind = BlockKind.Gt(resolve_input(target, blk, "OPERAND1", depth), resolve_input(target, blk, "OPERAND2", depth)))
+    elif block_opcode_is(blk, "operator_lt"):
+        Block(kind = BlockKind.Lt(resolve_input(target, blk, "OPERAND1", depth), resolve_input(target, blk, "OPERAND2", depth)))
+    elif block_opcode_is(blk, "operator_multiply"):
+        Block(kind = BlockKind.Mul(resolve_input(target, blk, "NUM1", depth), resolve_input(target, blk, "NUM2", depth)))
+    elif block_opcode_is(blk, "operator_divide"):
+        Block(kind = BlockKind.Div(resolve_input(target, blk, "NUM1", depth), resolve_input(target, blk, "NUM2", depth)))
+    elif block_opcode_is(blk, "operator_mod"):
+        Block(kind = BlockKind.Mod(resolve_input(target, blk, "NUM1", depth), resolve_input(target, blk, "NUM2", depth)))
+    elif block_opcode_is(blk, "operator_and"):
+        Block(kind = BlockKind.And(resolve_input(target, blk, "OPERAND1", depth), resolve_input(target, blk, "OPERAND2", depth)))
+    elif block_opcode_is(blk, "operator_or"):
+        Block(kind = BlockKind.Or(resolve_input(target, blk, "OPERAND1", depth), resolve_input(target, blk, "OPERAND2", depth)))
+    elif block_opcode_is(blk, "operator_not"):
+        Block(kind = BlockKind.Not(resolve_input(target, blk, "OPERAND", depth)))
+    elif block_opcode_is(blk, "operator_join"):
+        Block(kind = BlockKind.Join(resolve_input(target, blk, "STRING1", depth), resolve_input(target, blk, "STRING2", depth)))
+    elif block_opcode_is(blk, "operator_letter_of"):
+        Block(kind = BlockKind.LetterOf(resolve_input(target, blk, "LETTER", depth), resolve_input(target, blk, "STRING", depth)))
+    elif block_opcode_is(blk, "operator_length"):
+        Block(kind = BlockKind.StringLength(resolve_input(target, blk, "STRING", depth)))
+    elif block_opcode_is(blk, "operator_contains"):
+        Block(kind = BlockKind.Contains(resolve_input(target, blk, "STRING1", depth), resolve_input(target, blk, "STRING2", depth)))
+    elif block_opcode_is(blk, "operator_mathop"):
+        if let op = block_field_value(blk, "OPERATOR"):
+            Block(kind = BlockKind.MathOp(op, resolve_input(target, blk, "NUM", depth)))
+        else:
+            Block(kind = BlockKind.Literal(ScratchValue.Num(ScratchNumber.from_i64(0))))
+    elif block_opcode_is(blk, "operator_random"):
+        Block(kind = BlockKind.Random(resolve_input(target, blk, "FROM", depth), resolve_input(target, blk, "TO", depth)))
+    elif block_opcode_is(blk, "operator_round"):
+        # A real, standalone block (own `NUM` input, no OPERATOR field),
+        # not one of `operator_mathop`'s own dropdown values -- mapped
+        # into that same `MathOp` variant with a made-up `"round"`
+        # operator string rather than a whole new `BlockKind`, see that
+        # variant's own `eval` case (`interpreter.br`) for why.
+        Block(kind = BlockKind.MathOp("round", resolve_input(target, blk, "NUM", depth)))
+    elif block_opcode_is(blk, "argument_reporter_string_number"):
+        if let name = block_field_value(blk, "VALUE"):
+            Block(kind = BlockKind.ArgGet(name))
+        else:
+            Block(kind = BlockKind.Literal(ScratchValue.Num(ScratchNumber.from_i64(0))))
+    elif block_opcode_is(blk, "argument_reporter_boolean"):
+        if let name = block_field_value(blk, "VALUE"):
+            Block(kind = BlockKind.ArgGet(name))
+        else:
+            Block(kind = BlockKind.Literal(ScratchValue.Bool(false)))
+    elif block_opcode_is(blk, "data_itemoflist"):
+        if let list_id = block_field_id(blk, "LIST"):
+            Block(kind = BlockKind.ListItemAt(list_id, resolve_input(target, blk, "INDEX", depth)))
+        else:
+            Block(kind = BlockKind.Literal(ScratchValue.Str("")))
+    elif block_opcode_is(blk, "data_itemnumoflist"):
+        if let list_id = block_field_id(blk, "LIST"):
+            Block(kind = BlockKind.ListItemNum(list_id, resolve_input(target, blk, "ITEM", depth)))
+        else:
+            Block(kind = BlockKind.Literal(ScratchValue.Num(ScratchNumber.from_i64(0))))
+    elif block_opcode_is(blk, "data_lengthoflist"):
+        if let list_id = block_field_id(blk, "LIST"):
+            Block(kind = BlockKind.ListLength(list_id))
+        else:
+            Block(kind = BlockKind.Literal(ScratchValue.Num(ScratchNumber.from_i64(0))))
+    elif block_opcode_is(blk, "data_listcontainsitem"):
+        if let list_id = block_field_id(blk, "LIST"):
+            Block(kind = BlockKind.ListContains(list_id, resolve_input(target, blk, "ITEM", depth)))
+        else:
+            Block(kind = BlockKind.Literal(ScratchValue.Bool(false)))
+    # Sensing: almost every block in this category needs infrastructure this
+    # phase deliberately doesn't have yet -- real sprite geometry/rendering
+    # for touching/distance-to, real keyboard/mouse input, a per-instance
+    # Type model for `sensing_of`, and a real pausable scheduler for
+    # `ask and wait` (see README.md's roadmap; none of these are faked with
+    # a wrong shortcut here, the same discipline as `wait`/`forever` not
+    # being faked with a blocking sleep). Only the two blocks with a
+    # genuinely correct headless answer are handled below -- everything
+    # else in Sensing falls through to the generic `else` case.
+    elif block_opcode_is(blk, "sensing_username"):
+        # Real Scratch itself reports an empty string outside the Scratch
+        # website (e.g. a downloaded/offline player) -- not a project-
+        # specific simplification, this genuinely is spec-correct here.
+        Block(kind = BlockKind.Literal(ScratchValue.Str("")))
+    elif block_opcode_is(blk, "sensing_answer"):
+        # A real stateful reporter now that `sensing_askandwait` exists --
+        # reads `Vars.answer` live at `eval` time, not baked to a link-time
+        # literal (see `BlockKind::Answer`'s own doc comment).
+        Block(kind = BlockKind.Answer)
+    elif block_opcode_is(blk, "motion_xposition"):
+        Block(kind = BlockKind.XPosition)
+    elif block_opcode_is(blk, "motion_yposition"):
+        Block(kind = BlockKind.YPosition)
+    elif block_opcode_is(blk, "motion_direction"):
+        Block(kind = BlockKind.Direction)
+    elif block_opcode_is(blk, "sensing_keypressed"):
+        # KEY_OPTION here is an *input* (a menu-shadow block,
+        # `sensing_keyoptions`, whose own FIELD holds the string) --
+        # `resolve_input` handles the inline-primitive-compacted case
+        # generically, but a real editor-exported project (confirmed via
+        # the opcode-histogram check against five fresh real projects, not
+        # the three originally tracked -- 44 occurrences total) references
+        # this shadow as a genuine block just as often as `sensing_
+        # touchingobjectmenu`/`sound_sounds_menu`/`motion_goto_menu`/
+        # `control_create_clone_of_menu` all needed their own dedicated
+        # case for -- this was a real, silent bug in already-shipped
+        # `sensing_keypressed` functionality (the old comment here
+        # wrongly assumed sb3 projects *always* compact this shadow),
+        # not just a new opcode to add.
+        Block(kind = BlockKind.KeyPressed(resolve_input(target, blk, "KEY_OPTION", depth)))
+    elif block_opcode_is(blk, "sensing_keyoptions"):
+        if let key = block_field_value(blk, "KEY_OPTION"):
+            Block(kind = BlockKind.Literal(ScratchValue.Str(key)))
+        else:
+            Block(kind = BlockKind.Literal(ScratchValue.Str("space")))
+    elif block_opcode_is(blk, "sensing_mousex"):
+        Block(kind = BlockKind.MouseX)
+    elif block_opcode_is(blk, "sensing_mousey"):
+        Block(kind = BlockKind.MouseY)
+    elif block_opcode_is(blk, "sensing_touchingobject"):
+        # TOUCHINGOBJECTMENU is a menu-shadow *input* (the `sensing_
+        # touchingobjectmenu` shadow block, holding "_mouse_"/"_edge_"/a
+        # sprite name) -- same shape as `sensing_keypressed`'s KEY_OPTION
+        # above, `resolve_input` already handles it generically *when* the
+        # shadow is compacted into an inline primitive.
+        Block(kind = BlockKind.Touching(resolve_input(target, blk, "TOUCHINGOBJECTMENU", depth)))
+    elif block_opcode_is(blk, "sensing_touchingcolor"):
+        Block(kind = BlockKind.TouchingColor(resolve_input(target, blk, "COLOR", depth)))
+    elif block_opcode_is(blk, "sensing_touchingobjectmenu"):
+        # Real projects fetched to validate this project end to end do
+        # reference this shadow as a genuine block (not always inlined --
+        # confirmed via the opcode-histogram check, same discovery as
+        # `looks_costume`'s own doc comment above), so `resolve_input`'s
+        # `input_block_id` path needs a real dispatch case here too, not
+        # just the inline-primitive fallback.
+        if let name = block_field_value(blk, "TOUCHINGOBJECTMENU"):
+            Block(kind = BlockKind.Literal(ScratchValue.Str(name)))
+        else:
+            Block(kind = BlockKind.Literal(ScratchValue.Str("_mouse_")))
+    elif block_opcode_is(blk, "colour_picker"):
+        # Pen's own `pen_setPenColorToColor` COLOR input -- a real
+        # `colour_picker` shadow (`Blockly.Blocks.colour_picker`'s own
+        # `field_colour_slider`, confirmed against real `scratch-blocks`
+        # source), field `COLOUR` (British spelling, matching the field
+        # name itself, not just the block's own display), value `"#rrggbb"`.
+        # Resolves to a plain string literal -- `SetPenColorToColor`'s own
+        # `exec_simple` case does the actual hex/HSV parsing
+        # (`pen_state_from_hex_color`, `runtime.br`).
+        if let hex = block_field_value(blk, "COLOUR"):
+            Block(kind = BlockKind.Literal(ScratchValue.Str(hex)))
+        else:
+            Block(kind = BlockKind.Literal(ScratchValue.Str("#000000")))
+    elif block_opcode_is(blk, "sensing_distanceto"):
+        # DISTANCETOMENU is a menu-shadow input (the `sensing_
+        # distancetomenu` shadow block, holding "_mouse_" or a sprite
+        # name -- no "_edge_" case here, unlike TOUCHINGOBJECTMENU) --
+        # same shape as `sensing_touchingobject`'s own TOUCHINGOBJECTMENU
+        # just above.
+        Block(kind = BlockKind.DistanceTo(resolve_input(target, blk, "DISTANCETOMENU", depth)))
+    elif block_opcode_is(blk, "sensing_distancetomenu"):
+        # Same real-block-not-always-inlined shape as `sensing_
+        # touchingobjectmenu` above.
+        if let name = block_field_value(blk, "DISTANCETOMENU"):
+            Block(kind = BlockKind.Literal(ScratchValue.Str(name)))
+        else:
+            Block(kind = BlockKind.Literal(ScratchValue.Str("_mouse_")))
+    elif block_opcode_is(blk, "sensing_of"):
+        # PROPERTY is a plain field (a dropdown, not an expr) -- see
+        # `BlockKind::SensingOf`'s own doc comment for what it can hold.
+        let property = block_field_value(blk, "PROPERTY") else ""
+        Block(kind = BlockKind.SensingOf(resolve_input(target, blk, "OBJECT", depth), property))
+    elif block_opcode_is(blk, "sensing_of_object_menu"):
+        # Same real-block-not-always-inlined shape as every other menu
+        # shadow this session -- `sensing_of`'s own OBJECT field. Default
+        # "_stage_", matching real Scratch's own default dropdown
+        # selection for this specific menu.
+        if let name = block_field_value(blk, "OBJECT"):
+            Block(kind = BlockKind.Literal(ScratchValue.Str(name)))
+        else:
+            Block(kind = BlockKind.Literal(ScratchValue.Str("_stage_")))
+    elif block_opcode_is(blk, "sound_sounds_menu"):
+        # Same real-block-not-always-inlined shape as `sensing_
+        # touchingobjectmenu` just above -- confirmed via the same
+        # opcode-histogram check (7 occurrences in one tracked project,
+        # all `sound_play`'s own SOUND_MENU, since `sound_playuntildone`
+        # isn't implemented and never appeared in that project's
+        # histogram at all).
+        if let name = block_field_value(blk, "SOUND_MENU"):
+            Block(kind = BlockKind.Literal(ScratchValue.Str(name)))
+        else:
+            Block(kind = BlockKind.Literal(ScratchValue.Str("")))
+    elif block_opcode_is(blk, "motion_pointtowards_menu"):
+        # Same real-block-not-always-inlined shape as `motion_goto_menu`
+        # just below -- `motion_pointtowards`'s own TOWARDS field.
+        # Default "_mouse_", matching real Scratch's own default dropdown
+        # selection for this specific menu.
+        if let name = block_field_value(blk, "TOWARDS"):
+            Block(kind = BlockKind.Literal(ScratchValue.Str(name)))
+        else:
+            Block(kind = BlockKind.Literal(ScratchValue.Str("_mouse_")))
+    elif block_opcode_is(blk, "motion_goto_menu"):
+        # Same real-block-not-always-inlined shape as `sensing_
+        # touchingobjectmenu`/`sound_sounds_menu` above -- `motion_goto`'s
+        # own TO field.
+        if let name = block_field_value(blk, "TO"):
+            Block(kind = BlockKind.Literal(ScratchValue.Str(name)))
+        else:
+            Block(kind = BlockKind.Literal(ScratchValue.Str("_random_")))
+    elif block_opcode_is(blk, "motion_glideto_menu"):
+        # `motion_glideto`'s own TO field -- a genuinely separate shadow
+        # opcode from `motion_goto_menu`, even though the shape (and this
+        # project's own handling of it) is identical, same as `motion_
+        # pointtowards_menu` being separate from `motion_goto_menu` above
+        # despite an identical shape.
+        if let name = block_field_value(blk, "TO"):
+            Block(kind = BlockKind.Literal(ScratchValue.Str(name)))
+        else:
+            Block(kind = BlockKind.Literal(ScratchValue.Str("_random_")))
+    elif block_opcode_is(blk, "control_create_clone_of_menu"):
+        # Same real-block-not-always-inlined shape as `sensing_
+        # touchingobjectmenu`/`sound_sounds_menu`/`motion_goto_menu` above
+        # -- found via the opcode-histogram re-check after `control_create_
+        # clone_of` landed (5 occurrences in one tracked real project,
+        # confirming this shadow *is* a genuine block there, not always
+        # inlined the simplified way every hand-authored test fixture in
+        # this project used until now) -- `control_create_clone_of`'s own
+        # CLONE_OPTION field. Default "_myself_", matching real Scratch's
+        # own default dropdown selection for this specific menu.
+        if let name = block_field_value(blk, "CLONE_OPTION"):
+            Block(kind = BlockKind.Literal(ScratchValue.Str(name)))
+        else:
+            Block(kind = BlockKind.Literal(ScratchValue.Str("_myself_")))
+    elif block_opcode_is(blk, "sensing_mousedown"):
+        Block(kind = BlockKind.MouseDown)
+    elif block_opcode_is(blk, "sensing_loudness"):
+        Block(kind = BlockKind.Loudness)
+    elif block_opcode_is(blk, "sensing_loud"):
+        Block(kind = BlockKind.IsLoud)
+    elif block_opcode_is(blk, "sensing_timer"):
+        Block(kind = BlockKind.Timer)
+    elif block_opcode_is(blk, "sensing_current"):
+        if let which = block_field_value(blk, "CURRENTMENU"):
+            Block(kind = BlockKind.CurrentDateTime(which))
+        else:
+            Block(kind = BlockKind.CurrentDateTime(""))
+    elif block_opcode_is(blk, "sensing_dayssince2000"):
+        Block(kind = BlockKind.DaysSince2000)
+    elif block_opcode_is(blk, "looks_size"):
+        Block(kind = BlockKind.SizePercent)
+    elif block_opcode_is(blk, "sound_volume"):
+        Block(kind = BlockKind.Volume)
+    elif block_opcode_is(blk, "looks_costumenumbername"):
+        if let which = block_field_value(blk, "NUMBER_NAME"):
+            Block(kind = BlockKind.CostumeNumberName(which))
+        else:
+            Block(kind = BlockKind.CostumeNumberName("number"))
+    elif block_opcode_is(blk, "looks_backdropnumbername"):
+        if let which = block_field_value(blk, "NUMBER_NAME"):
+            Block(kind = BlockKind.BackdropNumberName(which))
+        else:
+            Block(kind = BlockKind.BackdropNumberName("number"))
+    elif block_opcode_is(blk, "looks_costume"):
+        # The `looks_switchcostumeto` menu-shadow block -- `COSTUME` is a
+        # dropdown of the sprite's own costume *names*, chosen at design
+        # time (never a live "what's my current costume" query, unlike
+        # `looks_size` above) -- same "sb3 usually compacts an
+        # untouched shadow into an inline literal, but a real project can
+        # still reference the shadow block directly" shape as `sensing_
+        # keypressed`'s KEY_OPTION/`sound_play`'s SOUND_MENU, confirmed
+        # necessary here too (real projects fetched to validate this
+        # project end to end do reference `looks_costume` as a real block,
+        # not always an inlined shadow).
+        if let name = block_field_value(blk, "COSTUME"):
+            Block(kind = BlockKind.Literal(ScratchValue.Str(name)))
+        else:
+            Block(kind = BlockKind.Literal(ScratchValue.Str("")))
+    elif block_opcode_is(blk, "looks_backdrops"):
+        # `looks_switchbackdropto`'s own menu shadow -- same shape as
+        # `looks_costume` just above, a dropdown of the *Stage's* own
+        # backdrop names.
+        if let name = block_field_value(blk, "BACKDROP"):
+            Block(kind = BlockKind.Literal(ScratchValue.Str(name)))
+        else:
+            Block(kind = BlockKind.Literal(ScratchValue.Str("")))
+    else:
+        # Sensing/other-category reporters aren't reachable from Fibonacci's
+        # block set -- see README.md's roadmap.
+        Block(kind = BlockKind.Literal(ScratchValue.Num(ScratchNumber.from_i64(0))))
+
+# Resolves a C-block's substack (`SUBSTACK` input -- always a real block
+# chain, never an inline primitive) into a `[Block]` body.
+def [Block] resolve_substack(Sb3Target target, Sb3Block blk, string input_name):
+    if let sub_id = blk.input_block_id(input_name):
+        resolve_stack(target, "{sub_id}")
+    else:
+        []
+
+def Block resolve_stack_block(Sb3Target target, Sb3Block blk):
+    if block_opcode_is(blk, "data_setvariableto"):
+        if let var_id = block_field_id(blk, "VARIABLE"):
+            Block(kind = BlockKind.SetVar("{var_id}", resolve_input(target, blk, "VALUE", 0)))
+        else:
+            Block(kind = BlockKind.Seq([]))
+    elif block_opcode_is(blk, "data_changevariableby"):
+        if let var_id = block_field_id(blk, "VARIABLE"):
+            Block(kind = BlockKind.ChangeVar("{var_id}", resolve_input(target, blk, "VALUE", 0)))
+        else:
+            Block(kind = BlockKind.Seq([]))
+    elif block_opcode_is(blk, "data_showvariable"):
+        if let var_id = block_field_id(blk, "VARIABLE"):
+            Block(kind = BlockKind.ShowVariable("{var_id}"))
+        else:
+            Block(kind = BlockKind.Seq([]))
+    elif block_opcode_is(blk, "data_hidevariable"):
+        if let var_id = block_field_id(blk, "VARIABLE"):
+            Block(kind = BlockKind.HideVariable("{var_id}"))
+        else:
+            Block(kind = BlockKind.Seq([]))
+    elif block_opcode_is(blk, "data_showlist"):
+        if let list_id = block_field_id(blk, "LIST"):
+            Block(kind = BlockKind.ShowList("{list_id}"))
+        else:
+            Block(kind = BlockKind.Seq([]))
+    elif block_opcode_is(blk, "data_hidelist"):
+        if let list_id = block_field_id(blk, "LIST"):
+            Block(kind = BlockKind.HideList("{list_id}"))
+        else:
+            Block(kind = BlockKind.Seq([]))
+    elif block_opcode_is(blk, "data_addtolist"):
+        if let list_id = block_field_id(blk, "LIST"):
+            Block(kind = BlockKind.ListAdd(list_id, resolve_input(target, blk, "ITEM", 0)))
+        else:
+            Block(kind = BlockKind.Seq([]))
+    elif block_opcode_is(blk, "data_deleteoflist"):
+        if let list_id = block_field_id(blk, "LIST"):
+            Block(kind = BlockKind.ListDeleteAt(list_id, resolve_input(target, blk, "INDEX", 0)))
+        else:
+            Block(kind = BlockKind.Seq([]))
+    elif block_opcode_is(blk, "data_deletealloflist"):
+        if let list_id = block_field_id(blk, "LIST"):
+            Block(kind = BlockKind.ListDeleteAll(list_id))
+        else:
+            Block(kind = BlockKind.Seq([]))
+    elif block_opcode_is(blk, "data_insertatlist"):
+        if let list_id = block_field_id(blk, "LIST"):
+            Block(kind = BlockKind.ListInsertAt(list_id, resolve_input(target, blk, "INDEX", 0), resolve_input(target, blk, "ITEM", 0)))
+        else:
+            Block(kind = BlockKind.Seq([]))
+    elif block_opcode_is(blk, "data_replaceitemoflist"):
+        if let list_id = block_field_id(blk, "LIST"):
+            Block(kind = BlockKind.ListReplaceAt(list_id, resolve_input(target, blk, "INDEX", 0), resolve_input(target, blk, "ITEM", 0)))
+        else:
+            Block(kind = BlockKind.Seq([]))
+    elif block_opcode_is(blk, "event_broadcast"):
+        Block(kind = BlockKind.Broadcast(resolve_input(target, blk, "BROADCAST_INPUT", 0)))
+    elif block_opcode_is(blk, "event_broadcastandwait"):
+        Block(kind = BlockKind.BroadcastAndWait(resolve_input(target, blk, "BROADCAST_INPUT", 0)))
+    elif block_opcode_is(blk, "control_repeat"):
+        Block(kind = BlockKind.Repeat(resolve_input(target, blk, "TIMES", 0), resolve_substack(target, blk, "SUBSTACK")))
+    elif block_opcode_is(blk, "control_repeat_until"):
+        Block(kind = BlockKind.RepeatUntil(resolve_input(target, blk, "CONDITION", 0), resolve_substack(target, blk, "SUBSTACK")))
+    elif block_opcode_is(blk, "control_if"):
+        Block(kind = BlockKind.If(resolve_input(target, blk, "CONDITION", 0), resolve_substack(target, blk, "SUBSTACK")))
+    elif block_opcode_is(blk, "control_if_else"):
+        Block(kind = BlockKind.IfElse(resolve_input(target, blk, "CONDITION", 0), resolve_substack(target, blk, "SUBSTACK"), resolve_substack(target, blk, "SUBSTACK2")))
+    elif block_opcode_is(blk, "control_stop"):
+        if let option = block_field_value(blk, "STOP_OPTION"):
+            Block(kind = BlockKind.Stop(option))
+        else:
+            Block(kind = BlockKind.Seq([]))
+    elif block_opcode_is(blk, "control_wait"):
+        Block(kind = BlockKind.Wait(resolve_input(target, blk, "DURATION", 0)))
+    elif block_opcode_is(blk, "control_forever"):
+        Block(kind = BlockKind.Forever(resolve_substack(target, blk, "SUBSTACK")))
+    elif block_opcode_is(blk, "control_wait_until"):
+        Block(kind = BlockKind.WaitUntil(resolve_input(target, blk, "CONDITION", 0)))
+    elif block_opcode_is(blk, "control_create_clone_of"):
+        # CLONE_OPTION is a menu-shadow input (`control_create_clone_of_
+        # menu`), same compaction-to-inline-primitive shape as `motion_
+        # goto`'s TO -- `resolve_input` already handles it with no
+        # opcode-specific parsing needed.
+        Block(kind = BlockKind.CreateCloneOf(resolve_input(target, blk, "CLONE_OPTION", 0)))
+    elif block_opcode_is(blk, "control_delete_this_clone"):
+        Block(kind = BlockKind.DeleteThisClone)
+    elif block_opcode_is(blk, "procedures_call"):
+        if let proccode = blk.mutation_proc_code():
+            mut arg_exprs = []
+            for arg_id in blk.mutation_argument_ids():
+                arg_exprs.push(resolve_input(target, blk, "{arg_id}", 0))
+            Block(kind = BlockKind.ProcCall("{proccode}", arg_exprs))
+        else:
+            Block(kind = BlockKind.Seq([]))
+    elif block_opcode_is(blk, "motion_movesteps"):
+        Block(kind = BlockKind.MoveSteps(resolve_input(target, blk, "STEPS", 0)))
+    elif block_opcode_is(blk, "motion_turnright"):
+        Block(kind = BlockKind.TurnRight(resolve_input(target, blk, "DEGREES", 0)))
+    elif block_opcode_is(blk, "motion_turnleft"):
+        Block(kind = BlockKind.TurnLeft(resolve_input(target, blk, "DEGREES", 0)))
+    elif block_opcode_is(blk, "motion_pointindirection"):
+        Block(kind = BlockKind.PointInDirection(resolve_input(target, blk, "DIRECTION", 0)))
+    elif block_opcode_is(blk, "motion_gotoxy"):
+        Block(kind = BlockKind.GotoXY(resolve_input(target, blk, "X", 0), resolve_input(target, blk, "Y", 0)))
+    elif block_opcode_is(blk, "motion_glidesecstoxy"):
+        Block(kind = BlockKind.GlideSecsToXY(resolve_input(target, blk, "SECS", 0), resolve_input(target, blk, "X", 0), resolve_input(target, blk, "Y", 0)))
+    elif block_opcode_is(blk, "motion_glideto"):
+        Block(kind = BlockKind.GlideTo(resolve_input(target, blk, "SECS", 0), resolve_input(target, blk, "TO", 0)))
+    elif block_opcode_is(blk, "motion_ifonedgebounce"):
+        Block(kind = BlockKind.IfOnEdgeBounce)
+    elif block_opcode_is(blk, "motion_setrotationstyle"):
+        if let style = block_field_value(blk, "STYLE"):
+            Block(kind = BlockKind.SetRotationStyle(style))
+        else:
+            Block(kind = BlockKind.SetRotationStyle("all around"))
+    elif block_opcode_is(blk, "motion_goto"):
+        Block(kind = BlockKind.GoTo(resolve_input(target, blk, "TO", 0)))
+    elif block_opcode_is(blk, "motion_pointtowards"):
+        Block(kind = BlockKind.PointTowards(resolve_input(target, blk, "TOWARDS", 0)))
+    elif block_opcode_is(blk, "motion_changexby"):
+        Block(kind = BlockKind.ChangeXBy(resolve_input(target, blk, "DX", 0)))
+    elif block_opcode_is(blk, "motion_setx"):
+        Block(kind = BlockKind.SetX(resolve_input(target, blk, "X", 0)))
+    elif block_opcode_is(blk, "motion_changeyby"):
+        Block(kind = BlockKind.ChangeYBy(resolve_input(target, blk, "DY", 0)))
+    elif block_opcode_is(blk, "motion_sety"):
+        Block(kind = BlockKind.SetY(resolve_input(target, blk, "Y", 0)))
+    elif block_opcode_is(blk, "sound_play"):
+        # SOUND_MENU is an *input* (a menu-shadow block, `sound_sounds_menu`)
+        # -- same compaction-to-inline-primitive shape as `sensing_
+        # keypressed`'s KEY_OPTION, so `resolve_input` already handles it
+        # with no opcode-specific parsing needed (see that opcode's own
+        # comment in dispatch_reporter).
+        Block(kind = BlockKind.PlaySound(resolve_input(target, blk, "SOUND_MENU", 0)))
+    elif block_opcode_is(blk, "sound_playuntildone"):
+        # Same SOUND_MENU menu-shadow shape as `sound_play` just above.
+        Block(kind = BlockKind.PlayUntilDone(resolve_input(target, blk, "SOUND_MENU", 0)))
+    elif block_opcode_is(blk, "sound_stopallsounds"):
+        Block(kind = BlockKind.StopAllSounds)
+    elif block_opcode_is(blk, "sensing_resettimer"):
+        Block(kind = BlockKind.ResetTimer)
+    elif block_opcode_is(blk, "sensing_setdragmode"):
+        # DRAG_MODE -- a plain field, "draggable"/"not draggable" (real
+        # scratch-vm's own `setDraggable(args.DRAG_MODE === 'draggable')`,
+        # confirmed against source), resolved to a bool once here rather
+        # than carrying the raw string into `exec_simple`.
+        if let mode = block_field_value(blk, "DRAG_MODE"):
+            Block(kind = BlockKind.SetDragMode(mode == "draggable"))
+        else:
+            Block(kind = BlockKind.SetDragMode(false))
+    elif block_opcode_is(blk, "pen_clear"):
+        Block(kind = BlockKind.PenClear)
+    elif block_opcode_is(blk, "pen_penDown"):
+        Block(kind = BlockKind.PenDown)
+    elif block_opcode_is(blk, "pen_penUp"):
+        Block(kind = BlockKind.PenUp)
+    elif block_opcode_is(blk, "pen_setPenColorToColor"):
+        Block(kind = BlockKind.SetPenColorToColor(resolve_input(target, blk, "COLOR", 0)))
+    elif block_opcode_is(blk, "pen_changePenColorParamBy"):
+        # COLOR_PARAM is a plain field ("color"/"saturation"/"brightness"/
+        # "transparency", real scratch-vm's own lowercase `ColorParam`
+        # enum values, confirmed against source), not a menu-shadow input
+        # -- same shape `WHENGREATERTHANMENU` already established.
+        if let param = block_field_value(blk, "COLOR_PARAM"):
+            Block(kind = BlockKind.ChangePenColorParamBy(param, resolve_input(target, blk, "VALUE", 0)))
+        else:
+            Block(kind = BlockKind.ChangePenColorParamBy("color", resolve_input(target, blk, "VALUE", 0)))
+    elif block_opcode_is(blk, "pen_setPenColorParamTo"):
+        if let param = block_field_value(blk, "COLOR_PARAM"):
+            Block(kind = BlockKind.SetPenColorParamTo(param, resolve_input(target, blk, "VALUE", 0)))
+        else:
+            Block(kind = BlockKind.SetPenColorParamTo("color", resolve_input(target, blk, "VALUE", 0)))
+    elif block_opcode_is(blk, "pen_changePenSizeBy"):
+        Block(kind = BlockKind.ChangePenSizeBy(resolve_input(target, blk, "SIZE", 0)))
+    elif block_opcode_is(blk, "pen_setPenSizeTo"):
+        Block(kind = BlockKind.SetPenSizeTo(resolve_input(target, blk, "SIZE", 0)))
+    elif block_opcode_is(blk, "pen_setPenHueToNumber"):
+        Block(kind = BlockKind.SetPenHueToNumber(resolve_input(target, blk, "HUE", 0)))
+    elif block_opcode_is(blk, "pen_changePenHueBy"):
+        Block(kind = BlockKind.ChangePenHueBy(resolve_input(target, blk, "HUE", 0)))
+    elif block_opcode_is(blk, "pen_setPenShadeToNumber"):
+        Block(kind = BlockKind.SetPenShadeToNumber(resolve_input(target, blk, "SHADE", 0)))
+    elif block_opcode_is(blk, "pen_changePenShadeBy"):
+        Block(kind = BlockKind.ChangePenShadeBy(resolve_input(target, blk, "SHADE", 0)))
+    elif block_opcode_is(blk, "pen_stamp"):
+        Block(kind = BlockKind.Stamp)
+    elif block_opcode_is(blk, "sound_setvolumeto"):
+        Block(kind = BlockKind.SetVolumeTo(resolve_input(target, blk, "VOLUME", 0)))
+    elif block_opcode_is(blk, "sound_changevolumeby"):
+        Block(kind = BlockKind.ChangeVolumeBy(resolve_input(target, blk, "VOLUME", 0)))
+    elif block_opcode_is(blk, "sound_seteffectto"):
+        # EFFECT is a real field ("PITCH"/"PAN", confirmed uppercase
+        # against a real tracked project's own raw JSON) -- kept as-is,
+        # not `.toLower()`d the way `looks_seteffectto`'s own EFFECT is,
+        # since `exec_simple`'s own check compares directly against
+        # `"PITCH"` (no reason to normalize casing for a field this
+        # project never actually re-derives from user-typed text).
+        if let effect = block_field_value(blk, "EFFECT"):
+            Block(kind = BlockKind.SetSoundEffectTo(effect, resolve_input(target, blk, "VALUE", 0)))
+        else:
+            Block(kind = BlockKind.Seq([]))
+    elif block_opcode_is(blk, "sound_changeeffectby"):
+        # VALUE, not CHANGE -- confirmed against real scratch-vm/scratch-
+        # blocks source: `sound_changeeffectby`'s own input is also named
+        # VALUE, unlike `looks_changeeffectby`'s own CHANGE.
+        if let effect = block_field_value(blk, "EFFECT"):
+            Block(kind = BlockKind.ChangeSoundEffectBy(effect, resolve_input(target, blk, "VALUE", 0)))
+        else:
+            Block(kind = BlockKind.Seq([]))
+    elif block_opcode_is(blk, "sound_cleareffects"):
+        Block(kind = BlockKind.ClearSoundEffects)
+    elif block_opcode_is(blk, "sensing_askandwait"):
+        # A real Sensing *stack* block (has its own `next`, sits in a
+        # script body like any other statement) -- belongs here in
+        # `resolve_stack_block`, not `dispatch_reporter` (where `sensing_
+        # answer`, a genuine reporter, correctly lives). A real, confirmed
+        # bug caught by an actual end-to-end test, not just a build: this
+        # was originally miswired into `dispatch_reporter` instead, where
+        # `resolve_stack`/`resolve_stack_block`'s own machinery never
+        # reaches it at all -- it silently fell through to this function's
+        # own catch-all no-op, so the whole script ran straight through
+        # `ask and wait` as if it wasn't there (never pausing, `answer`
+        # never touched) instead of actually pausing on it.
+        Block(kind = BlockKind.AskAndWait(resolve_input(target, blk, "QUESTION", 0)))
+    elif block_opcode_is(blk, "looks_say"):
+        # MESSAGE is a real *input* (any reporter/literal can be plugged
+        # in, unlike KEY_OPTION/SOUND_MENU's menu-shadow shape) --
+        # `resolve_input` already handles this generically.
+        Block(kind = BlockKind.Say(resolve_input(target, blk, "MESSAGE", 0)))
+    elif block_opcode_is(blk, "looks_think"):
+        Block(kind = BlockKind.Think(resolve_input(target, blk, "MESSAGE", 0)))
+    elif block_opcode_is(blk, "looks_sayforsecs"):
+        # The real pausable scheduler (see `step_thread`'s own doc
+        # comment) makes this buildable for real now, the same
+        # `WaitingUntil`-shaped-frame-resuming-on-real-completion shape
+        # `control_wait` already uses -- noted as a future follow-up when
+        # `looks_say`/`looks_think` first landed, done here.
+        Block(kind = BlockKind.SayForSecs(resolve_input(target, blk, "MESSAGE", 0), resolve_input(target, blk, "SECS", 0)))
+    elif block_opcode_is(blk, "looks_thinkforsecs"):
+        Block(kind = BlockKind.ThinkForSecs(resolve_input(target, blk, "MESSAGE", 0), resolve_input(target, blk, "SECS", 0)))
+    elif block_opcode_is(blk, "looks_show"):
+        Block(kind = BlockKind.Show)
+    elif block_opcode_is(blk, "looks_hide"):
+        Block(kind = BlockKind.Hide)
+    elif block_opcode_is(blk, "looks_setsizeto"):
+        Block(kind = BlockKind.SetSizeTo(resolve_input(target, blk, "SIZE", 0)))
+    elif block_opcode_is(blk, "looks_changesizeby"):
+        Block(kind = BlockKind.ChangeSizeBy(resolve_input(target, blk, "CHANGE", 0)))
+    elif block_opcode_is(blk, "looks_switchcostumeto"):
+        Block(kind = BlockKind.SwitchCostumeTo(resolve_input(target, blk, "COSTUME", 0)))
+    elif block_opcode_is(blk, "looks_switchbackdropto"):
+        Block(kind = BlockKind.SwitchBackdropTo(resolve_input(target, blk, "BACKDROP", 0)))
+    elif block_opcode_is(blk, "looks_switchbackdroptoandwait"):
+        # Same BACKDROP input name/shape as `looks_switchbackdropto` just
+        # above (confirmed against real scratch-vm source -- `args.
+        # BACKDROP` in `switchBackdropAndWait`), a separate `BlockKind`
+        # variant purely so `exec_simple` can give it its own real "and
+        # wait" semantics, same reasoning `event_broadcastandwait` already
+        # established alongside plain `event_broadcast`.
+        Block(kind = BlockKind.SwitchBackdropToAndWait(resolve_input(target, blk, "BACKDROP", 0)))
+    elif block_opcode_is(blk, "looks_nextcostume"):
+        Block(kind = BlockKind.NextCostume)
+    elif block_opcode_is(blk, "looks_nextbackdrop"):
+        Block(kind = BlockKind.NextBackdrop)
+    elif block_opcode_is(blk, "looks_seteffectto"):
+        # EFFECT is a real *field* (a dropdown -- "GHOST"/"COLOR"/...,
+        # real Scratch's own uppercase convention), not a plugged-in
+        # input, resolved once here at link time -- `.toLower()`d so
+        # `exec_simple`'s own `effect == "ghost"` check (and every other
+        # graphic-effect case, if one's ever added) only ever has to
+        # match one casing.
+        if let effect = block_field_value(blk, "EFFECT"):
+            Block(kind = BlockKind.SetGraphicEffectTo(effect.toLower(), resolve_input(target, blk, "VALUE", 0)))
+        else:
+            Block(kind = BlockKind.Seq([]))
+    elif block_opcode_is(blk, "looks_changeeffectby"):
+        if let effect = block_field_value(blk, "EFFECT"):
+            Block(kind = BlockKind.ChangeGraphicEffectBy(effect.toLower(), resolve_input(target, blk, "CHANGE", 0)))
+        else:
+            Block(kind = BlockKind.Seq([]))
+    elif block_opcode_is(blk, "looks_cleargraphiceffects"):
+        Block(kind = BlockKind.ClearGraphicEffects)
+    elif block_opcode_is(blk, "looks_gotofrontback"):
+        # FRONT_BACK is a real field ("front"/"back"), resolved to a
+        # plain string once here at link time -- same shape as graphic
+        # effects' own EFFECT field just above.
+        if let which = block_field_value(blk, "FRONT_BACK"):
+            Block(kind = BlockKind.GoToFrontBack(which.toLower()))
+        else:
+            Block(kind = BlockKind.Seq([]))
+    elif block_opcode_is(blk, "looks_goforwardbackwardlayers"):
+        # FORWARD_BACKWARD is a real field ("forward"/"backward"), same
+        # shape as `looks_gotofrontback`'s own FRONT_BACK just above; NUM
+        # is a plain numeric expr.
+        if let which = block_field_value(blk, "FORWARD_BACKWARD"):
+            Block(kind = BlockKind.GoForwardBackwardLayers(resolve_input(target, blk, "NUM", 0), which.toLower()))
+        else:
+            Block(kind = BlockKind.Seq([]))
+    else:
+        # `motion_goto`/`motion_pointtowards`/`motion_glideto*` (a
+        # target-picker menu and/or a duration, both needing infrastructure
+        # this pass doesn't add) are deliberately not handled here -- see
+        # `Positions`' doc comment. `sound_playuntildone` -- now that the
+        # real pausable scheduler exists (`Wait`/`Forever`/`WaitUntil`
+        # above), this one could genuinely be built the same way `Wait`
+        # is (a `WaitingUntil`-shaped frame, resuming once the sound
+        # actually finishes rather than a fixed duration) -- not done
+        # here, real follow-up work, not blocked on anything new. Volume/
+        # effects (real audio-mixing work, no fixture to justify it yet)
+        # are the deliberately-deferred rest of Sound -- see `SoundQueue`'s
+        # own doc comment. `looks_sayforsecs`/`looks_thinkforsecs` -- same
+        # "could now be built the same way `Wait` is, not done yet" note
+        # as `sound_playuntildone`. `looks_show`/`looks_hide`/
+        # `looks_setsizeto`/`looks_changesizeby`/costume switching
+        # (`looks_switchcostumeto`/`looks_nextcostume`/`looks_costume`)
+        # landed (see `LooksState`/`TargetCostumes`' own doc comments) --
+        # every graphic-effect/layering/backdrop opcode is what's left of
+        # the deliberately-deferred rest of Looks -- see `SpeechBubbles`'
+        # own doc comment.
+        Block(kind = BlockKind.Seq([]))
+
+# Walks a block chain by `next` pointers starting at `start_id`, converting
+# each into our Block AST -- the whole point of the lazy id-based linking
+# pattern ported from jscratch (`BlockReference`/`SequenceReference`): the
+# raw JSON only has an opaque id graph, this turns it into a real tree once,
+# up front, rather than re-resolving ids on every execution step.
+#
+# `visited` guards against a hand-forged `project.json` whose `next` chain
+# cycles back on itself (a block's `next` -- directly or transitively --
+# points back at a block already walked in this very call). Every real
+# script's block chain is linear and acyclic (that's what real Scratch's
+# own editor can ever produce), but nothing here was otherwise checking
+# that assumption: with no guard, a cyclic chain makes this `while let`
+# loop run forever, `result` growing without bound (OOM) or the whole
+# load hanging permanently -- reachable at every script entry point this
+# project has (green-flag hats, broadcasts, clones, procedure bodies,
+# every `if`/loop substack), just by loading the malicious project.
+# Breaking out (keeping whatever was already resolved) matches this file's
+# existing convention of degrading gracefully on malformed input rather
+# than crashing -- same as `resolve_expr_block`'s own depth cutoff just
+# above.
+def [Block] resolve_stack(Sb3Target target, string start_id):
+    mut result = []
+    var current = start_id
+    mut visited = {=}
+    while let blk = target.get_block(current):
+        let already_visited = visited[current.clone()] else false
+        if already_visited:
+            break
+        visited[current.clone()] = true
+        result.push(resolve_stack_block(target, blk.clone()))
+        if let nxt = blk.next_id():
+            current = "{nxt}"
+        else:
+            break
+    result
+
+# Every custom block ("My Block") defined anywhere in the project, keyed by
+# proccode. A `procedures_definition` block's own body starts at its
+# `next` pointer; its parameter names/proccode live on the separate
+# `procedures_prototype` block referenced by its `custom_block` input (real
+# Scratch's own split between "the definition hat" and "the prototype that
+# describes its signature"). Scoped across *all* targets rather than just
+# the one running the green-flag script -- simpler than threading "which
+# target" through, and proccodes are unique in practice; if two sprites
+# ever define the same proccode differently, last-one-scanned wins (a
+# `HashMap` has no defined iteration order, so this hasn't been observed to
+# matter in a small single-sprite project like Fibonacci, and is a
+# documented, deliberate Phase 1 limitation, not a hidden footgun).
+def ProcTable build_procs(Sb3Project project):
+    mut procs = {=}
+    for target in project.targets:
+        for blk in target.all_blocks():
+            if block_opcode_is(blk.clone(), "procedures_definition"):
+                if let proto_id = block_input_block_id(blk.clone(), "custom_block"):
+                    if let proto = target.get_block(proto_id):
+                        if let proccode = proto.mutation_proc_code():
+                            mut names = []
+                            for n in proto.mutation_argument_names():
+                                names.push("{n}")
+                            var body = []
+                            if let start = blk.next_id():
+                                body = resolve_stack(target.clone(), "{start}")
+                            procs["{proccode}"] = Proc(param_names = names, body = body, warp = proto.mutation_warp())
+    ProcTable(table = procs)
+
+# Every `when green flag clicked` script across the whole project, linked
+# and tagged with its owning target (reusing `ReceiverScript`'s shape --
+# "a linked script plus the target it belongs to" isn't specific to
+# broadcast receivers, it's just what any runnable script needs). A real
+# Scratch project can have more than one green-flag hat *per sprite* too
+# (not just one per sprite across the project) -- confirmed directly
+# against a real downloaded project (`Coconut clicker`, three separate
+# `event_whenflagclicked` stacks on its own "Clicking thing" sprite alone,
+# plus more on other sprites for clone-spawning setup) -- so this scans
+# every target's `all_blocks()` for the opcode directly (the same "scan
+# everything, don't stop at the first match" idiom `build_broadcasts`/
+# `build_key_press_hats`/`build_click_hats` already use), not `target_
+# find_hat`'s own "first match only" shape.
+#
+# Used to return just the *first* one found project-wide and silently
+# drop the rest -- a real, confirmed-on-a-real-project bug, not a
+# theoretical gap: `Coconut clicker`'s own score-digit clones, wave
+# animation, and most of its own "Clicking thing" sprite's setup never
+# ran at all under that old behavior, since none of those scripts happened
+# to be the very first `event_whenflagclicked` hat in the project. Now
+# that the real pausable scheduler (`Thread`/`FrameKind`/`step_thread`,
+# `PendingThreads`) exists, there's no remaining reason to run only one --
+# `PendingThreads.queue` already supports many concurrent threads, the
+# same way broadcasts/hats/clone-spawned threads already coexist.
+def [ReceiverScript] build_greenflag_scripts(Sb3Project project):
+    mut scripts = []
+    for target in project.targets:
+        for blk in target.all_blocks():
+            if block_opcode_is(blk.clone(), "event_whenflagclicked"):
+                if let start = blk.next_id():
+                    let body = resolve_stack(target.clone(), "{start}")
+                    scripts.push(ReceiverScript(target_id = "{target.name_string()}", body = body))
+    scripts
+
+# Finds a Stage variable's id by name -- used by callers (tests, a future
+# CLI) that know a variable's human-readable name but need its id to read
+# `Vars.get(id)`. Not used by the linker itself (which only ever needs ids,
+# resolved directly from `fields`/primitives).
+def string find_stage_var_id(Sb3Project project, string name):
+    for target in project.targets:
+        if target.is_stage:
+            for v in target.variables:
+                if v.name_matches(name.clone()):
+                    return "{v.id_string()}"
+    ""
+

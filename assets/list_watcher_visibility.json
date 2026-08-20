@@ -1,0 +1,122 @@
+{
+  "targets": [
+    {
+      "isStage": true,
+      "name": "Stage",
+      "variables": {},
+      "lists": {
+        "list_a": ["a", ["x", "y"]],
+        "list_b": ["b", ["z"]]
+      },
+      "broadcasts": {},
+      "blocks": {},
+      "comments": {},
+      "currentCostume": 0,
+      "costumes": [
+        {
+          "name": "backdrop1",
+          "dataFormat": "svg",
+          "assetId": "bg",
+          "md5ext": "bg.svg",
+          "rotationCenterX": 0,
+          "rotationCenterY": 0
+        }
+      ],
+      "sounds": [],
+      "volume": 100,
+      "layerOrder": 0,
+      "tempo": 60,
+      "videoTransparency": 50,
+      "videoState": "on",
+      "textToSpeechLanguage": null
+    },
+    {
+      "isStage": false,
+      "name": "Sprite1",
+      "variables": {},
+      "lists": {},
+      "broadcasts": {},
+      "blocks": {
+        "hat1": {
+          "opcode": "event_whenflagclicked",
+          "next": "show1",
+          "parent": null,
+          "inputs": {},
+          "fields": {},
+          "shadow": false,
+          "topLevel": true,
+          "x": 0,
+          "y": 0
+        },
+        "show1": {
+          "opcode": "data_showlist",
+          "next": "hide1",
+          "parent": "hat1",
+          "inputs": {},
+          "fields": {
+            "LIST": ["a", "list_a"]
+          },
+          "shadow": false,
+          "topLevel": false
+        },
+        "hide1": {
+          "opcode": "data_hidelist",
+          "next": null,
+          "parent": "show1",
+          "inputs": {},
+          "fields": {
+            "LIST": ["b", "list_b"]
+          },
+          "shadow": false,
+          "topLevel": false
+        }
+      },
+      "comments": {},
+      "currentCostume": 0,
+      "costumes": [
+        {
+          "name": "costume1",
+          "dataFormat": "svg",
+          "assetId": "c1",
+          "md5ext": "c1.svg",
+          "rotationCenterX": 0,
+          "rotationCenterY": 0
+        }
+      ],
+      "sounds": [],
+      "volume": 100,
+      "layerOrder": 1,
+      "visible": true,
+      "x": 0,
+      "y": 0,
+      "size": 100,
+      "direction": 90,
+      "draggable": false,
+      "rotationStyle": "all around"
+    }
+  ],
+  "monitors": [
+    {
+      "id": "list_a",
+      "mode": "list",
+      "opcode": "data_listcontents",
+      "params": {"LIST": "a"},
+      "spriteName": null,
+      "value": [],
+      "width": 100, "height": 100, "x": 0, "y": 0,
+      "visible": false
+    },
+    {
+      "id": "list_b",
+      "mode": "list",
+      "opcode": "data_listcontents",
+      "params": {"LIST": "b"},
+      "spriteName": null,
+      "value": [],
+      "width": 100, "height": 100, "x": 0, "y": 120,
+      "visible": true
+    }
+  ],
+  "extensions": [],
+  "meta": {}
+}

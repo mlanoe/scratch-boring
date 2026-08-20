@@ -1,0 +1,83 @@
+{
+  "targets": [
+    {
+      "isStage": true,
+      "name": "Stage",
+      "variables": {
+        "var_stage_dist": ["stage_dist", 0]
+      },
+      "lists": {},
+      "broadcasts": {},
+      "blocks": {
+        "hat1": {
+          "opcode": "event_whenflagclicked",
+          "next": "set_stage_dist",
+          "parent": null,
+          "inputs": {},
+          "fields": {},
+          "shadow": false,
+          "topLevel": true,
+          "x": 0,
+          "y": 0
+        },
+        "expr_stage_dist": {
+          "opcode": "sensing_distanceto",
+          "next": null,
+          "parent": "set_stage_dist",
+          "inputs": {
+            "DISTANCETOMENU": [1, [10, "_mouse_"]]
+          },
+          "fields": {},
+          "shadow": false,
+          "topLevel": false
+        },
+        "set_stage_dist": {
+          "opcode": "data_setvariableto",
+          "next": null,
+          "parent": "hat1",
+          "inputs": {
+            "VALUE": [1, "expr_stage_dist"]
+          },
+          "fields": {
+            "VARIABLE": ["stage_dist", "var_stage_dist"]
+          },
+          "shadow": false,
+          "topLevel": false
+        }
+      },
+      "comments": {},
+      "currentCostume": 0,
+      "costumes": [
+        {
+          "name": "backdrop1",
+          "dataFormat": "svg",
+          "assetId": "bg",
+          "md5ext": "bg.svg",
+          "rotationCenterX": 0,
+          "rotationCenterY": 0
+        }
+      ],
+      "sounds": [],
+      "volume": 100,
+      "layerOrder": 0,
+      "tempo": 60,
+      "videoTransparency": 50,
+      "videoState": "on",
+      "textToSpeechLanguage": null
+    }
+  ],
+  "monitors": [
+    {
+      "id": "var_stage_dist",
+      "mode": "default",
+      "opcode": "data_variable",
+      "params": {"VARIABLE": "stage_dist"},
+      "spriteName": null,
+      "value": 0,
+      "width": 0, "height": 0, "x": 0, "y": 0,
+      "visible": true
+    }
+  ],
+  "extensions": [],
+  "meta": {}
+}

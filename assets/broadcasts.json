@@ -1,0 +1,299 @@
+{
+  "targets": [
+    {
+      "isStage": true,
+      "name": "Stage",
+      "variables": {
+        "varDone": [
+          "done",
+          false
+        ],
+        "varReceivedA": [
+          "receivedA",
+          false
+        ],
+        "varReceivedB": [
+          "receivedB",
+          false
+        ],
+        "varReceivedC": [
+          "receivedC",
+          false
+        ]
+      },
+      "lists": {},
+      "broadcasts": {
+        "bcastGoId": "go",
+        "bcastGo2Id": "go2"
+      },
+      "blocks": {},
+      "comments": {},
+      "currentCostume": 0,
+      "costumes": [
+        {
+          "name": "backdrop1",
+          "dataFormat": "svg",
+          "assetId": "a",
+          "md5ext": "a.svg",
+          "rotationCenterX": 0,
+          "rotationCenterY": 0
+        }
+      ],
+      "sounds": [],
+      "volume": 100,
+      "layerOrder": 0,
+      "tempo": 60,
+      "videoTransparency": 50,
+      "videoState": "on",
+      "textToSpeechLanguage": null
+    },
+    {
+      "isStage": false,
+      "name": "Sprite1",
+      "variables": {},
+      "lists": {},
+      "broadcasts": {},
+      "blocks": {
+        "hat1": {
+          "opcode": "event_whenflagclicked",
+          "next": "bcastGo",
+          "parent": null,
+          "inputs": {},
+          "fields": {},
+          "shadow": false,
+          "topLevel": true,
+          "x": 0,
+          "y": 0
+        },
+        "bcastGo": {
+          "opcode": "event_broadcast",
+          "next": "bcastGo2",
+          "parent": "hat1",
+          "inputs": {
+            "BROADCAST_INPUT": [
+              1,
+              [
+                11,
+                "go",
+                "bcastGoId"
+              ]
+            ]
+          },
+          "fields": {},
+          "shadow": false,
+          "topLevel": false
+        },
+        "bcastGo2": {
+          "opcode": "event_broadcastandwait",
+          "next": "setDone",
+          "parent": "bcastGo",
+          "inputs": {
+            "BROADCAST_INPUT": [
+              1,
+              [
+                11,
+                "go2",
+                "bcastGo2Id"
+              ]
+            ]
+          },
+          "fields": {},
+          "shadow": false,
+          "topLevel": false
+        },
+        "setDone": {
+          "opcode": "data_setvariableto",
+          "next": null,
+          "parent": "bcastGo2",
+          "inputs": {
+            "VALUE": [
+              1,
+              [
+                10,
+                "true"
+              ]
+            ]
+          },
+          "fields": {
+            "VARIABLE": [
+              "done",
+              "varDone"
+            ]
+          },
+          "shadow": false,
+          "topLevel": false
+        },
+        "recvHatA": {
+          "opcode": "event_whenbroadcastreceived",
+          "next": "setA",
+          "parent": null,
+          "inputs": {},
+          "fields": {
+            "BROADCAST_OPTION": [
+              "go",
+              "bcastGoId"
+            ]
+          },
+          "shadow": false,
+          "topLevel": true,
+          "x": 0,
+          "y": 200
+        },
+        "setA": {
+          "opcode": "data_setvariableto",
+          "next": null,
+          "parent": "recvHatA",
+          "inputs": {
+            "VALUE": [
+              1,
+              [
+                10,
+                "true"
+              ]
+            ]
+          },
+          "fields": {
+            "VARIABLE": [
+              "receivedA",
+              "varReceivedA"
+            ]
+          },
+          "shadow": false,
+          "topLevel": false
+        }
+      },
+      "comments": {},
+      "currentCostume": 0,
+      "costumes": [
+        {
+          "name": "costume1",
+          "dataFormat": "svg",
+          "assetId": "b",
+          "md5ext": "b.svg",
+          "rotationCenterX": 0,
+          "rotationCenterY": 0
+        }
+      ],
+      "sounds": [],
+      "volume": 100,
+      "layerOrder": 1,
+      "visible": true,
+      "x": 0,
+      "y": 0,
+      "size": 100,
+      "direction": 90,
+      "draggable": false,
+      "rotationStyle": "all around"
+    },
+    {
+      "isStage": false,
+      "name": "Sprite2",
+      "variables": {},
+      "lists": {},
+      "broadcasts": {},
+      "blocks": {
+        "recvHatB": {
+          "opcode": "event_whenbroadcastreceived",
+          "next": "setB",
+          "parent": null,
+          "inputs": {},
+          "fields": {
+            "BROADCAST_OPTION": [
+              "go",
+              "bcastGoId"
+            ]
+          },
+          "shadow": false,
+          "topLevel": true,
+          "x": 0,
+          "y": 0
+        },
+        "setB": {
+          "opcode": "data_setvariableto",
+          "next": null,
+          "parent": "recvHatB",
+          "inputs": {
+            "VALUE": [
+              1,
+              [
+                10,
+                "true"
+              ]
+            ]
+          },
+          "fields": {
+            "VARIABLE": [
+              "receivedB",
+              "varReceivedB"
+            ]
+          },
+          "shadow": false,
+          "topLevel": false
+        },
+        "recvHatC": {
+          "opcode": "event_whenbroadcastreceived",
+          "next": "setC",
+          "parent": null,
+          "inputs": {},
+          "fields": {
+            "BROADCAST_OPTION": [
+              "go2",
+              "bcastGo2Id"
+            ]
+          },
+          "shadow": false,
+          "topLevel": true,
+          "x": 0,
+          "y": 200
+        },
+        "setC": {
+          "opcode": "data_setvariableto",
+          "next": null,
+          "parent": "recvHatC",
+          "inputs": {
+            "VALUE": [
+              1,
+              [
+                10,
+                "true"
+              ]
+            ]
+          },
+          "fields": {
+            "VARIABLE": [
+              "receivedC",
+              "varReceivedC"
+            ]
+          },
+          "shadow": false,
+          "topLevel": false
+        }
+      },
+      "comments": {},
+      "currentCostume": 0,
+      "costumes": [
+        {
+          "name": "costume1",
+          "dataFormat": "svg",
+          "assetId": "b",
+          "md5ext": "b.svg",
+          "rotationCenterX": 0,
+          "rotationCenterY": 0
+        }
+      ],
+      "sounds": [],
+      "volume": 100,
+      "layerOrder": 2,
+      "visible": true,
+      "x": 0,
+      "y": 0,
+      "size": 100,
+      "direction": 90,
+      "draggable": false,
+      "rotationStyle": "all around"
+    }
+  ],
+  "monitors": [],
+  "extensions": [],
+  "meta": {}
+}
