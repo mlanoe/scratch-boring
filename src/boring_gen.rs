@@ -447,7 +447,7 @@ pub fn setup_scratch_project(mut commands: Commands, project_path: Res<ProjectPa
         }
         commands.insert_resource(PendingThreads { queue: greenflag_threads });
         for target in project.targets.iter().cloned() {
-            let target_name = Arc::<str>::from(format!("{}", target.name_string()).as_str());
+            let target_name: Arc<str> = Arc::<str>::from(Arc::<str>::from(format!("{}", target.name_string()).as_str()));
             let transform = Transform::from_xyz(target.x_or(0.0), target.y_or(0.0), 0.0);
             if let Some(costume_path) = extract_current_costume_to_temp_file(Arc::<str>::from(project_path.path.clone().to_string()), Arc::<str>::from(target_name.clone().to_string())) {
                 let mut costume_handles = vec![];
@@ -459,7 +459,7 @@ pub fn setup_scratch_project(mut commands: Commands, project_path: Res<ProjectPa
                     }
                 }
                 let mut real_costume_root = commands.spawn((ScratchSprite { target_id: Arc::<str>::from(target_name.clone().to_string()) }, Sprite::from_image(asset_server.load(costume_path.to_string())), TargetCostumeHandles { handles: costume_handles }, transform));
-                real_costume_root.with_children(|parent| drop(parent.spawn((SpeechBubbleAnchor { target_id: Arc::<str>::from(target_name.clone().to_string()) }, Text2d::new(""), Anchor(Vec2::new(0.0, (-1.0))), Transform::from_xyz(0.0, 0.0, 1.0)))));
+                real_costume_root.with_children(|parent| drop(parent.spawn((SpeechBubbleAnchor { target_id: target_name.clone().clone() }, Text2d::new(""), Anchor(Vec2::new(0.0, (-1.0))), Transform::from_xyz(0.0, 0.0, 1.0)))));
             } else {
                 let color = {
                 if target.is_stage {
@@ -476,7 +476,7 @@ pub fn setup_scratch_project(mut commands: Commands, project_path: Res<ProjectPa
                 }
 };
                 let mut placeholder_root = commands.spawn((ScratchSprite { target_id: Arc::<str>::from(target_name.clone().to_string()) }, Sprite::from_color(color, size), TargetCostumeHandles { handles: vec![] }, transform));
-                placeholder_root.with_children(|parent| drop(parent.spawn((SpeechBubbleAnchor { target_id: Arc::<str>::from(target_name.clone().to_string()) }, Text2d::new(""), Anchor(Vec2::new(0.0, (-1.0))), Transform::from_xyz(0.0, 0.0, 1.0)))));
+                placeholder_root.with_children(|parent| drop(parent.spawn((SpeechBubbleAnchor { target_id: target_name.clone().clone() }, Text2d::new(""), Anchor(Vec2::new(0.0, (-1.0))), Transform::from_xyz(0.0, 0.0, 1.0)))));
             }
         }
         for watcher in variable_watchers.iter().cloned() {
@@ -2388,7 +2388,7 @@ fn json_nesting_within_limit(text: Arc<str>, max_depth: isize) -> bool {
     let mut escaped = false;
     let mut chars = text.chars().map(|c| Arc::<str>::from(c.to_string())).collect::<Vec<Arc<str>>>();
     for c in chars.iter().cloned() {
-        let s = Arc::<str>::from(format!("{}", c).as_str());
+        let s: Arc<str> = Arc::<str>::from(Arc::<str>::from(format!("{}", c).as_str()));
         if in_string {
             if escaped {
                 escaped = false;
@@ -2458,7 +2458,7 @@ fn read_project_json_from_zip(sb3Path: Arc<str>) -> Option<Arc<str>> {
         let indexedOpt = ZipArchive::by_index(&mut archive, i).ok();
         if let Some(entry) = indexedOpt {
             let rawName = entry.name();
-            let nameStr = Arc::<str>::from(format!("{}", rawName).as_str());
+            let nameStr: Arc<str> = Arc::<str>::from(Arc::<str>::from(format!("{}", rawName).as_str()));
             if zip_entry_matches(Arc::<str>::from(nameStr.clone().to_string()), Arc::<str>::from("project.json".to_string())) {
                 foundName = Some(nameStr.clone());
             }
@@ -5118,7 +5118,7 @@ fn build_start_as_clone_hats(project: Sb3Project) -> StartAsCloneHats {
             if block_opcode_is(blk.clone(), Arc::<str>::from("control_start_as_clone")) {
                 if let Some(start) = blk.next_id() {
                     let body = resolve_stack(target.clone(), Arc::<str>::from(Arc::<str>::from(format!("{}", start).as_str())));
-                    let target_name = Arc::<str>::from(format!("{}", target.name_string()).as_str());
+                    let target_name: Arc<str> = Arc::<str>::from(Arc::<str>::from(format!("{}", target.name_string()).as_str()));
                     let mut scripts = table.get(&target_name.clone()).cloned().unwrap_or_else(|| vec![]);
                     scripts.push(ReceiverScript { target_id: Arc::<str>::from(target_name.clone().to_string()), body: body });
                     table.insert(target_name.clone(), scripts);
@@ -5240,9 +5240,9 @@ fn build_variable_watchers(project: Sb3Project) -> Vec<VariableWatcher> {
     let project_for_lookup = project.clone();
     for m in project.monitors.iter().cloned() {
         if m.is_variable_watcher() {
-            let var_id = Arc::<str>::from(format!("{}", m.variable_id()).as_str());
+            let var_id: Arc<str> = Arc::<str>::from(Arc::<str>::from(format!("{}", m.variable_id()).as_str()));
             if let Some(name) = find_variable_name_by_id(project_for_lookup.clone(), Arc::<str>::from(var_id.clone().to_string())) {
-                watchers.push(VariableWatcher { variable_id: Arc::<str>::from(var_id.clone().to_string()), label: Arc::<str>::from(name.clone().to_string()), x: (m.x_pos() - 240.0), y: (180.0 - m.y_pos()) });
+                watchers.push(VariableWatcher { variable_id: var_id.clone().clone(), label: Arc::<str>::from(name.clone().to_string()), x: (m.x_pos() - 240.0), y: (180.0 - m.y_pos()) });
             }
         }
     }
@@ -5253,19 +5253,19 @@ fn build_reporter_watchers(project: Sb3Project) -> Vec<ReporterWatcher> {
     let mut watchers = vec![];
     for m in project.monitors.iter().cloned() {
         if m.is_visible() {
-            let target_id = Arc::<str>::from(format!("{}", m.sprite_name_string()).as_str());
+            let target_id: Arc<str> = Arc::<str>::from(Arc::<str>::from(format!("{}", m.sprite_name_string()).as_str()));
             let x = (m.x_pos() - 240.0);
             let y = (180.0 - m.y_pos());
             if m.is_motion_xposition_watcher() {
-                watchers.push(ReporterWatcher { target_id: Arc::<str>::from(target_id.clone().to_string()), expr: Block { kind: BlockKind::XPosition }, label: Arc::<str>::from(Arc::<str>::from(format!("{} x position", target_id).as_str())), x: x, y: y });
+                watchers.push(ReporterWatcher { target_id: target_id.clone().clone(), expr: Block { kind: BlockKind::XPosition }, label: Arc::<str>::from(Arc::<str>::from(format!("{} x position", target_id).as_str())), x: x, y: y });
             } else if m.is_motion_yposition_watcher() {
-                watchers.push(ReporterWatcher { target_id: Arc::<str>::from(target_id.clone().to_string()), expr: Block { kind: BlockKind::YPosition }, label: Arc::<str>::from(Arc::<str>::from(format!("{} y position", target_id).as_str())), x: x, y: y });
+                watchers.push(ReporterWatcher { target_id: target_id.clone().clone(), expr: Block { kind: BlockKind::YPosition }, label: Arc::<str>::from(Arc::<str>::from(format!("{} y position", target_id).as_str())), x: x, y: y });
             } else if m.is_motion_direction_watcher() {
-                watchers.push(ReporterWatcher { target_id: Arc::<str>::from(target_id.clone().to_string()), expr: Block { kind: BlockKind::Direction }, label: Arc::<str>::from(Arc::<str>::from(format!("{} direction", target_id).as_str())), x: x, y: y });
+                watchers.push(ReporterWatcher { target_id: target_id.clone().clone(), expr: Block { kind: BlockKind::Direction }, label: Arc::<str>::from(Arc::<str>::from(format!("{} direction", target_id).as_str())), x: x, y: y });
             } else if m.is_sensing_timer_watcher() {
                 watchers.push(ReporterWatcher { target_id: Arc::<str>::from(""), expr: Block { kind: BlockKind::Timer }, label: Arc::<str>::from("timer"), x: x, y: y });
             } else if m.is_looks_size_watcher() {
-                watchers.push(ReporterWatcher { target_id: Arc::<str>::from(target_id.clone().to_string()), expr: Block { kind: BlockKind::SizePercent }, label: Arc::<str>::from(Arc::<str>::from(format!("{} size", target_id).as_str())), x: x, y: y });
+                watchers.push(ReporterWatcher { target_id: target_id.clone().clone(), expr: Block { kind: BlockKind::SizePercent }, label: Arc::<str>::from(Arc::<str>::from(format!("{} size", target_id).as_str())), x: x, y: y });
             } else if m.is_looks_costumenumbername_watcher() {
                 let which = m.number_name_param();
                 let suffix = {
@@ -5275,7 +5275,7 @@ fn build_reporter_watchers(project: Sb3Project) -> Vec<ReporterWatcher> {
                     Arc::<str>::from("costume #")
                 }
 };
-                watchers.push(ReporterWatcher { target_id: Arc::<str>::from(target_id.clone().to_string()), expr: Block { kind: BlockKind::CostumeNumberName(Arc::<str>::from(which.to_string())) }, label: Arc::<str>::from(Arc::<str>::from(format!("{} {}", target_id, suffix).as_str())), x: x, y: y });
+                watchers.push(ReporterWatcher { target_id: target_id.clone().clone(), expr: Block { kind: BlockKind::CostumeNumberName(Arc::<str>::from(which.to_string())) }, label: Arc::<str>::from(Arc::<str>::from(format!("{} {}", target_id, suffix).as_str())), x: x, y: y });
             } else if m.is_looks_backdropnumbername_watcher() {
                 let which = m.number_name_param();
                 let suffix = {
@@ -5287,7 +5287,7 @@ fn build_reporter_watchers(project: Sb3Project) -> Vec<ReporterWatcher> {
 };
                 watchers.push(ReporterWatcher { target_id: Arc::<str>::from("Stage"), expr: Block { kind: BlockKind::BackdropNumberName(Arc::<str>::from(which.to_string())) }, label: Arc::<str>::from(suffix.to_string()), x: x, y: y });
             } else if m.is_sound_volume_watcher() {
-                watchers.push(ReporterWatcher { target_id: Arc::<str>::from(target_id.clone().to_string()), expr: Block { kind: BlockKind::Volume }, label: Arc::<str>::from(Arc::<str>::from(format!("{} volume", target_id).as_str())), x: x, y: y });
+                watchers.push(ReporterWatcher { target_id: target_id.clone().clone(), expr: Block { kind: BlockKind::Volume }, label: Arc::<str>::from(Arc::<str>::from(format!("{} volume", target_id).as_str())), x: x, y: y });
             } else if m.is_sensing_current_watcher() {
                 let menu = m.current_menu_param();
                 let mut label: Arc<str> = Arc::<str>::from("current");
@@ -5350,9 +5350,9 @@ fn build_list_watchers(project: Sb3Project) -> Vec<ListWatcher> {
     let project_for_lookup = project.clone();
     for m in project.monitors.iter().cloned() {
         if m.is_list_watcher() {
-            let list_id = Arc::<str>::from(format!("{}", m.variable_id()).as_str());
+            let list_id: Arc<str> = Arc::<str>::from(Arc::<str>::from(format!("{}", m.variable_id()).as_str()));
             if let Some(name) = find_list_name_by_id(project_for_lookup.clone(), Arc::<str>::from(list_id.clone().to_string())) {
-                watchers.push(ListWatcher { list_id: Arc::<str>::from(list_id.clone().to_string()), label: Arc::<str>::from(name.clone().to_string()), x: (m.x_pos() - 240.0), y: (180.0 - m.y_pos()) });
+                watchers.push(ListWatcher { list_id: list_id.clone().clone(), label: Arc::<str>::from(name.clone().to_string()), x: (m.x_pos() - 240.0), y: (180.0 - m.y_pos()) });
             }
         }
     }
@@ -5458,7 +5458,7 @@ fn build_vars(project: Sb3Project) -> Vars {
                 var_name_lookup.insert(Arc::<str>::from(Arc::<str>::from(format!("{}", v.name_string()).as_str())), v.id_string());
             }
         } else {
-            let origin_name = Arc::<str>::from(format!("{}", target.name_string()).as_str());
+            let origin_name: Arc<str> = Arc::<str>::from(Arc::<str>::from(format!("{}", target.name_string()).as_str()));
             let mut by_id = HashMap::new();
             let mut by_name = HashMap::new();
             for v in target.variables.iter().cloned() {
@@ -5512,7 +5512,7 @@ fn build_lists(project: Sb3Project) -> Lists {
                 table.insert(Arc::<str>::from(Arc::<str>::from(format!("{}", lst.id_string()).as_str())), build_list_items(lst.clone()));
             }
         } else {
-            let origin_name = Arc::<str>::from(format!("{}", target.name_string()).as_str());
+            let origin_name: Arc<str> = Arc::<str>::from(Arc::<str>::from(format!("{}", target.name_string()).as_str()));
             let mut by_id = HashMap::new();
             for lst in target.lists.iter().cloned() {
                 by_id.insert(Arc::<str>::from(Arc::<str>::from(format!("{}", lst.id_string()).as_str())), build_list_items(lst.clone()));
@@ -5584,7 +5584,7 @@ fn build_sound_volume_table(project: Sb3Project) -> HashMap<Arc<str>, f32> {
 fn build_instance_types_table(project: Sb3Project) -> HashMap<Arc<str>, Arc<str>> {
     let mut table = HashMap::new();
     for target in project.targets.iter().cloned() {
-        let name = Arc::<str>::from(format!("{}", target.name_string()).as_str());
+        let name: Arc<str> = Arc::<str>::from(Arc::<str>::from(format!("{}", target.name_string()).as_str()));
         table.insert(name.clone(), name.clone());
     }
     table
@@ -5593,7 +5593,7 @@ fn build_instance_types_table(project: Sb3Project) -> HashMap<Arc<str>, Arc<str>
 fn build_target_costumes(project: Sb3Project) -> TargetCostumes {
     let mut table = HashMap::new();
     for target in project.targets.iter().cloned() {
-        let target_id = Arc::<str>::from(format!("{}", target.name_string()).as_str());
+        let target_id: Arc<str> = Arc::<str>::from(Arc::<str>::from(format!("{}", target.name_string()).as_str()));
         let mut names = vec![];
         for c in target.costumes.iter().cloned() {
             names.push(c.name);
@@ -5606,7 +5606,7 @@ fn build_target_costumes(project: Sb3Project) -> TargetCostumes {
 fn build_target_sound_durations(project: Sb3Project) -> HashMap<Arc<str>, HashMap<Arc<str>, f32>> {
     let mut table = HashMap::new();
     for target in project.targets.iter().cloned() {
-        let target_id = Arc::<str>::from(format!("{}", target.name_string()).as_str());
+        let target_id: Arc<str> = Arc::<str>::from(Arc::<str>::from(format!("{}", target.name_string()).as_str()));
         let mut by_name = HashMap::new();
         for s in target.sounds.iter().cloned() {
             let dur = {
@@ -6298,7 +6298,7 @@ fn eval(b: Block, mut vars: &mut Vars, frame: Frame, procs: ProcTable, mut lists
         BlockKind::LetterOf(idx_expr, str_expr) => {
             let idx_expr = *idx_expr;
             let str_expr = *str_expr;
-            let s = Arc::<str>::from(format!("{}", eval(str_expr.clone(), &mut (*vars), frame.clone(), procs.clone(), &mut (*lists), broadcasts.clone(), &mut (*positions), keyboard.clone(), mouse, timer, &mut (*rng), &mut (*looks), target_costumes.clone(), costume_dims.clone(), sound_queue.clone())).as_str());
+            let s: Arc<str> = Arc::<str>::from(Arc::<str>::from(format!("{}", eval(str_expr.clone(), &mut (*vars), frame.clone(), procs.clone(), &mut (*lists), broadcasts.clone(), &mut (*positions), keyboard.clone(), mouse, timer, &mut (*rng), &mut (*looks), target_costumes.clone(), costume_dims.clone(), sound_queue.clone())).as_str()));
             let __strchars_s: Vec<char> = s.chars().collect();
             let idx = eval(idx_expr.clone(), &mut (*vars), frame.clone(), procs.clone(), &mut (*lists), broadcasts.clone(), &mut (*positions), keyboard.clone(), mouse, timer, &mut (*rng), &mut (*looks), target_costumes.clone(), costume_dims.clone(), sound_queue.clone()).to_num().to_isize_checked().unwrap_or_else(|| 0);
             if ((idx >= 1) && (idx <= (s.len() as isize))) {
@@ -6437,7 +6437,7 @@ fn eval(b: Block, mut vars: &mut Vars, frame: Frame, procs: ProcTable, mut lists
         }
         BlockKind::KeyPressed(key_expr) => {
             let key_expr = *key_expr;
-            let key_option = Arc::<str>::from(format!("{}", eval(key_expr.clone(), &mut (*vars), frame.clone(), procs.clone(), &mut (*lists), broadcasts.clone(), &mut (*positions), keyboard.clone(), mouse, timer, &mut (*rng), &mut (*looks), target_costumes.clone(), costume_dims.clone(), sound_queue.clone())).as_str());
+            let key_option: Arc<str> = Arc::<str>::from(Arc::<str>::from(format!("{}", eval(key_expr.clone(), &mut (*vars), frame.clone(), procs.clone(), &mut (*lists), broadcasts.clone(), &mut (*positions), keyboard.clone(), mouse, timer, &mut (*rng), &mut (*looks), target_costumes.clone(), costume_dims.clone(), sound_queue.clone())).as_str()));
             ScratchValue::Bool(keyboard.is_pressed(key_option.clone()))
         }
         BlockKind::MouseX => {
@@ -6495,7 +6495,7 @@ fn eval(b: Block, mut vars: &mut Vars, frame: Frame, procs: ProcTable, mut lists
         }
         BlockKind::Touching(what_expr) => {
             let what_expr = *what_expr;
-            let what = Arc::<str>::from(format!("{}", eval(what_expr.clone(), &mut (*vars), frame.clone(), procs.clone(), &mut (*lists), broadcasts.clone(), &mut (*positions), keyboard.clone(), mouse, timer, &mut (*rng), &mut (*looks), target_costumes.clone(), costume_dims.clone(), sound_queue.clone())).as_str());
+            let what: Arc<str> = Arc::<str>::from(Arc::<str>::from(format!("{}", eval(what_expr.clone(), &mut (*vars), frame.clone(), procs.clone(), &mut (*lists), broadcasts.clone(), &mut (*positions), keyboard.clone(), mouse, timer, &mut (*rng), &mut (*looks), target_costumes.clone(), costume_dims.clone(), sound_queue.clone())).as_str()));
             let self_id = frame.target_id.clone().clone();
             let self_pos = (*positions).get(self_id.clone());
             let self_looks = (*looks).get(self_id.clone());
@@ -6524,8 +6524,8 @@ fn eval(b: Block, mut vars: &mut Vars, frame: Frame, procs: ProcTable, mut lists
         }
         BlockKind::TouchingColor(color_expr) => {
             let color_expr = *color_expr;
-            let hex = Arc::<str>::from(format!("{}", eval(color_expr.clone(), &mut (*vars), frame.clone(), procs.clone(), &mut (*lists), broadcasts.clone(), &mut (*positions), keyboard.clone(), mouse, timer, &mut (*rng), &mut (*looks), target_costumes.clone(), costume_dims.clone(), sound_queue.clone())).as_str());
-            let target_color = hex_to_pen_color(Arc::<str>::from(hex.clone().to_string()));
+            let hex: Arc<str> = Arc::<str>::from(Arc::<str>::from(format!("{}", eval(color_expr.clone(), &mut (*vars), frame.clone(), procs.clone(), &mut (*lists), broadcasts.clone(), &mut (*positions), keyboard.clone(), mouse, timer, &mut (*rng), &mut (*looks), target_costumes.clone(), costume_dims.clone(), sound_queue.clone())).as_str()));
+            let target_color = hex_to_pen_color(hex.clone().clone());
             let self_id = frame.target_id.clone().clone();
             let self_looks = (*looks).get(self_id.clone());
             if (!self_looks.visible) {
@@ -6550,7 +6550,7 @@ fn eval(b: Block, mut vars: &mut Vars, frame: Frame, procs: ProcTable, mut lists
             if (self_id == Arc::<str>::from("Stage")) {
                 ScratchValue::Num(ScratchNumber::from_f32(10000.0))
             } else {
-                let what = Arc::<str>::from(format!("{}", eval(what_expr.clone(), &mut (*vars), frame.clone(), procs.clone(), &mut (*lists), broadcasts.clone(), &mut (*positions), keyboard.clone(), mouse, timer, &mut (*rng), &mut (*looks), target_costumes.clone(), costume_dims.clone(), sound_queue.clone())).as_str());
+                let what: Arc<str> = Arc::<str>::from(Arc::<str>::from(format!("{}", eval(what_expr.clone(), &mut (*vars), frame.clone(), procs.clone(), &mut (*lists), broadcasts.clone(), &mut (*positions), keyboard.clone(), mouse, timer, &mut (*rng), &mut (*looks), target_costumes.clone(), costume_dims.clone(), sound_queue.clone())).as_str()));
                 let self_pos = (*positions).get(self_id.clone());
                 let target_x = {
                 if (what == Arc::<str>::from("_mouse_")) {
@@ -6575,7 +6575,7 @@ fn eval(b: Block, mut vars: &mut Vars, frame: Frame, procs: ProcTable, mut lists
         }
         BlockKind::SensingOf(object_expr, property) => {
             let object_expr = *object_expr;
-            let object_name = Arc::<str>::from(format!("{}", eval(object_expr.clone(), &mut (*vars), frame.clone(), procs.clone(), &mut (*lists), broadcasts.clone(), &mut (*positions), keyboard.clone(), mouse, timer, &mut (*rng), &mut (*looks), target_costumes.clone(), costume_dims.clone(), sound_queue.clone())).as_str());
+            let object_name: Arc<str> = Arc::<str>::from(Arc::<str>::from(format!("{}", eval(object_expr.clone(), &mut (*vars), frame.clone(), procs.clone(), &mut (*lists), broadcasts.clone(), &mut (*positions), keyboard.clone(), mouse, timer, &mut (*rng), &mut (*looks), target_costumes.clone(), costume_dims.clone(), sound_queue.clone())).as_str()));
             if (object_name == Arc::<str>::from("_stage_")) {
                 if (property == Arc::<str>::from("backdrop #")) {
                     ScratchValue::Num(ScratchNumber::from_isize(((*looks).get(Arc::<str>::from("Stage")).costume_index + 1)))
@@ -6774,7 +6774,7 @@ fn exec_simple(b: Block, mut vars: &mut Vars, frame: Frame, procs: ProcTable, mu
         }
         BlockKind::GoTo(to_expr) => {
             let to_expr = *to_expr;
-            let to = Arc::<str>::from(format!("{}", eval(to_expr.clone(), &mut (*vars), frame.clone(), procs.clone(), &mut (*lists), broadcasts.clone(), &mut (*positions), keyboard.clone(), mouse, timer, &mut (*rng), &mut (*looks), target_costumes.clone(), costume_dims.clone(), (*sound_queue).clone())).as_str());
+            let to: Arc<str> = Arc::<str>::from(Arc::<str>::from(format!("{}", eval(to_expr.clone(), &mut (*vars), frame.clone(), procs.clone(), &mut (*lists), broadcasts.clone(), &mut (*positions), keyboard.clone(), mouse, timer, &mut (*rng), &mut (*looks), target_costumes.clone(), costume_dims.clone(), (*sound_queue).clone())).as_str()));
             let p = (*positions).get(frame.target_id.clone().clone());
             if (to == Arc::<str>::from("_mouse_")) {
                 move_position(&mut (*positions), &mut (*sound_queue), Arc::<str>::from(frame.target_id.clone().clone().to_string()), &Position { x: mouse.x, y: mouse.y, direction: p.direction });
@@ -6791,7 +6791,7 @@ fn exec_simple(b: Block, mut vars: &mut Vars, frame: Frame, procs: ProcTable, mu
         }
         BlockKind::PointTowards(towards_expr) => {
             let towards_expr = *towards_expr;
-            let towards = Arc::<str>::from(format!("{}", eval(towards_expr.clone(), &mut (*vars), frame.clone(), procs.clone(), &mut (*lists), broadcasts.clone(), &mut (*positions), keyboard.clone(), mouse, timer, &mut (*rng), &mut (*looks), target_costumes.clone(), costume_dims.clone(), (*sound_queue).clone())).as_str());
+            let towards: Arc<str> = Arc::<str>::from(Arc::<str>::from(format!("{}", eval(towards_expr.clone(), &mut (*vars), frame.clone(), procs.clone(), &mut (*lists), broadcasts.clone(), &mut (*positions), keyboard.clone(), mouse, timer, &mut (*rng), &mut (*looks), target_costumes.clone(), costume_dims.clone(), (*sound_queue).clone())).as_str()));
             let p = (*positions).get(frame.target_id.clone().clone());
             if (towards == Arc::<str>::from("_random_")) {
                 let r = (*rng).next_f64_01();
@@ -6999,12 +6999,12 @@ fn exec_simple(b: Block, mut vars: &mut Vars, frame: Frame, procs: ProcTable, mu
         }
         BlockKind::PlaySound(sound_expr) => {
             let sound_expr = *sound_expr;
-            let sound_name = Arc::<str>::from(format!("{}", eval(sound_expr.clone(), &mut (*vars), frame.clone(), procs.clone(), &mut (*lists), broadcasts.clone(), &mut (*positions), keyboard.clone(), mouse, timer, &mut (*rng), &mut (*looks), target_costumes.clone(), costume_dims.clone(), (*sound_queue).clone())).as_str());
+            let sound_name: Arc<str> = Arc::<str>::from(Arc::<str>::from(format!("{}", eval(sound_expr.clone(), &mut (*vars), frame.clone(), procs.clone(), &mut (*lists), broadcasts.clone(), &mut (*positions), keyboard.clone(), mouse, timer, &mut (*rng), &mut (*looks), target_costumes.clone(), costume_dims.clone(), (*sound_queue).clone())).as_str()));
             let volume = (*sound_queue).get_volume(frame.target_id.clone().clone());
             let origin_name = (*sound_queue).instance_type_of(frame.target_id.clone().clone());
             let pitch = (*sound_queue).get_pitch(frame.target_id.clone().clone());
             let pan = (*sound_queue).get_pan(frame.target_id.clone().clone());
-            (*sound_queue).play_queue.push(SoundRequest { target_id: Arc::<str>::from(origin_name.to_string()), sound_name: Arc::<str>::from(sound_name.clone().to_string()), volume: volume, pitch: pitch, pan: pan });
+            (*sound_queue).play_queue.push(SoundRequest { target_id: Arc::<str>::from(origin_name.to_string()), sound_name: sound_name.clone().clone(), volume: volume, pitch: pitch, pan: pan });
         }
         BlockKind::StopAllSounds => {
             (*sound_queue).stop_all_requested = true;
@@ -7030,9 +7030,9 @@ fn exec_simple(b: Block, mut vars: &mut Vars, frame: Frame, procs: ProcTable, mu
         }
         BlockKind::SetPenColorToColor(color_expr) => {
             let color_expr = *color_expr;
-            let hex = Arc::<str>::from(format!("{}", eval(color_expr.clone(), &mut (*vars), frame.clone(), procs.clone(), &mut (*lists), broadcasts.clone(), &mut (*positions), keyboard.clone(), mouse, timer, &mut (*rng), &mut (*looks), target_costumes.clone(), costume_dims.clone(), (*sound_queue).clone())).as_str());
+            let hex: Arc<str> = Arc::<str>::from(Arc::<str>::from(format!("{}", eval(color_expr.clone(), &mut (*vars), frame.clone(), procs.clone(), &mut (*lists), broadcasts.clone(), &mut (*positions), keyboard.clone(), mouse, timer, &mut (*rng), &mut (*looks), target_costumes.clone(), costume_dims.clone(), (*sound_queue).clone())).as_str()));
             let current = (*sound_queue).get_pen_state(frame.target_id.clone().clone());
-            (*sound_queue).set_pen_state(frame.target_id.clone().clone(), pen_state_from_hex_color(Arc::<str>::from(hex.clone().to_string()), &current));
+            (*sound_queue).set_pen_state(frame.target_id.clone().clone(), pen_state_from_hex_color(hex.clone().clone(), &current));
         }
         BlockKind::ChangePenColorParamBy(param, value_expr) => {
             let value_expr = *value_expr;
@@ -7130,13 +7130,13 @@ fn exec_simple(b: Block, mut vars: &mut Vars, frame: Frame, procs: ProcTable, mu
         }
         BlockKind::Say(msg_expr) => {
             let msg_expr = *msg_expr;
-            let msg = Arc::<str>::from(format!("{}", eval(msg_expr.clone(), &mut (*vars), frame.clone(), procs.clone(), &mut (*lists), broadcasts.clone(), &mut (*positions), keyboard.clone(), mouse, timer, &mut (*rng), &mut (*looks), target_costumes.clone(), costume_dims.clone(), (*sound_queue).clone())).as_str());
-            (*speech_bubbles).set(frame.target_id.clone().clone(), SpeechBubble { text: Arc::<str>::from(msg.clone().to_string()), is_thought: false });
+            let msg: Arc<str> = Arc::<str>::from(Arc::<str>::from(format!("{}", eval(msg_expr.clone(), &mut (*vars), frame.clone(), procs.clone(), &mut (*lists), broadcasts.clone(), &mut (*positions), keyboard.clone(), mouse, timer, &mut (*rng), &mut (*looks), target_costumes.clone(), costume_dims.clone(), (*sound_queue).clone())).as_str()));
+            (*speech_bubbles).set(frame.target_id.clone().clone(), SpeechBubble { text: msg.clone().clone(), is_thought: false });
         }
         BlockKind::Think(msg_expr) => {
             let msg_expr = *msg_expr;
-            let msg = Arc::<str>::from(format!("{}", eval(msg_expr.clone(), &mut (*vars), frame.clone(), procs.clone(), &mut (*lists), broadcasts.clone(), &mut (*positions), keyboard.clone(), mouse, timer, &mut (*rng), &mut (*looks), target_costumes.clone(), costume_dims.clone(), (*sound_queue).clone())).as_str());
-            (*speech_bubbles).set(frame.target_id.clone().clone(), SpeechBubble { text: Arc::<str>::from(msg.clone().to_string()), is_thought: true });
+            let msg: Arc<str> = Arc::<str>::from(Arc::<str>::from(format!("{}", eval(msg_expr.clone(), &mut (*vars), frame.clone(), procs.clone(), &mut (*lists), broadcasts.clone(), &mut (*positions), keyboard.clone(), mouse, timer, &mut (*rng), &mut (*looks), target_costumes.clone(), costume_dims.clone(), (*sound_queue).clone())).as_str()));
+            (*speech_bubbles).set(frame.target_id.clone().clone(), SpeechBubble { text: msg.clone().clone(), is_thought: true });
         }
         BlockKind::Show => {
             let s = (*looks).get(frame.target_id.clone().clone());
@@ -7165,7 +7165,7 @@ fn exec_simple(b: Block, mut vars: &mut Vars, frame: Frame, procs: ProcTable, mu
             let names = target_costumes.get(origin_name.clone());
             let count = (names.len() as isize).clone();
             if (count > 0) {
-                let name_str = Arc::<str>::from(format!("{}", val).as_str());
+                let name_str: Arc<str> = Arc::<str>::from(Arc::<str>::from(format!("{}", val).as_str()));
                 let matched = target_costumes.index_of(origin_name, name_str.clone());
                 let s = (*looks).get(frame.target_id.clone().clone());
                 if (matched > 0) {
@@ -7190,7 +7190,7 @@ fn exec_simple(b: Block, mut vars: &mut Vars, frame: Frame, procs: ProcTable, mu
             let names = target_costumes.get(Arc::<str>::from("Stage"));
             let count = (names.len() as isize).clone();
             if (count > 0) {
-                let name_str = Arc::<str>::from(format!("{}", val).as_str());
+                let name_str: Arc<str> = Arc::<str>::from(Arc::<str>::from(format!("{}", val).as_str()));
                 let matched = target_costumes.index_of(Arc::<str>::from("Stage"), name_str.clone());
                 let s = (*looks).get(Arc::<str>::from("Stage"));
                 if (matched > 0) {
@@ -7220,7 +7220,7 @@ fn exec_simple(b: Block, mut vars: &mut Vars, frame: Frame, procs: ProcTable, mu
             let names = target_costumes.get(Arc::<str>::from("Stage"));
             let count = (names.len() as isize).clone();
             if (count > 0) {
-                let name_str = Arc::<str>::from(format!("{}", val).as_str());
+                let name_str: Arc<str> = Arc::<str>::from(Arc::<str>::from(format!("{}", val).as_str()));
                 let matched = target_costumes.index_of(Arc::<str>::from("Stage"), name_str.clone());
                 let s = (*looks).get(Arc::<str>::from("Stage"));
                 let mut new_idx = s.costume_index.clone();
@@ -7321,7 +7321,7 @@ fn exec_simple(b: Block, mut vars: &mut Vars, frame: Frame, procs: ProcTable, mu
         }
         BlockKind::CreateCloneOf(target_expr) => {
             let target_expr = *target_expr;
-            let target_str = Arc::<str>::from(format!("{}", eval(target_expr.clone(), &mut (*vars), frame.clone(), procs.clone(), &mut (*lists), broadcasts.clone(), &mut (*positions), keyboard.clone(), mouse, timer, &mut (*rng), &mut (*looks), target_costumes.clone(), costume_dims.clone(), (*sound_queue).clone())).as_str());
+            let target_str: Arc<str> = Arc::<str>::from(Arc::<str>::from(format!("{}", eval(target_expr.clone(), &mut (*vars), frame.clone(), procs.clone(), &mut (*lists), broadcasts.clone(), &mut (*positions), keyboard.clone(), mouse, timer, &mut (*rng), &mut (*looks), target_costumes.clone(), costume_dims.clone(), (*sound_queue).clone())).as_str()));
             let source_id = {
             if (target_str == Arc::<str>::from("_myself_")) {
                 frame.target_id.clone().clone()
@@ -7331,7 +7331,7 @@ fn exec_simple(b: Block, mut vars: &mut Vars, frame: Frame, procs: ProcTable, mu
 };
             if ((*sound_queue).live_clone_count < 300) {
                 let origin_name = (*sound_queue).instance_type_of(source_id.clone());
-                let new_id = Arc::<str>::from(format!("{}_clone_{}", origin_name, (*sound_queue).next_clone_id).as_str());
+                let new_id: Arc<str> = Arc::<str>::from(Arc::<str>::from(format!("{}_clone_{}", origin_name, (*sound_queue).next_clone_id).as_str()));
                 (*sound_queue).next_clone_id += 1;
                 (*sound_queue).live_clone_count += 1;
                 (*positions).set(new_id.clone(), (*positions).get(source_id.clone()));
@@ -7346,7 +7346,7 @@ fn exec_simple(b: Block, mut vars: &mut Vars, frame: Frame, procs: ProcTable, mu
                 (*sound_queue).set_instance_type(new_id.clone(), origin_name.clone());
                 (*vars).copy_local(source_id.clone(), new_id.clone());
                 (*lists).copy_local(source_id.clone(), new_id.clone());
-                (*sound_queue).clone_requests.push(CloneRequest { source_instance_id: Arc::<str>::from(source_id.to_string()), new_id: Arc::<str>::from(new_id.clone().to_string()), origin_name: Arc::<str>::from(origin_name.to_string()) });
+                (*sound_queue).clone_requests.push(CloneRequest { source_instance_id: Arc::<str>::from(source_id.to_string()), new_id: new_id.clone().clone(), origin_name: Arc::<str>::from(origin_name.to_string()) });
             }
         }
         _ => {
@@ -7717,7 +7717,7 @@ fn step_thread(mut thread: &mut Thread, mut vars: &mut Vars, procs: ProcTable, m
                 }
                 BlockKind::PlayUntilDone(sound_expr) => {
                     let sound_expr = *sound_expr;
-                    let sound_name = Arc::<str>::from(format!("{}", eval(sound_expr.clone(), &mut (*vars), scope.clone(), procs.clone(), &mut (*lists), broadcasts.clone(), &mut (*positions), keyboard.clone(), mouse, timer, &mut (*rng), &mut (*looks), target_costumes.clone(), costume_dims.clone(), (*sound_queue).clone())).as_str());
+                    let sound_name: Arc<str> = Arc::<str>::from(Arc::<str>::from(format!("{}", eval(sound_expr.clone(), &mut (*vars), scope.clone(), procs.clone(), &mut (*lists), broadcasts.clone(), &mut (*positions), keyboard.clone(), mouse, timer, &mut (*rng), &mut (*looks), target_costumes.clone(), costume_dims.clone(), (*sound_queue).clone())).as_str()));
                     let origin_name = (*sound_queue).instance_type_of(scope.target_id.clone());
                     let volume = (*sound_queue).get_volume(scope.target_id.clone());
                     let pitch = (*sound_queue).get_pitch(scope.target_id.clone());
@@ -7741,10 +7741,10 @@ fn step_thread(mut thread: &mut Thread, mut vars: &mut Vars, procs: ProcTable, m
                 }
                 BlockKind::AskAndWait(question_expr) => {
                     let question_expr = *question_expr;
-                    let question = Arc::<str>::from(format!("{}", eval(question_expr.clone(), &mut (*vars), scope.clone(), procs.clone(), &mut (*lists), broadcasts.clone(), &mut (*positions), keyboard.clone(), mouse, timer, &mut (*rng), &mut (*looks), target_costumes.clone(), costume_dims.clone(), (*sound_queue).clone())).as_str());
+                    let question: Arc<str> = Arc::<str>::from(Arc::<str>::from(format!("{}", eval(question_expr.clone(), &mut (*vars), scope.clone(), procs.clone(), &mut (*lists), broadcasts.clone(), &mut (*positions), keyboard.clone(), mouse, timer, &mut (*rng), &mut (*looks), target_costumes.clone(), costume_dims.clone(), (*sound_queue).clone())).as_str()));
                     let my_id = (*vars).next_ask_id.clone();
                     (*vars).next_ask_id += 1;
-                    (*vars).ask_queue.push(PendingAsk { ask_id: my_id, target_id: Arc::<str>::from(scope.target_id.clone().to_string()), question: Arc::<str>::from(question.clone().to_string()) });
+                    (*vars).ask_queue.push(PendingAsk { ask_id: my_id, target_id: Arc::<str>::from(scope.target_id.clone().to_string()), question: question.clone().clone() });
                     stack.push(ExecFrame { body: vec![], index: 0, kind: FrameKind::WaitingForAnswer(my_id), scope: scope });
                     (*thread).stack = stack;
                     return false;
@@ -7752,8 +7752,8 @@ fn step_thread(mut thread: &mut Thread, mut vars: &mut Vars, procs: ProcTable, m
                 BlockKind::SayForSecs(msg_expr, secs_expr) => {
                     let msg_expr = *msg_expr;
                     let secs_expr = *secs_expr;
-                    let msg = Arc::<str>::from(format!("{}", eval(msg_expr.clone(), &mut (*vars), scope.clone(), procs.clone(), &mut (*lists), broadcasts.clone(), &mut (*positions), keyboard.clone(), mouse, timer, &mut (*rng), &mut (*looks), target_costumes.clone(), costume_dims.clone(), (*sound_queue).clone())).as_str());
-                    (*speech_bubbles).set(scope.target_id.clone(), SpeechBubble { text: Arc::<str>::from(msg.clone().to_string()), is_thought: false });
+                    let msg: Arc<str> = Arc::<str>::from(Arc::<str>::from(format!("{}", eval(msg_expr.clone(), &mut (*vars), scope.clone(), procs.clone(), &mut (*lists), broadcasts.clone(), &mut (*positions), keyboard.clone(), mouse, timer, &mut (*rng), &mut (*looks), target_costumes.clone(), costume_dims.clone(), (*sound_queue).clone())).as_str()));
+                    (*speech_bubbles).set(scope.target_id.clone(), SpeechBubble { text: msg.clone().clone(), is_thought: false });
                     let secs = eval(secs_expr.clone(), &mut (*vars), scope.clone(), procs.clone(), &mut (*lists), broadcasts.clone(), &mut (*positions), keyboard.clone(), mouse, timer, &mut (*rng), &mut (*looks), target_costumes.clone(), costume_dims.clone(), (*sound_queue).clone()).to_num().to_f32();
                     let target = (timer.elapsed + secs);
                     stack.push(ExecFrame { body: vec![], index: 0, kind: FrameKind::WaitingUntilThenClearBubble(target), scope: scope });
@@ -7763,8 +7763,8 @@ fn step_thread(mut thread: &mut Thread, mut vars: &mut Vars, procs: ProcTable, m
                 BlockKind::ThinkForSecs(msg_expr, secs_expr) => {
                     let msg_expr = *msg_expr;
                     let secs_expr = *secs_expr;
-                    let msg = Arc::<str>::from(format!("{}", eval(msg_expr.clone(), &mut (*vars), scope.clone(), procs.clone(), &mut (*lists), broadcasts.clone(), &mut (*positions), keyboard.clone(), mouse, timer, &mut (*rng), &mut (*looks), target_costumes.clone(), costume_dims.clone(), (*sound_queue).clone())).as_str());
-                    (*speech_bubbles).set(scope.target_id.clone(), SpeechBubble { text: Arc::<str>::from(msg.clone().to_string()), is_thought: true });
+                    let msg: Arc<str> = Arc::<str>::from(Arc::<str>::from(format!("{}", eval(msg_expr.clone(), &mut (*vars), scope.clone(), procs.clone(), &mut (*lists), broadcasts.clone(), &mut (*positions), keyboard.clone(), mouse, timer, &mut (*rng), &mut (*looks), target_costumes.clone(), costume_dims.clone(), (*sound_queue).clone())).as_str()));
+                    (*speech_bubbles).set(scope.target_id.clone(), SpeechBubble { text: msg.clone().clone(), is_thought: true });
                     let secs = eval(secs_expr.clone(), &mut (*vars), scope.clone(), procs.clone(), &mut (*lists), broadcasts.clone(), &mut (*positions), keyboard.clone(), mouse, timer, &mut (*rng), &mut (*looks), target_costumes.clone(), costume_dims.clone(), (*sound_queue).clone()).to_num().to_f32();
                     let target = (timer.elapsed + secs);
                     stack.push(ExecFrame { body: vec![], index: 0, kind: FrameKind::WaitingUntilThenClearBubble(target), scope: scope });
@@ -7791,7 +7791,7 @@ fn step_thread(mut thread: &mut Thread, mut vars: &mut Vars, procs: ProcTable, m
                     let secs_expr = *secs_expr;
                     let to_expr = *to_expr;
                     let secs = eval(secs_expr.clone(), &mut (*vars), scope.clone(), procs.clone(), &mut (*lists), broadcasts.clone(), &mut (*positions), keyboard.clone(), mouse, timer, &mut (*rng), &mut (*looks), target_costumes.clone(), costume_dims.clone(), (*sound_queue).clone()).to_num().to_f32();
-                    let to = Arc::<str>::from(format!("{}", eval(to_expr.clone(), &mut (*vars), scope.clone(), procs.clone(), &mut (*lists), broadcasts.clone(), &mut (*positions), keyboard.clone(), mouse, timer, &mut (*rng), &mut (*looks), target_costumes.clone(), costume_dims.clone(), (*sound_queue).clone())).as_str());
+                    let to: Arc<str> = Arc::<str>::from(Arc::<str>::from(format!("{}", eval(to_expr.clone(), &mut (*vars), scope.clone(), procs.clone(), &mut (*lists), broadcasts.clone(), &mut (*positions), keyboard.clone(), mouse, timer, &mut (*rng), &mut (*looks), target_costumes.clone(), costume_dims.clone(), (*sound_queue).clone())).as_str()));
                     let cur = (*positions).get(scope.target_id.clone());
                     let mut target_x = cur.x.clone();
                     let mut target_y = cur.y.clone();
@@ -8144,7 +8144,7 @@ fn read_zip_entry_bytes(sb3Path: Arc<str>, entryFilename: Arc<str>) -> Option<Ve
         let indexedOpt = ZipArchive::by_index(&mut archive, i).ok();
         if let Some(indexed) = indexedOpt {
             let rawName = indexed.name();
-            let nameStr = Arc::<str>::from(format!("{}", rawName).as_str());
+            let nameStr: Arc<str> = Arc::<str>::from(Arc::<str>::from(format!("{}", rawName).as_str()));
             if zip_entry_matches(Arc::<str>::from(nameStr.clone().to_string()), Arc::<str>::from(entryFilename.clone().to_string())) {
                 foundName = Some(nameStr.clone());
             }
@@ -8290,7 +8290,7 @@ fn extract_costume_bytes_to_temp_file(sb3Path: Arc<str>, costume: &Sb3Costume) -
     let Some(created) = (createOpt) else {
         return None;
     };
-    let fileName = Arc::<str>::from(format!("{}.{}", costume.asset_id.clone(), extension).as_str());
+    let fileName: Arc<str> = Arc::<str>::from(Arc::<str>::from(format!("{}.{}", costume.asset_id.clone(), extension).as_str()));
     let fullPath = Path::join(&cacheDir, &fileName.as_ref());
     let writeOpt = std::fs::write(fullPath, outBytes).ok();
     let Some(wrote) = (writeOpt) else {
@@ -8353,7 +8353,7 @@ fn costume_pixel_dims(sb3Path: Arc<str>, targetName: Arc<str>, idx: isize) -> Op
 pub fn build_target_costume_dims(sb3Path: Arc<str>, project: Sb3Project) -> TargetCostumeDims {
     let mut table = HashMap::new();
     for target in project.targets.iter().cloned() {
-        let target_id = Arc::<str>::from(format!("{}", target.name_string()).as_str());
+        let target_id: Arc<str> = Arc::<str>::from(Arc::<str>::from(format!("{}", target.name_string()).as_str()));
         let mut dims = vec![];
         let mut i = 0;
         while (i < (target.costumes.len() as isize)) {
@@ -8407,7 +8407,7 @@ pub fn extract_sound_to_temp_file(sb3Path: Arc<str>, targetName: Arc<str>, sound
     let Some(created) = (createOpt) else {
         return None;
     };
-    let fileName = Arc::<str>::from(format!("{}.{}", sound.asset_id.clone(), checked_extension).as_str());
+    let fileName: Arc<str> = Arc::<str>::from(Arc::<str>::from(format!("{}.{}", sound.asset_id.clone(), checked_extension).as_str()));
     let fullPath = Path::join(&cacheDir, &fileName.as_ref());
     let writeOpt = std::fs::write(fullPath, rawBytes).ok();
     let Some(wrote) = (writeOpt) else {
@@ -9160,6 +9160,12 @@ let error = __boring_e;
         if !(((s.len() as isize) > 0)) {
             return Err(Box::new(BoringError::Other(std::any::TypeId::of::<BigUintError>(), Box::new(BigUintError::InvalidInput) as Box<dyn BoringVal + Send + Sync>)));
         }
+        let digits: Arc<str> = Arc::<str>::from("0123456789");
+        for ch in s.chars().map(|c| Arc::<str>::from(c.to_string())).collect::<Vec<Arc<str>>>().into_iter() {
+            if !(digits.contains(ch.as_ref())) {
+                return Err(Box::new(BoringError::Other(std::any::TypeId::of::<BigUintError>(), Box::new(BigUintError::InvalidInput) as Box<dyn BoringVal + Send + Sync>)));
+            }
+        }
         let mut result = BigUint::from_u64(0);
         let mut i = 0;
         let n = (s.len() as isize).clone();
@@ -9345,7 +9351,7 @@ let error = __boring_e;
                 BigInt { negative: true, magnitude: BigUint::from_u64((9223372036854775808u64 as u64)) }
             } else {
                 if (v < 0) {
-                    BigInt { negative: true, magnitude: BigUint::from_u64(((-v) as u64)) }
+                    BigInt { negative: true, magnitude: BigUint::from_u64((((0i64 as i64) as i64).wrapping_sub(v) as u64)) }
                 } else {
                     BigInt { negative: false, magnitude: BigUint::from_u64((v as u64)) }
                 }

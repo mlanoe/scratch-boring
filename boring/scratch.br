@@ -371,7 +371,7 @@ pub def setup_scratch_project(mut Commands commands, Res<ProjectPath> project_pa
                 # index -- `looks_switchcostumeto`'s own index math assumes
                 # `handles.length == costumes.length` for every target.
                 mut costume_handles = []
-                for i in 0..target.costumes.length:
+                for i in 0..<target.costumes.length:
                     if let p = extract_costume_at_index_to_temp_file(project_path.path.clone(), target_name.clone(), i):
                         costume_handles.push(asset_server.load(p.toString()))
                     else:

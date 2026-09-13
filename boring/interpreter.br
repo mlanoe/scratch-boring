@@ -87,7 +87,7 @@ def ScratchValue eval(Block b, var Vars vars, Frame frame, ProcTable procs, var 
             # (matching `Lists.item_at`'s own out-of-range convention).
             if idx >= 1 and idx <= s.length:
                 let idx0 = idx - 1
-                ScratchValue.Str(s[idx0..idx])
+                ScratchValue.Str(s[idx0..<idx])
             else:
                 ScratchValue.Str("")
         StringLength(str_expr):
