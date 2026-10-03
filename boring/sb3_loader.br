@@ -1036,9 +1036,9 @@ let int MAX_JSON_NESTING_DEPTH = 256
 # elsewhere (`linker.br`'s own `resolve_expr_block`/`resolve_stack`,
 # which only ever run *after* a project has already finished loading).
 def bool json_nesting_within_limit(string text, int max_depth):
-    var mut depth = 0
-    var mut in_string = false
-    var mut escaped = false
+    var depth = 0
+    var in_string = false
+    var escaped = false
     mut chars = text.chars()
     for c in chars:
         let s = "{c}"
@@ -1149,7 +1149,7 @@ def string? read_project_json_from_zip(string sb3Path):
     var mut entry = entryFixed
     if entry.size() > MAX_ZIP_ENTRY_BYTES:
         return nil
-    var [uint8] buf = []
+    mut [uint8] buf = []
     let bytesReadOpt = try? ZipFile.readToEnd(entry, buf)
     guard let bytesRead = bytesReadOpt else return nil
     let contentsOpt = try? String.fromUtf8(buf)

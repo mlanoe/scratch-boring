@@ -919,11 +919,11 @@ pub struct Vars as Resource, Debug, Clone:
     # `""` once that entry is answered and the next one (if any) becomes
     # the new front.
     var mut string ask_buffer
-    var mut int next_ask_id
+    var int next_ask_id
     # Starts at `-1` (no real `ask_id` is ever negative) so a thread whose
     # own `ask_id` happens to be `0` isn't accidentally treated as already
     # answered before anything has been.
-    var mut int last_answered_id
+    var int last_answered_id
 
     req bool is_asking():
         ask_queue.length > 0
@@ -1273,8 +1273,8 @@ pub struct LayerOrders as Resource, Debug, Clone:
     # so there's no safe fixed bound to compare against; the first value
     # seen just becomes the initial candidate instead.
     def go_to_front(string target_id):
-        var mut max_order = 0
-        var mut found = false
+        var max_order = 0
+        var found = false
         for id, v in table:
             if !found or v > max_order:
                 max_order = v
@@ -1282,8 +1282,8 @@ pub struct LayerOrders as Resource, Debug, Clone:
         table[target_id] = max_order + 1
 
     def go_to_back(string target_id):
-        var mut min_order = 0
-        var mut found = false
+        var min_order = 0
+        var found = false
         for id, v in table:
             if !found or v < min_order:
                 min_order = v
@@ -1317,7 +1317,7 @@ pub struct LayerOrders as Resource, Debug, Clone:
             ids.push(id)
             orders.push(v)
         let n = ids.length
-        var mut i = 0
+        var i = 0
         while i < n:
             var mut min_idx = i
             var mut j = i + 1
@@ -1335,7 +1335,7 @@ pub struct LayerOrders as Resource, Debug, Clone:
             i += 1
         # Find target_id's own current rank in the now-sorted list.
         var mut rank = -1
-        var mut k = 0
+        var k = 0
         while k < n:
             if ids[k] == target_id:
                 rank = k
@@ -1359,7 +1359,7 @@ pub struct LayerOrders as Resource, Debug, Clone:
         # sparser max+1/min-1 bumping: neither one depends on the other's
         # values being dense, this just keeps the common case tidy rather
         # than drifting arbitrarily far apart over many calls.
-        var mut m = 0
+        var m = 0
         while m < ids.length:
             table[ids[m]] = m
             m += 1
@@ -1377,7 +1377,7 @@ pub struct LayerOrders as Resource, Debug, Clone:
             ids.push(id)
             orders.push(v)
         let n = ids.length
-        var mut i = 0
+        var i = 0
         while i < n:
             var mut min_idx = i
             var mut j = i + 1
@@ -1416,7 +1416,7 @@ pub struct TargetCostumes as Resource, Debug, Clone:
     # the way some languages' `indexOf` does.
     req int index_of(string target_id, string name):
         let names = table[target_id] else []
-        var mut i = 0
+        var i = 0
         for n in names:
             if n == name:
                 return i + 1
@@ -1544,7 +1544,7 @@ def float32 current_loudness():
 # Scratch's own "any" semantics, not just "any of the 41 covered above".
 pub struct KeyboardState as Resource, Debug, Clone:
     var mut [string] pressed_keys
-    var mut bool any_key_pressed
+    var bool any_key_pressed
 
     req bool is_pressed(string key_option):
         if key_option == "any":
@@ -1594,8 +1594,8 @@ pub struct MouseState as Resource, Debug, Clone:
 # component's own screen/canvas-specific sign juggling).
 pub struct DragState as Resource, Debug, Clone:
     var mut string dragging_id
-    var mut float32 offset_x
-    var mut float32 offset_y
+    var float32 offset_x
+    var float32 offset_y
 
 # Real Scratch's `timer` reporter: seconds elapsed since the green flag was
 # clicked (real Scratch also resets it via a dedicated `sensing_resettimer`
@@ -1640,7 +1640,7 @@ pub struct ScratchTimer as Resource, Debug, Clone:
 # fixed "nothing pressed" state every run rather than reading real
 # initial hardware state at Startup.
 pub struct Rng as Resource, Debug, Clone:
-    var mut uint64 state
+    var uint64 state
 
     # One xorshift64 step: advances `state` and returns it directly as the
     # next pseudorandom `uint64`.
@@ -1995,11 +1995,11 @@ def HsvTriple rgb_to_hsv100(float32 r, float32 g, float32 b):
     let x = if rg_min < b: rg_min else: b
     let rg_max = if r > g: r else: g
     let v = if rg_max > b: rg_max else: b
-    var mut h = 0.0
-    var mut sat = 0.0
+    var h = 0.0
+    var sat = 0.0
     if x != v:
-        var mut f = 0.0
-        var mut idx = 0.0
+        var f = 0.0
+        var idx = 0.0
         if r == x:
             f = g - b
             idx = 3.0
@@ -2038,9 +2038,9 @@ def Rgb01 hue100_to_full_rgb(float32 hue100):
     let f = (h / 60.0) - (i as float32)
     let q = 1.0 - f
     let t = f
-    var mut r = 1.0
+    var r = 1.0
     var mut g = t
-    var mut b = 0.0
+    var b = 0.0
     if i == 1:
         r = q
         g = 1.0
@@ -2068,9 +2068,9 @@ def Rgb01 hue100_to_full_rgb(float32 hue100):
 # and `sensing_touchingcolor`'s own `TouchingColor` (`interpreter.br`),
 # both of which start from exactly this same real shadow-block value.
 def PenColor hex_to_pen_color(string hex):
-    var mut r = 0.0
-    var mut g = 0.0
-    var mut b = 0.0
+    var r = 0.0
+    var g = 0.0
+    var b = 0.0
     if hex.length >= 7:
         r = (hex_byte_value(hex[1], hex[2]) as float32) / 255.0
         g = (hex_byte_value(hex[3], hex[4]) as float32) / 255.0
@@ -2116,7 +2116,7 @@ def bool pen_colors_touch(PenColor a, PenColor b):
 # assets to actually finish decoding (`render_stamp_for_test`'s own doc
 # comment, `pen.br`, on why `MinimalPlugins` alone can't do that).
 def bool scan_scene_for_color(SoundQueue sound_queue, isize min_x, isize max_x, isize min_y, isize max_y, PenColor target):
-    var mut found = false
+    var found = false
     var mut py = min_y
     while py <= max_y:
         var mut px = min_x
@@ -2183,7 +2183,7 @@ struct StampRequest:
 # once (this project's very first tick).
 def [uint8] blank_scene_composite_data():
     mut data = []
-    var mut i = 0
+    var i = 0
     while i < (480 * 360 * 4):
         data.push(255 as uint8)
         i = i + 1
@@ -2191,7 +2191,7 @@ def [uint8] blank_scene_composite_data():
 
 pub struct SoundQueue as Resource, Debug, Clone:
     var mut [SoundRequest] play_queue
-    var mut bool stop_all_requested
+    var bool stop_all_requested
     var mut {string=float32} volumes
     # Every target's current PITCH effect value (semitones*10, real
     # Scratch's own `-360..360`/default-0 range) -- same "fold into
@@ -2256,7 +2256,7 @@ pub struct SoundQueue as Resource, Debug, Clone:
     # Monotonic, never reused (even once a clone is deleted) -- so two
     # clones can never collide just because one was deleted and another
     # created later.
-    var mut int next_clone_id
+    var int next_clone_id
     # `control_create_clone_of`'s `exec_simple` case has no `Commands`/
     # `Query` access to spawn a real entity itself (same reason `sound_play`
     # already defers its own entity spawn to `play_queued_sounds`) -- it
@@ -2269,7 +2269,7 @@ pub struct SoundQueue as Resource, Debug, Clone:
     # Real Scratch's own global clone cap (scratch-vm's `Clone.MAX_CLONES`,
     # 300) -- a plain counter, cheaper to check on every `create clone of`
     # than scanning `instance_types` for a live count each time.
-    var mut int live_clone_count
+    var int live_clone_count
     # `sound_playuntildone`'s own duration lookup -- target id -> sound
     # name -> length in real seconds, precomputed once at link time
     # (`build_target_sound_durations`, `linker.br`) straight from each
@@ -2310,7 +2310,7 @@ pub struct SoundQueue as Resource, Debug, Clone:
     # not a queue -- unlike `clone_requests`/`despawn_requests`, there's
     # nothing to distinguish between two resets requested in the same
     # tick, "reset" has no parameters of its own.
-    var mut bool reset_timer_requested
+    var bool reset_timer_requested
     # `sensing_setdragmode`'s own per-instance state -- same "fold into
     # `SoundQueue`, not its own resource" reasoning as `volumes`/`pitches`/
     # `rotation_styles` above (`exec_simple`'s `SetDragMode` case needs
@@ -2353,7 +2353,7 @@ pub struct SoundQueue as Resource, Debug, Clone:
     # for the real downloaded-project bug that diff-based design got
     # wrong (multiple motions on the same target within one tick).
     var mut [PenLineRequest] pen_line_requests
-    var mut bool pen_clear_requested
+    var bool pen_clear_requested
     # `pen_stamp`'s own deferred request queue -- see `StampRequest`'s own
     # doc comment for why every field but the actual costume pixel bytes
     # is snapshotted immediately, at queue time, not re-read at drain

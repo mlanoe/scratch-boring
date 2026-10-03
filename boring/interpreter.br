@@ -208,7 +208,7 @@ def ScratchValue eval(Block b, var Vars vars, Frame frame, ProcTable procs, var 
             # menu value reports `0`, matching real Scratch's own switch's
             # implicit default.
             let now = Local.now()
-            var mut int value = 0
+            var int value = 0
             if which == "YEAR":
                 value = now.year() as isize
             elif which == "MONTH":
@@ -465,7 +465,7 @@ def ScratchValue eval(Block b, var Vars vars, Frame frame, ProcTable procs, var 
 # call it's reached from (none of them can span a tick boundary), exactly
 # like the whole of the old, pre-scheduler `exec` did -- only `step_thread`
 # itself (below) needs to know about pausing.
-def exec_simple(Block b, var Vars vars, Frame frame, ProcTable procs, var Lists lists, Broadcasts broadcasts, var Positions positions, KeyboardState keyboard, MouseState mouse, ScratchTimer timer, var Rng rng, var LooksStates looks, var LayerOrders layer_orders, TargetCostumes target_costumes, TargetCostumeDims costume_dims, var SoundQueue sound_queue, var SpeechBubbles speech_bubbles, var [ReceiverScript] spawned):
+def exec_simple(Block b, var Vars vars, Frame frame, ProcTable procs, var Lists lists, Broadcasts broadcasts, var Positions positions, KeyboardState keyboard, MouseState mouse, ScratchTimer timer, var Rng rng, var LooksStates looks, var LayerOrders layer_orders, TargetCostumes target_costumes, TargetCostumeDims costume_dims, var SoundQueue sound_queue, var SpeechBubbles speech_bubbles, mut [ReceiverScript] spawned):
     match b.kind:
         SetVar(id, expr):
             # Compute the value into a local *before* calling `vars.set` --
@@ -705,8 +705,8 @@ def exec_simple(Block b, var Vars vars, Frame frame, ProcTable procs, var Lists 
                 # scratch-vm's own "adjust bounds to the target position"
                 # step exactly since here the target position hasn't
                 # moved yet either.
-                var mut fence_dx = 0.0
-                var mut fence_dy = 0.0
+                var fence_dx = 0.0
+                var fence_dy = 0.0
                 if left < -240.0:
                     fence_dx += (0.0 - 240.0) - left
                 if right > 240.0:
@@ -1413,7 +1413,7 @@ def move_position(var Positions positions, var SoundQueue sound_queue, string ta
 # why "contagious downward, any warp ancestor counts" (not just the
 # innermost call) is the real semantics this ports.
 def bool thread_in_warp([ExecFrame] stack):
-    var mut found = false
+    var found = false
     for f in stack:
         let this_is_warp = match f.kind:
             ProcCallFrame(w): w
@@ -1463,7 +1463,7 @@ def bool step_thread(var Thread thread, var Vars vars, ProcTable procs, var List
     # enough that no legitimate warp workload this project has seen (e.g.
     # "Simple Pen Drawing Tool"'s own full-history redraw, thousands of
     # points) ever gets anywhere near it.
-    var mut warp_guard = 0
+    var warp_guard = 0
     let warp_guard_cap = 1000000
     # Tracks how many `ProcCallFrame`s are currently nested on `stack`
     # (incremented on push below, decremented on pop in the
@@ -1482,7 +1482,7 @@ def bool step_thread(var Thread thread, var Vars vars, ProcTable procs, var List
     # (non-recursive) custom block many times in a row from a `repeat`
     # loop must not trip this, since each call finishes and pops before
     # the next one starts.
-    var mut proc_call_depth = 0
+    var proc_call_depth = 0
     let proc_call_depth_cap = 10000
     while true:
         if stack.length == 0:
@@ -1865,9 +1865,9 @@ def bool step_thread(var Thread thread, var Vars vars, ProcTable procs, var List
 # `outer_spawned` so whoever ultimately owns the real thread pool
 # (`run_pending_threads`, or `run_script`'s own drive loop) picks them up
 # afterward, exactly like a top-level thread's own `spawned` field would.
-def drive_thread_to_completion(var Thread thread, var Vars vars, ProcTable procs, var Lists lists, Broadcasts broadcasts, var Positions positions, KeyboardState keyboard, MouseState mouse, ScratchTimer timer, var Rng rng, var LooksStates looks, var LayerOrders layer_orders, TargetCostumes target_costumes, TargetCostumeDims costume_dims, var SoundQueue sound_queue, var SpeechBubbles speech_bubbles, var [ReceiverScript] outer_spawned):
-    var mut done = false
-    var mut iterations = 0
+def drive_thread_to_completion(var Thread thread, var Vars vars, ProcTable procs, var Lists lists, Broadcasts broadcasts, var Positions positions, KeyboardState keyboard, MouseState mouse, ScratchTimer timer, var Rng rng, var LooksStates looks, var LayerOrders layer_orders, TargetCostumes target_costumes, TargetCostumeDims costume_dims, var SoundQueue sound_queue, var SpeechBubbles speech_bubbles, mut [ReceiverScript] outer_spawned):
+    var done = false
+    var iterations = 0
     let iteration_cap = 100000
     while !done and iterations < iteration_cap:
         done = step_thread(thread, vars, procs, lists, broadcasts, positions, keyboard, mouse, timer, rng, looks, layer_orders, target_costumes, costume_dims, sound_queue, speech_bubbles)

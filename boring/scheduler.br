@@ -50,7 +50,7 @@ def run_script(var Vars vars, ReceiverScript script, ProcTable procs, var Lists 
     # `drive_thread_to_completion`'s own iteration cap bounds a single
     # never-finishing thread.
     var mut to_process = round
-    var mut safety = 0
+    var safety = 0
     while to_process.length > 0 and safety < 10000:
         mut next_round = []
         for pending_script in to_process:

@@ -85,7 +85,7 @@ def float32 canvas_py(float32 stage_y):
 # Scratch's own pen layer compositing (a plain 2D canvas `source-over`
 # draw, confirmed against real `scratch-render`'s own pen-skin usage of
 # ordinary canvas compositing, not a more exotic blend mode).
-def blend_pixel(var [uint8] data, isize i, PenColor color):
+def blend_pixel(mut [uint8] data, isize i, PenColor color):
     if i >= 0 and (i + 3) < data.length:
         let dst_a = (data[i + 3] as float32) / 255.0
         let out_a = color.a + (dst_a * (1.0 - color.a))
@@ -117,7 +117,7 @@ def blend_pixel(var [uint8] data, isize i, PenColor color):
 # degenerates to exactly a filled circle of the stroke's own radius,
 # with no special-casing needed: every candidate pixel's distance to a
 # single point *is* its distance to the "segment".
-def draw_pen_line(var [uint8] data, float32 x1, float32 y1, float32 x2, float32 y2, PenColor color, float32 diameter):
+def draw_pen_line(mut [uint8] data, float32 x1, float32 y1, float32 x2, float32 y2, PenColor color, float32 diameter):
     let radius = diameter / 2.0
     let min_x_f = if x1 < x2: x1 else: x2
     let max_x_f = if x1 > x2: x1 else: x2
@@ -138,7 +138,7 @@ def draw_pen_line(var [uint8] data, float32 x1, float32 y1, float32 x2, float32 
                 if px >= 0 and px < 480:
                     let cx = (px as float32) + 0.5
                     let cy = (py as float32) + 0.5
-                    var mut t = 0.0
+                    var t = 0.0
                     if seg_len_sq > 0.0:
                         t = (((cx - x1) * dx) + ((cy - y1) * dy)) / seg_len_sq
                         if t < 0.0:
@@ -174,7 +174,7 @@ pub def draw_pen_marks(mut ResMut<SoundQueue> sound_queue, mut ResMut<PenCanvas>
     guard let dataFixed = image.data.clone() else return
     var mut data = dataFixed
     if sound_queue.pen_clear_requested:
-        var mut i = 0
+        var i = 0
         while i < data.length:
             data[i] = 0 as uint8
             i = i + 1
@@ -236,11 +236,11 @@ struct StampSource:
 # positions`'s own doc comment) -- a stamp matching what's actually on
 # screen has to make the same simplification, not a more "correct" one
 # nothing else here does.
-def draw_stamp(var [uint8] data, StampSource src):
+def draw_stamp(mut [uint8] data, StampSource src):
     let half_w = src.dest_width / 2.0
     let half_h = src.dest_height / 2.0
-    var mut radians = 0.0
-    var mut flip = false
+    var radians = 0.0
+    var flip = false
     if src.rotation_style == "all around":
         radians = (90.0 - src.direction) * 0.017453292
     elif src.rotation_style == "left-right":
@@ -259,11 +259,11 @@ def draw_stamp(var [uint8] data, StampSource src):
     # for a line segment.
     let corners_x = [0.0 - half_w, half_w, half_w, 0.0 - half_w]
     let corners_y = [0.0 - half_h, 0.0 - half_h, half_h, half_h]
-    var mut min_wx = 0.0
-    var mut max_wx = 0.0
-    var mut min_wy = 0.0
-    var mut max_wy = 0.0
-    var mut i = 0
+    var min_wx = 0.0
+    var max_wx = 0.0
+    var min_wy = 0.0
+    var max_wy = 0.0
+    var i = 0
     while i < 4:
         let lx = corners_x[i]
         let ly = corners_y[i]
@@ -389,7 +389,7 @@ pub def draw_stamps(mut ResMut<SoundQueue> sound_queue, Res<TargetCostumeDims> c
     mut still_pending = []
     for stamp_req in requests:
         let handles = handle_by_target[stamp_req.target_id.clone()] else []
-        var mut resolved = false
+        var resolved = false
         if handles.length > 0:
             let idx = wrap_costume_index(stamp_req.costume_index, handles.length)
             let handle = handles[idx].clone()
@@ -433,7 +433,7 @@ pub def draw_stamps(mut ResMut<SoundQueue> sound_queue, Res<TargetCostumeDims> c
 # resulting buffer back so a test can inspect any pixel it wants.
 pub def [uint8] render_stamp_for_test(float32 px, float32 py, float32 direction, string rotation_style, float32 ghost, [uint8] src_pixels, float32 src_width, float32 src_height, float32 dest_width, float32 dest_height):
     mut data = []
-    var mut i = 0
+    var i = 0
     while i < (480 * 360 * 4):
         data.push(0 as uint8)
         i = i + 1
@@ -471,7 +471,7 @@ pub def compose_scene_for_touching(Res<Positions> positions, Res<LooksStates> lo
     # the same "reused across more than one `var`-parameter call" shape
     # `draw_stamps` itself already needs `var mut` for.
     var mut data = []
-    var mut i = 0
+    var i = 0
     while i < (480 * 360 * 4):
         data.push(255 as uint8)
         i = i + 1
@@ -487,7 +487,7 @@ pub def compose_scene_for_touching(Res<Positions> positions, Res<LooksStates> lo
                 draw_stamp(data, backdrop_src)
     if let pen_image = Assets.get(images, pen_canvas.handle):
         if let pen_pixels = pen_image.data.clone():
-            var mut j = 0
+            var j = 0
             while j < data.length:
                 let pr = pen_pixels[j]
                 let pg = pen_pixels[j + 1]

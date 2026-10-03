@@ -428,10 +428,10 @@ pub fn setup_scratch_project(mut commands: Commands, project_path: Res<ProjectPa
         commands.insert_resource(target_costumes);
         commands.insert_resource(costume_dims);
         commands.insert_resource(layer_orders);
-        commands.insert_resource(KeyPressHats { hats: key_press_hats });
-        commands.insert_resource(ClickHats { hats: click_hats });
-        commands.insert_resource(GreaterThanHats { hats: greater_than_hats });
-        commands.insert_resource(TouchingObjectHats { hats: touching_object_hats });
+        commands.insert_resource(KeyPressHats { hats: key_press_hats.clone() });
+        commands.insert_resource(ClickHats { hats: click_hats.clone() });
+        commands.insert_resource(GreaterThanHats { hats: greater_than_hats.clone() });
+        commands.insert_resource(TouchingObjectHats { hats: touching_object_hats.clone() });
         commands.insert_resource(BackdropSwitchHats { hats: backdrop_switch_hats.clone(), last_backdrop_name: Arc::<str>::from(initial_backdrop.clone().to_string()) });
         commands.insert_resource(start_as_clone_hats);
         commands.insert_resource(KeyboardState { pressed_keys: vec![], any_key_pressed: false });
@@ -480,13 +480,13 @@ pub fn setup_scratch_project(mut commands: Commands, project_path: Res<ProjectPa
             }
         }
         for watcher in variable_watchers.iter().cloned() {
-            commands.spawn((VariableWatcherTag { variable_id: Arc::<str>::from(watcher.variable_id.to_string()), label: Arc::<str>::from(watcher.label.to_string()) }, Text2d::new(""), Visibility::Visible.clone(), Transform::from_xyz(watcher.x, watcher.y, 10.0)));
+            commands.spawn((VariableWatcherTag { variable_id: Arc::<str>::from(watcher.variable_id.clone().to_string()), label: Arc::<str>::from(watcher.label.clone().to_string()) }, Text2d::new(""), Visibility::Visible.clone(), Transform::from_xyz(watcher.x, watcher.y, 10.0)));
         }
         for watcher in reporter_watchers.iter().cloned() {
-            commands.spawn((ReporterWatcherTag { target_id: Arc::<str>::from(watcher.target_id.to_string()), expr: watcher.expr, label: Arc::<str>::from(watcher.label.to_string()) }, Text2d::new(""), Transform::from_xyz(watcher.x, watcher.y, 10.0)));
+            commands.spawn((ReporterWatcherTag { target_id: Arc::<str>::from(watcher.target_id.clone().to_string()), expr: watcher.expr.clone(), label: Arc::<str>::from(watcher.label.clone().to_string()) }, Text2d::new(""), Transform::from_xyz(watcher.x, watcher.y, 10.0)));
         }
         for watcher in list_watchers.iter().cloned() {
-            commands.spawn((ListWatcherTag { list_id: Arc::<str>::from(watcher.list_id.to_string()), label: Arc::<str>::from(watcher.label.to_string()) }, Text2d::new(""), Visibility::Visible.clone(), Transform::from_xyz(watcher.x, watcher.y, 10.0)));
+            commands.spawn((ListWatcherTag { list_id: Arc::<str>::from(watcher.list_id.clone().to_string()), label: Arc::<str>::from(watcher.label.clone().to_string()) }, Text2d::new(""), Visibility::Visible.clone(), Transform::from_xyz(watcher.x, watcher.y, 10.0)));
         }
         commands.spawn((AskBoxText {}, Text2d::new(""), Visibility::Hidden.clone(), Transform::from_xyz(0.0, (-160.0), 10.0)));
     }
@@ -563,7 +563,7 @@ pub fn spawn_pending_clones(mut commands: Commands, mut sound_queue: ResMut<Soun
             }
         }
         for template in start_as_clone_hats.get(request.origin_name.clone()).into_iter() {
-            let script: ReceiverScript = ReceiverScript { target_id: Arc::<str>::from(request.new_id.clone().to_string()), body: template.body };
+            let script: ReceiverScript = ReceiverScript { target_id: Arc::<str>::from(request.new_id.clone().to_string()), body: template.body.clone() };
             pending.queue.push(spawn_thread(script.clone()));
         }
     }
@@ -602,7 +602,7 @@ pub fn sync_speech_bubbles(query: Query<(&SpeechBubbleAnchor, &mut Text2d, &mut 
         let s = looks.get(anchor.target_id.clone());
         let origin = sound_queue.instance_type_of(anchor.target_id.clone());
         let idx = s.costume_index.clone();
-        let dim = costume_dims.get(origin, idx.clone());
+        let dim = costume_dims.get(origin.clone(), idx.clone());
         let scale = (s.size / 100.0);
         let hh = ((dim.height * scale) / 2.0);
         transform.translation.y = (hh + 10.0);
@@ -990,7 +990,7 @@ pub fn handle_sprite_dragging(mouse_buttons: Res<ButtonInput<MouseButton>>, mous
                         let order = layer_orders.get(id.clone());
                         if ((!found) || (order > best_order)) {
                             best_id = id;
-                            best_order = order;
+                            best_order = order.clone();
                             found = true;
                         }
                     }
@@ -1056,7 +1056,7 @@ pub fn check_touching_object_hats(mut vars: ResMut<Vars>, mut lists: ResMut<List
                 let script: ReceiverScript = ReceiverScript { target_id: Arc::<str>::from(instance_id.clone().to_string()), body: hat.script.body.clone() };
                 pending.queue.push(spawn_thread(script.clone()));
             }
-            new_was_true.insert(instance_id.clone(), is_touching);
+            new_was_true.insert(instance_id.clone(), is_touching.clone());
         }
         new_hats.push(TouchingObjectHat { touching_block: hat.touching_block, was_true_by_instance: new_was_true, script: hat.script });
     }
@@ -1131,7 +1131,7 @@ pub fn sync_costume_from_looks_states(query: Query<(&mut Sprite, &TargetCostumeH
             let idx = wrap_costume_index(s.costume_index.clone(), (costumes.handles.len() as isize).clone());
             sprite.image = costumes.handles[(idx) as usize].clone().clone();
             let origin = sound_queue.instance_type_of(tag.target_id.clone());
-            let dim = costume_dims.get(origin, idx.clone());
+            let dim = costume_dims.get(origin.clone(), idx.clone());
             let new_size: Option<Vec2> = Some(Vec2::new(dim.width, dim.height));
             sprite.custom_size = new_size;
         }
@@ -1688,8 +1688,8 @@ impl Sb3Target {
 
     pub fn find_top_level_hat(&self, opcode: Arc<str>) -> Option<Sb3Block> {
         for (id, b) in self.blocks.clone().into_iter() {
-            if (b.top_level && (b.opcode == opcode)) {
-                return Some(b);
+            if (b.top_level && (b.opcode.clone() == opcode)) {
+                return Some(b.clone());
             }
         }
         None
@@ -1698,7 +1698,7 @@ impl Sb3Target {
     pub fn all_blocks(&self) -> Vec<Sb3Block> {
         let mut out = vec![];
         for (id, b) in self.blocks.clone().into_iter() {
-            out.push(b);
+            out.push(b.clone());
         }
         out
     }
@@ -1757,8 +1757,8 @@ impl Sb3Target {
 
     pub fn sound_by_name(&self, soundName: Arc<str>) -> Option<Sb3Sound> {
         for s in self.sounds.iter().cloned() {
-            if (s.name == soundName) {
-                return Some(s);
+            if (s.name.clone() == soundName) {
+                return Some(s.clone());
             }
         }
         None
@@ -2118,7 +2118,7 @@ impl Sb3Block {
 
     pub fn field_value(&self, name: Arc<str>) -> Option<Arc<str>> {
         if let Some(f) = self.fields.get(&*name).cloned() {
-            Some(f.value)
+            Some(f.value.clone())
         } else {
             None
         }
@@ -2126,7 +2126,7 @@ impl Sb3Block {
 
     pub fn field_id(&self, name: Arc<str>) -> Option<Arc<str>> {
         if let Some(f) = self.fields.get(&*name).cloned() {
-            f.id
+            f.id.clone()
         } else {
             None
         }
@@ -2138,7 +2138,7 @@ impl Sb3Block {
 
     pub fn mutation_proc_code(&self) -> Option<Arc<str>> {
         if let Some(m) = self.mutation.clone() {
-            m.proc_code
+            m.proc_code.clone()
         } else {
             None
         }
@@ -2197,7 +2197,7 @@ fn parse_list(id: Arc<str>, arr: &Vec<JVal>) -> Option<Sb3List> {
     let Some(items) = (arr[(1) as usize].as_arr()) else {
         return None;
     };
-    Some(Sb3List { id: id.clone().clone(), name: Arc::<str>::from(name.clone().to_string()), items: items })
+    Some(Sb3List { id: id.clone().clone(), name: Arc::<str>::from(name.clone().to_string()), items: items.clone() })
 }
 
 fn parse_primitive(raw: JVal) -> Option<Sb3Primitive> {
@@ -2234,21 +2234,21 @@ fn parse_primitive(raw: JVal) -> Option<Sb3Primitive> {
                 return None;
             };
             let id = jval_display_at(&items, 2).unwrap_or_else(|| Arc::<str>::from(""));
-            Some(Sb3Primitive::Broadcast(Arc::<str>::from(name.clone().to_string()), Arc::<str>::from(id.to_string())))
+            Some(Sb3Primitive::Broadcast(Arc::<str>::from(name.clone().to_string()), Arc::<str>::from(id.clone().to_string())))
         }
         12 => {
             let Some(name) = (jval_display_at(&items, 1)) else {
                 return None;
             };
             let id = jval_display_at(&items, 2).unwrap_or_else(|| Arc::<str>::from(""));
-            Some(Sb3Primitive::Variable(Arc::<str>::from(name.clone().to_string()), Arc::<str>::from(id.to_string())))
+            Some(Sb3Primitive::Variable(Arc::<str>::from(name.clone().to_string()), Arc::<str>::from(id.clone().to_string())))
         }
         13 => {
             let Some(name) = (jval_display_at(&items, 1)) else {
                 return None;
             };
             let id = jval_display_at(&items, 2).unwrap_or_else(|| Arc::<str>::from(""));
-            Some(Sb3Primitive::List(Arc::<str>::from(name.clone().to_string()), Arc::<str>::from(id.to_string())))
+            Some(Sb3Primitive::List(Arc::<str>::from(name.clone().to_string()), Arc::<str>::from(id.clone().to_string())))
         }
         _ => {
             None
@@ -2333,7 +2333,7 @@ fn convert_mutation(rm: RawMutation) -> Sb3Mutation {
     if let Some(w) = rm.warp.clone() {
         warp = Some((w == Arc::<str>::from("true")));
     }
-    Sb3Mutation { tag_name: Arc::<str>::from(tag_name.to_string()), proc_code: rm.proccode, argument_ids: decode_double_encoded_array(rm.argumentids.clone()), argument_names: decode_double_encoded_array(rm.argumentnames.clone()), argument_defaults: decode_double_encoded_array(rm.argumentdefaults.clone()), warp: warp, has_next: rm.hasnext }
+    Sb3Mutation { tag_name: Arc::<str>::from(tag_name.clone().to_string()), proc_code: rm.proccode.clone(), argument_ids: decode_double_encoded_array(rm.argumentids.clone()), argument_names: decode_double_encoded_array(rm.argumentnames.clone()), argument_defaults: decode_double_encoded_array(rm.argumentdefaults.clone()), warp: warp, has_next: rm.hasnext.clone() }
 }
 
 fn convert_block(rb: RawBlock) -> Sb3Block {
@@ -2353,7 +2353,7 @@ fn convert_block(rb: RawBlock) -> Sb3Block {
     if let Some(rm) = rb.mutation.clone() {
         mutation = Some(convert_mutation(rm.clone()));
     }
-    Sb3Block { opcode: Arc::<str>::from(rb.opcode.to_string()), next: rb.next, parent: rb.parent, inputs: inputs, fields: fields, shadow: rb.shadow, top_level: rb.topLevel, x: rb.x, y: rb.y, mutation: mutation, comment: rb.comment }
+    Sb3Block { opcode: Arc::<str>::from(rb.opcode.clone().to_string()), next: rb.next.clone(), parent: rb.parent.clone(), inputs: inputs, fields: fields, shadow: rb.shadow, top_level: rb.topLevel, x: rb.x, y: rb.y, mutation: mutation, comment: rb.comment.clone() }
 }
 
 fn convert_target(rt: RawTarget) -> Sb3Target {
@@ -2375,9 +2375,9 @@ fn convert_target(rt: RawTarget) -> Sb3Target {
     }
     let mut blocks = HashMap::new();
     for (id, rb) in rt.blocks.clone().into_iter() {
-        blocks.insert(id.clone(), convert_block(rb));
+        blocks.insert(id.clone(), convert_block(rb.clone()));
     }
-    Sb3Target { is_stage: rt.isStage, name: Arc::<str>::from(rt.name.to_string()), variables: variables, lists: lists, broadcasts: broadcasts, blocks: blocks, comments: rt.comments, current_costume: rt.currentCostume, costumes: rt.costumes, sounds: rt.sounds, volume: rt.volume, layer_order: rt.layerOrder, tempo: rt.tempo, video_transparency: rt.videoTransparency, video_state: rt.videoState, text_to_speech_language: rt.textToSpeechLanguage, visible: rt.visible, x: rt.x, y: rt.y, size: rt.size, direction: rt.direction, draggable: rt.draggable, rotation_style: rt.rotationStyle }
+    Sb3Target { is_stage: rt.isStage, name: Arc::<str>::from(rt.name.clone().to_string()), variables: variables, lists: lists, broadcasts: broadcasts, blocks: blocks, comments: rt.comments.clone(), current_costume: rt.currentCostume, costumes: rt.costumes.clone(), sounds: rt.sounds.clone(), volume: rt.volume, layer_order: rt.layerOrder, tempo: rt.tempo, video_transparency: rt.videoTransparency, video_state: rt.videoState.clone(), text_to_speech_language: rt.textToSpeechLanguage.clone(), visible: rt.visible, x: rt.x, y: rt.y, size: rt.size, direction: rt.direction, draggable: rt.draggable, rotation_style: rt.rotationStyle.clone() }
 }
 
 const MAX_JSON_NESTING_DEPTH: isize = 256;
@@ -2995,7 +2995,7 @@ let error = __boring_e;
                 return ScratchNumber { kind: ScratchNumberKind::Frac(rni, rdi) };
             }
         }
-        ScratchNumber { kind: ScratchNumberKind::BigFracV(rn.clone(), rd.clone()) }
+        ScratchNumber { kind: ScratchNumberKind::BigFracV(rn, rd) }
     }
 }
 
@@ -3507,7 +3507,7 @@ impl Thread {
 
 fn spawn_thread(script: ReceiverScript) -> Thread {
     let top_frame: Frame = Frame { params: HashMap::new(), target_id: Arc::<str>::from(script.target_id.clone().clone().to_string()) };
-    Thread { target_id: Arc::<str>::from(script.target_id.to_string()), stack: vec![ExecFrame { body: script.body, index: 0, kind: FrameKind::TopLevel, scope: top_frame.clone() }], spawned: vec![] }
+    Thread { target_id: Arc::<str>::from(script.target_id.clone().to_string()), stack: vec![ExecFrame { body: script.body.clone(), index: 0, kind: FrameKind::TopLevel, scope: top_frame }], spawned: vec![] }
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -3599,7 +3599,7 @@ impl Vars {
             let existing: HashMap<Arc<str>, ScratchValue> = self.local_table.get(&*calling_instance_id).cloned().unwrap_or_else(|| HashMap::new());
             let mut by_var = HashMap::new();
             for (k, val) in existing.into_iter() {
-                by_var.insert(k.clone(), val);
+                by_var.insert(k.clone(), val.clone());
             }
             by_var.insert(id.clone(), v.clone());
             self.local_table.insert(calling_instance_id.clone(), by_var);
@@ -3611,7 +3611,7 @@ impl Vars {
             let by_name: HashMap<Arc<str>, Arc<str>> = self.local_var_name_lookup.get(&*scope).cloned().unwrap_or_else(|| HashMap::new());
             let found = by_name.get(&*var_name).cloned().unwrap_or_else(|| Arc::<str>::from(""));
             if (found != Arc::<str>::from("")) {
-                return found;
+                return found.clone();
             }
         }
         self.var_name_lookup.get(&*var_name).cloned().unwrap_or_else(|| Arc::<str>::from(""))
@@ -3623,7 +3623,7 @@ impl Vars {
 
     fn copy_local(&mut self, source_id: Arc<str>, new_id: Arc<str>) -> () {
         let src: HashMap<Arc<str>, ScratchValue> = self.local_table.get(&*source_id).cloned().unwrap_or_else(|| HashMap::new());
-        self.local_table.insert(new_id.clone(), src.clone());
+        self.local_table.insert(new_id.clone(), src);
     }
 
     fn remove_local(&mut self, instance_id: Arc<str>) -> () {
@@ -3714,7 +3714,7 @@ impl Lists {
 
     fn copy_local(&mut self, source_id: Arc<str>, new_id: Arc<str>) -> () {
         let src: HashMap<Arc<str>, Vec<ScratchValue>> = self.local_table.get(&*source_id).cloned().unwrap_or_else(|| HashMap::new());
-        self.local_table.insert(new_id.clone(), src.clone());
+        self.local_table.insert(new_id.clone(), src);
     }
 
     fn remove_local(&mut self, instance_id: Arc<str>) -> () {
@@ -4137,7 +4137,7 @@ impl std::fmt::Display for KeyboardState {
 impl KeyboardState {
     fn is_pressed(&self, key_option: Arc<str>) -> bool {
         if (key_option == Arc::<str>::from("any")) {
-            self.any_key_pressed.clone()
+            self.any_key_pressed
         } else {
             self.pressed_keys.contains(&key_option)
         }
@@ -5101,7 +5101,7 @@ fn build_broadcasts(project: Sb3Project) -> Broadcasts {
                     if let Some(start) = blk.next_id() {
                         let body = resolve_stack(target.clone(), Arc::<str>::from(Arc::<str>::from(format!("{}", start).as_str())));
                         let mut scripts = table.get(&msg_name.clone()).cloned().unwrap_or_else(|| vec![]);
-                        scripts.push(ReceiverScript { target_id: Arc::<str>::from(Arc::<str>::from(format!("{}", target.name_string()).as_str())), body: body });
+                        scripts.push(ReceiverScript { target_id: Arc::<str>::from(Arc::<str>::from(format!("{}", target.name_string()).as_str())), body: body.clone() });
                         table.insert(msg_name.clone(), scripts);
                     }
                 }
@@ -5120,7 +5120,7 @@ fn build_start_as_clone_hats(project: Sb3Project) -> StartAsCloneHats {
                     let body = resolve_stack(target.clone(), Arc::<str>::from(Arc::<str>::from(format!("{}", start).as_str())));
                     let target_name: Arc<str> = Arc::<str>::from(Arc::<str>::from(format!("{}", target.name_string()).as_str()));
                     let mut scripts = table.get(&target_name.clone()).cloned().unwrap_or_else(|| vec![]);
-                    scripts.push(ReceiverScript { target_id: Arc::<str>::from(target_name.clone().to_string()), body: body });
+                    scripts.push(ReceiverScript { target_id: Arc::<str>::from(target_name.clone().to_string()), body: body.clone() });
                     table.insert(target_name.clone(), scripts);
                 }
             }
@@ -5137,7 +5137,7 @@ fn build_key_press_hats(project: Sb3Project) -> Vec<KeyPressHat> {
                 if let Some(key_option) = block_field_value(blk.clone(), Arc::<str>::from("KEY_OPTION")) {
                     if let Some(start) = blk.next_id() {
                         let body = resolve_stack(target.clone(), Arc::<str>::from(Arc::<str>::from(format!("{}", start).as_str())));
-                        hats.push(KeyPressHat { key_option: Arc::<str>::from(Arc::<str>::from(format!("{}", key_option).as_str())), script: ReceiverScript { target_id: Arc::<str>::from(Arc::<str>::from(format!("{}", target.name_string()).as_str())), body: body } });
+                        hats.push(KeyPressHat { key_option: Arc::<str>::from(Arc::<str>::from(format!("{}", key_option).as_str())), script: ReceiverScript { target_id: Arc::<str>::from(Arc::<str>::from(format!("{}", target.name_string()).as_str())), body: body.clone() } });
                     }
                 }
             }
@@ -5153,7 +5153,7 @@ fn build_click_hats(project: Sb3Project) -> Vec<ClickHat> {
             if (block_opcode_is(blk.clone(), Arc::<str>::from("event_whenthisspriteclicked")) || block_opcode_is(blk.clone(), Arc::<str>::from("event_whenstageclicked"))) {
                 if let Some(start) = blk.next_id() {
                     let body = resolve_stack(target.clone(), Arc::<str>::from(Arc::<str>::from(format!("{}", start).as_str())));
-                    hats.push(ClickHat { script: ReceiverScript { target_id: Arc::<str>::from(Arc::<str>::from(format!("{}", target.name_string()).as_str())), body: body } });
+                    hats.push(ClickHat { script: ReceiverScript { target_id: Arc::<str>::from(Arc::<str>::from(format!("{}", target.name_string()).as_str())), body: body.clone() } });
                 }
             }
         }
@@ -5169,7 +5169,7 @@ fn build_touching_object_hats(project: Sb3Project) -> Vec<TouchingObjectHat> {
                 if let Some(start) = blk.next_id() {
                     let touching_block = Block { kind: BlockKind::Touching(Box::new(resolve_input(target.clone(), blk.clone(), Arc::<str>::from("TOUCHINGOBJECTMENU"), 0))) };
                     let body = resolve_stack(target.clone(), Arc::<str>::from(Arc::<str>::from(format!("{}", start).as_str())));
-                    hats.push(TouchingObjectHat { touching_block: touching_block.clone(), was_true_by_instance: HashMap::new(), script: ReceiverScript { target_id: Arc::<str>::from(Arc::<str>::from(format!("{}", target.name_string()).as_str())), body: body } });
+                    hats.push(TouchingObjectHat { touching_block: touching_block, was_true_by_instance: HashMap::new(), script: ReceiverScript { target_id: Arc::<str>::from(Arc::<str>::from(format!("{}", target.name_string()).as_str())), body: body.clone() } });
                 }
             }
         }
@@ -5186,7 +5186,7 @@ fn build_greater_than_hats(project: Sb3Project) -> Vec<GreaterThanHat> {
                     if let Some(start) = blk.next_id() {
                         let value_expr = resolve_input(target.clone(), blk.clone(), Arc::<str>::from("VALUE"), 0);
                         let body = resolve_stack(target.clone(), Arc::<str>::from(Arc::<str>::from(format!("{}", start).as_str())));
-                        hats.push(GreaterThanHat { menu: Arc::<str>::from(Arc::<str>::from(format!("{}", menu).as_str())), value_expr: value_expr.clone(), was_true: false, script: ReceiverScript { target_id: Arc::<str>::from(Arc::<str>::from(format!("{}", target.name_string()).as_str())), body: body } });
+                        hats.push(GreaterThanHat { menu: Arc::<str>::from(Arc::<str>::from(format!("{}", menu).as_str())), value_expr: value_expr.clone(), was_true: false, script: ReceiverScript { target_id: Arc::<str>::from(Arc::<str>::from(format!("{}", target.name_string()).as_str())), body: body.clone() } });
                     }
                 }
             }
@@ -5203,7 +5203,7 @@ fn build_backdrop_switch_hats(project: Sb3Project) -> Vec<BackdropSwitchHat> {
                 if let Some(backdrop) = block_field_value(blk.clone(), Arc::<str>::from("BACKDROP")) {
                     if let Some(start) = blk.next_id() {
                         let body = resolve_stack(target.clone(), Arc::<str>::from(Arc::<str>::from(format!("{}", start).as_str())));
-                        hats.push(BackdropSwitchHat { backdrop_name: Arc::<str>::from(Arc::<str>::from(format!("{}", backdrop).as_str())), script: ReceiverScript { target_id: Arc::<str>::from(Arc::<str>::from(format!("{}", target.name_string()).as_str())), body: body } });
+                        hats.push(BackdropSwitchHat { backdrop_name: Arc::<str>::from(Arc::<str>::from(format!("{}", backdrop).as_str())), script: ReceiverScript { target_id: Arc::<str>::from(Arc::<str>::from(format!("{}", target.name_string()).as_str())), body: body.clone() } });
                     }
                 }
             }
@@ -5217,7 +5217,7 @@ fn initial_backdrop_name(project: Sb3Project) -> Arc<str> {
         if target.is_stage {
             let idx = target.current_costume.clone();
             if ((idx >= 0) && (idx < (target.costumes.len() as isize))) {
-                return target.costumes[(idx) as usize].clone().name;
+                return target.costumes[(idx) as usize].clone().name.clone();
             }
         }
     }
@@ -5275,7 +5275,7 @@ fn build_reporter_watchers(project: Sb3Project) -> Vec<ReporterWatcher> {
                     Arc::<str>::from("costume #")
                 }
 };
-                watchers.push(ReporterWatcher { target_id: target_id.clone().clone(), expr: Block { kind: BlockKind::CostumeNumberName(Arc::<str>::from(which.to_string())) }, label: Arc::<str>::from(Arc::<str>::from(format!("{} {}", target_id, suffix).as_str())), x: x, y: y });
+                watchers.push(ReporterWatcher { target_id: target_id.clone().clone(), expr: Block { kind: BlockKind::CostumeNumberName(Arc::<str>::from(which.clone().to_string())) }, label: Arc::<str>::from(Arc::<str>::from(format!("{} {}", target_id, suffix).as_str())), x: x, y: y });
             } else if m.is_looks_backdropnumbername_watcher() {
                 let which = m.number_name_param();
                 let suffix = {
@@ -5285,7 +5285,7 @@ fn build_reporter_watchers(project: Sb3Project) -> Vec<ReporterWatcher> {
                     Arc::<str>::from("backdrop #")
                 }
 };
-                watchers.push(ReporterWatcher { target_id: Arc::<str>::from("Stage"), expr: Block { kind: BlockKind::BackdropNumberName(Arc::<str>::from(which.to_string())) }, label: Arc::<str>::from(suffix.to_string()), x: x, y: y });
+                watchers.push(ReporterWatcher { target_id: Arc::<str>::from("Stage"), expr: Block { kind: BlockKind::BackdropNumberName(Arc::<str>::from(which.clone().to_string())) }, label: Arc::<str>::from(suffix.to_string()), x: x, y: y });
             } else if m.is_sound_volume_watcher() {
                 watchers.push(ReporterWatcher { target_id: target_id.clone().clone(), expr: Block { kind: BlockKind::Volume }, label: Arc::<str>::from(Arc::<str>::from(format!("{} volume", target_id).as_str())), x: x, y: y });
             } else if m.is_sensing_current_watcher() {
@@ -5306,7 +5306,7 @@ fn build_reporter_watchers(project: Sb3Project) -> Vec<ReporterWatcher> {
                 } else if (menu == Arc::<str>::from("SECOND")) {
                     label = Arc::<str>::from("second");
                 }
-                watchers.push(ReporterWatcher { target_id: Arc::<str>::from(""), expr: Block { kind: BlockKind::CurrentDateTime(Arc::<str>::from(menu.to_string())) }, label: label.clone().clone(), x: x, y: y });
+                watchers.push(ReporterWatcher { target_id: Arc::<str>::from(""), expr: Block { kind: BlockKind::CurrentDateTime(Arc::<str>::from(menu.clone().to_string())) }, label: label.clone().clone(), x: x, y: y });
             } else if m.is_sensing_dayssince2000_watcher() {
                 watchers.push(ReporterWatcher { target_id: Arc::<str>::from(""), expr: Block { kind: BlockKind::DaysSince2000 }, label: Arc::<str>::from("days since 2000"), x: x, y: y });
             } else if m.is_sensing_loudness_watcher() {
@@ -5534,7 +5534,7 @@ fn build_positions(project: Sb3Project) -> Positions {
     let mut table = HashMap::new();
     for target in project.targets.iter().cloned() {
         let p: Position = Position { x: target.x_or(0.0), y: target.y_or(0.0), direction: target.direction_or(90.0) };
-        table.insert(Arc::<str>::from(Arc::<str>::from(format!("{}", target.name_string()).as_str())), p.clone());
+        table.insert(Arc::<str>::from(Arc::<str>::from(format!("{}", target.name_string()).as_str())), p);
     }
     Positions { table: table }
 }
@@ -5543,7 +5543,7 @@ fn build_looks_states(project: Sb3Project) -> LooksStates {
     let mut table = HashMap::new();
     for target in project.targets.iter().cloned() {
         let s: LooksState = LooksState { visible: target.visible_or(true), size: target.size_or(100.0), costume_index: target.current_costume, ghost: 0.0 };
-        table.insert(Arc::<str>::from(Arc::<str>::from(format!("{}", target.name_string()).as_str())), s.clone());
+        table.insert(Arc::<str>::from(Arc::<str>::from(format!("{}", target.name_string()).as_str())), s);
     }
     LooksStates { table: table }
 }
@@ -5596,7 +5596,7 @@ fn build_target_costumes(project: Sb3Project) -> TargetCostumes {
         let target_id: Arc<str> = Arc::<str>::from(Arc::<str>::from(format!("{}", target.name_string()).as_str()));
         let mut names = vec![];
         for c in target.costumes.iter().cloned() {
-            names.push(c.name);
+            names.push(c.name.clone());
         }
         table.insert(target_id.clone(), names);
     }
@@ -5616,7 +5616,7 @@ fn build_target_sound_durations(project: Sb3Project) -> HashMap<Arc<str>, HashMa
                 0.0
             }
 };
-            by_name.insert(s.name, dur);
+            by_name.insert(s.name.clone(), dur);
         }
         table.insert(target_id.clone(), by_name);
     }
@@ -5785,7 +5785,7 @@ fn dispatch_reporter(target: Sb3Target, blk: Sb3Block, depth: isize) -> Block {
         }
     } else if block_opcode_is(blk.clone(), Arc::<str>::from("sensing_of")) {
         let property = block_field_value(blk.clone(), Arc::<str>::from("PROPERTY")).unwrap_or_else(|| Arc::<str>::from(""));
-        Block { kind: BlockKind::SensingOf(Box::new(resolve_input(target.clone(), blk.clone(), Arc::<str>::from("OBJECT"), depth.clone())), Arc::<str>::from(property.to_string())) }
+        Block { kind: BlockKind::SensingOf(Box::new(resolve_input(target.clone(), blk.clone(), Arc::<str>::from("OBJECT"), depth.clone())), Arc::<str>::from(property.clone().to_string())) }
     } else if block_opcode_is(blk.clone(), Arc::<str>::from("sensing_of_object_menu")) {
         if let Some(name) = block_field_value(blk.clone(), Arc::<str>::from("OBJECT")) {
             Block { kind: BlockKind::Literal(ScratchValue::Str(Arc::<str>::from(name.clone().to_string()))) }
@@ -6196,7 +6196,7 @@ fn build_greenflag_scripts(project: Sb3Project) -> Vec<ReceiverScript> {
             if block_opcode_is(blk.clone(), Arc::<str>::from("event_whenflagclicked")) {
                 if let Some(start) = blk.next_id() {
                     let body = resolve_stack(target.clone(), Arc::<str>::from(Arc::<str>::from(format!("{}", start).as_str())));
-                    scripts.push(ReceiverScript { target_id: Arc::<str>::from(Arc::<str>::from(format!("{}", target.name_string()).as_str())), body: body });
+                    scripts.push(ReceiverScript { target_id: Arc::<str>::from(Arc::<str>::from(format!("{}", target.name_string()).as_str())), body: body.clone() });
                 }
             }
         }
@@ -6239,89 +6239,89 @@ fn eval(b: Block, mut vars: &mut Vars, frame: Frame, procs: ProcTable, mut lists
         BlockKind::Add(l, r) => {
             let l = *l;
             let r = *r;
-            ScratchValue::Num(eval(l.clone(), &mut (*vars), frame.clone(), procs.clone(), &mut (*lists), broadcasts.clone(), &mut (*positions), keyboard.clone(), mouse, timer, &mut (*rng), &mut (*looks), target_costumes.clone(), costume_dims.clone(), sound_queue.clone()).to_num().add_owned(eval(r.clone(), &mut (*vars), frame.clone(), procs.clone(), &mut (*lists), broadcasts.clone(), &mut (*positions), keyboard.clone(), mouse, timer, &mut (*rng), &mut (*looks), target_costumes.clone(), costume_dims.clone(), sound_queue.clone()).to_num()))
+            ScratchValue::Num(eval(l.clone(), &mut (*vars), frame.clone(), procs.clone(), &mut (*lists), broadcasts.clone(), &mut (*positions), keyboard.clone(), mouse, timer, rng, &mut (*looks), target_costumes.clone(), costume_dims.clone(), sound_queue.clone()).to_num().add_owned(eval(r.clone(), &mut (*vars), frame.clone(), procs.clone(), &mut (*lists), broadcasts.clone(), &mut (*positions), keyboard.clone(), mouse, timer, rng, &mut (*looks), target_costumes.clone(), costume_dims.clone(), sound_queue.clone()).to_num()))
         }
         BlockKind::Sub(l, r) => {
             let l = *l;
             let r = *r;
-            ScratchValue::Num(eval(l.clone(), &mut (*vars), frame.clone(), procs.clone(), &mut (*lists), broadcasts.clone(), &mut (*positions), keyboard.clone(), mouse, timer, &mut (*rng), &mut (*looks), target_costumes.clone(), costume_dims.clone(), sound_queue.clone()).to_num().sub_owned(eval(r.clone(), &mut (*vars), frame.clone(), procs.clone(), &mut (*lists), broadcasts.clone(), &mut (*positions), keyboard.clone(), mouse, timer, &mut (*rng), &mut (*looks), target_costumes.clone(), costume_dims.clone(), sound_queue.clone()).to_num()))
+            ScratchValue::Num(eval(l.clone(), &mut (*vars), frame.clone(), procs.clone(), &mut (*lists), broadcasts.clone(), &mut (*positions), keyboard.clone(), mouse, timer, rng, &mut (*looks), target_costumes.clone(), costume_dims.clone(), sound_queue.clone()).to_num().sub_owned(eval(r.clone(), &mut (*vars), frame.clone(), procs.clone(), &mut (*lists), broadcasts.clone(), &mut (*positions), keyboard.clone(), mouse, timer, rng, &mut (*looks), target_costumes.clone(), costume_dims.clone(), sound_queue.clone()).to_num()))
         }
         BlockKind::Equals(l, r) => {
             let l = *l;
             let r = *r;
-            ScratchValue::Bool(eval(l.clone(), &mut (*vars), frame.clone(), procs.clone(), &mut (*lists), broadcasts.clone(), &mut (*positions), keyboard.clone(), mouse, timer, &mut (*rng), &mut (*looks), target_costumes.clone(), costume_dims.clone(), sound_queue.clone()).loosely_equals(eval(r.clone(), &mut (*vars), frame.clone(), procs.clone(), &mut (*lists), broadcasts.clone(), &mut (*positions), keyboard.clone(), mouse, timer, &mut (*rng), &mut (*looks), target_costumes.clone(), costume_dims.clone(), sound_queue.clone())))
+            ScratchValue::Bool(eval(l.clone(), &mut (*vars), frame.clone(), procs.clone(), &mut (*lists), broadcasts.clone(), &mut (*positions), keyboard.clone(), mouse, timer, rng, &mut (*looks), target_costumes.clone(), costume_dims.clone(), sound_queue.clone()).loosely_equals(eval(r.clone(), &mut (*vars), frame.clone(), procs.clone(), &mut (*lists), broadcasts.clone(), &mut (*positions), keyboard.clone(), mouse, timer, rng, &mut (*looks), target_costumes.clone(), costume_dims.clone(), sound_queue.clone())))
         }
         BlockKind::Gt(l, r) => {
             let l = *l;
             let r = *r;
-            ScratchValue::Bool(eval(l.clone(), &mut (*vars), frame.clone(), procs.clone(), &mut (*lists), broadcasts.clone(), &mut (*positions), keyboard.clone(), mouse, timer, &mut (*rng), &mut (*looks), target_costumes.clone(), costume_dims.clone(), sound_queue.clone()).to_num().gt_owned(eval(r.clone(), &mut (*vars), frame.clone(), procs.clone(), &mut (*lists), broadcasts.clone(), &mut (*positions), keyboard.clone(), mouse, timer, &mut (*rng), &mut (*looks), target_costumes.clone(), costume_dims.clone(), sound_queue.clone()).to_num()))
+            ScratchValue::Bool(eval(l.clone(), &mut (*vars), frame.clone(), procs.clone(), &mut (*lists), broadcasts.clone(), &mut (*positions), keyboard.clone(), mouse, timer, rng, &mut (*looks), target_costumes.clone(), costume_dims.clone(), sound_queue.clone()).to_num().gt_owned(eval(r.clone(), &mut (*vars), frame.clone(), procs.clone(), &mut (*lists), broadcasts.clone(), &mut (*positions), keyboard.clone(), mouse, timer, rng, &mut (*looks), target_costumes.clone(), costume_dims.clone(), sound_queue.clone()).to_num()))
         }
         BlockKind::Lt(l, r) => {
             let l = *l;
             let r = *r;
-            ScratchValue::Bool(eval(l.clone(), &mut (*vars), frame.clone(), procs.clone(), &mut (*lists), broadcasts.clone(), &mut (*positions), keyboard.clone(), mouse, timer, &mut (*rng), &mut (*looks), target_costumes.clone(), costume_dims.clone(), sound_queue.clone()).to_num().lt_owned(eval(r.clone(), &mut (*vars), frame.clone(), procs.clone(), &mut (*lists), broadcasts.clone(), &mut (*positions), keyboard.clone(), mouse, timer, &mut (*rng), &mut (*looks), target_costumes.clone(), costume_dims.clone(), sound_queue.clone()).to_num()))
+            ScratchValue::Bool(eval(l.clone(), &mut (*vars), frame.clone(), procs.clone(), &mut (*lists), broadcasts.clone(), &mut (*positions), keyboard.clone(), mouse, timer, rng, &mut (*looks), target_costumes.clone(), costume_dims.clone(), sound_queue.clone()).to_num().lt_owned(eval(r.clone(), &mut (*vars), frame.clone(), procs.clone(), &mut (*lists), broadcasts.clone(), &mut (*positions), keyboard.clone(), mouse, timer, rng, &mut (*looks), target_costumes.clone(), costume_dims.clone(), sound_queue.clone()).to_num()))
         }
         BlockKind::Mul(l, r) => {
             let l = *l;
             let r = *r;
-            ScratchValue::Num(eval(l.clone(), &mut (*vars), frame.clone(), procs.clone(), &mut (*lists), broadcasts.clone(), &mut (*positions), keyboard.clone(), mouse, timer, &mut (*rng), &mut (*looks), target_costumes.clone(), costume_dims.clone(), sound_queue.clone()).to_num().mul_owned(eval(r.clone(), &mut (*vars), frame.clone(), procs.clone(), &mut (*lists), broadcasts.clone(), &mut (*positions), keyboard.clone(), mouse, timer, &mut (*rng), &mut (*looks), target_costumes.clone(), costume_dims.clone(), sound_queue.clone()).to_num()))
+            ScratchValue::Num(eval(l.clone(), &mut (*vars), frame.clone(), procs.clone(), &mut (*lists), broadcasts.clone(), &mut (*positions), keyboard.clone(), mouse, timer, rng, &mut (*looks), target_costumes.clone(), costume_dims.clone(), sound_queue.clone()).to_num().mul_owned(eval(r.clone(), &mut (*vars), frame.clone(), procs.clone(), &mut (*lists), broadcasts.clone(), &mut (*positions), keyboard.clone(), mouse, timer, rng, &mut (*looks), target_costumes.clone(), costume_dims.clone(), sound_queue.clone()).to_num()))
         }
         BlockKind::Div(l, r) => {
             let l = *l;
             let r = *r;
-            ScratchValue::Num(eval(l.clone(), &mut (*vars), frame.clone(), procs.clone(), &mut (*lists), broadcasts.clone(), &mut (*positions), keyboard.clone(), mouse, timer, &mut (*rng), &mut (*looks), target_costumes.clone(), costume_dims.clone(), sound_queue.clone()).to_num().div_owned(eval(r.clone(), &mut (*vars), frame.clone(), procs.clone(), &mut (*lists), broadcasts.clone(), &mut (*positions), keyboard.clone(), mouse, timer, &mut (*rng), &mut (*looks), target_costumes.clone(), costume_dims.clone(), sound_queue.clone()).to_num()))
+            ScratchValue::Num(eval(l.clone(), &mut (*vars), frame.clone(), procs.clone(), &mut (*lists), broadcasts.clone(), &mut (*positions), keyboard.clone(), mouse, timer, rng, &mut (*looks), target_costumes.clone(), costume_dims.clone(), sound_queue.clone()).to_num().div_owned(eval(r.clone(), &mut (*vars), frame.clone(), procs.clone(), &mut (*lists), broadcasts.clone(), &mut (*positions), keyboard.clone(), mouse, timer, rng, &mut (*looks), target_costumes.clone(), costume_dims.clone(), sound_queue.clone()).to_num()))
         }
         BlockKind::Mod(l, r) => {
             let l = *l;
             let r = *r;
-            ScratchValue::Num(scratch_mod(eval(l.clone(), &mut (*vars), frame.clone(), procs.clone(), &mut (*lists), broadcasts.clone(), &mut (*positions), keyboard.clone(), mouse, timer, &mut (*rng), &mut (*looks), target_costumes.clone(), costume_dims.clone(), sound_queue.clone()).to_num(), eval(r.clone(), &mut (*vars), frame.clone(), procs.clone(), &mut (*lists), broadcasts.clone(), &mut (*positions), keyboard.clone(), mouse, timer, &mut (*rng), &mut (*looks), target_costumes.clone(), costume_dims.clone(), sound_queue.clone()).to_num()))
+            ScratchValue::Num(scratch_mod(eval(l.clone(), &mut (*vars), frame.clone(), procs.clone(), &mut (*lists), broadcasts.clone(), &mut (*positions), keyboard.clone(), mouse, timer, rng, &mut (*looks), target_costumes.clone(), costume_dims.clone(), sound_queue.clone()).to_num(), eval(r.clone(), &mut (*vars), frame.clone(), procs.clone(), &mut (*lists), broadcasts.clone(), &mut (*positions), keyboard.clone(), mouse, timer, rng, &mut (*looks), target_costumes.clone(), costume_dims.clone(), sound_queue.clone()).to_num()))
         }
         BlockKind::And(l, r) => {
             let l = *l;
             let r = *r;
-            ScratchValue::Bool((eval(l.clone(), &mut (*vars), frame.clone(), procs.clone(), &mut (*lists), broadcasts.clone(), &mut (*positions), keyboard.clone(), mouse, timer, &mut (*rng), &mut (*looks), target_costumes.clone(), costume_dims.clone(), sound_queue.clone()).truthy() && eval(r.clone(), &mut (*vars), frame.clone(), procs.clone(), &mut (*lists), broadcasts.clone(), &mut (*positions), keyboard.clone(), mouse, timer, &mut (*rng), &mut (*looks), target_costumes.clone(), costume_dims.clone(), sound_queue.clone()).truthy()))
+            ScratchValue::Bool((eval(l.clone(), &mut (*vars), frame.clone(), procs.clone(), &mut (*lists), broadcasts.clone(), &mut (*positions), keyboard.clone(), mouse, timer, rng, &mut (*looks), target_costumes.clone(), costume_dims.clone(), sound_queue.clone()).truthy() && eval(r.clone(), &mut (*vars), frame.clone(), procs.clone(), &mut (*lists), broadcasts.clone(), &mut (*positions), keyboard.clone(), mouse, timer, rng, &mut (*looks), target_costumes.clone(), costume_dims.clone(), sound_queue.clone()).truthy()))
         }
         BlockKind::Or(l, r) => {
             let l = *l;
             let r = *r;
-            ScratchValue::Bool((eval(l.clone(), &mut (*vars), frame.clone(), procs.clone(), &mut (*lists), broadcasts.clone(), &mut (*positions), keyboard.clone(), mouse, timer, &mut (*rng), &mut (*looks), target_costumes.clone(), costume_dims.clone(), sound_queue.clone()).truthy() || eval(r.clone(), &mut (*vars), frame.clone(), procs.clone(), &mut (*lists), broadcasts.clone(), &mut (*positions), keyboard.clone(), mouse, timer, &mut (*rng), &mut (*looks), target_costumes.clone(), costume_dims.clone(), sound_queue.clone()).truthy()))
+            ScratchValue::Bool((eval(l.clone(), &mut (*vars), frame.clone(), procs.clone(), &mut (*lists), broadcasts.clone(), &mut (*positions), keyboard.clone(), mouse, timer, rng, &mut (*looks), target_costumes.clone(), costume_dims.clone(), sound_queue.clone()).truthy() || eval(r.clone(), &mut (*vars), frame.clone(), procs.clone(), &mut (*lists), broadcasts.clone(), &mut (*positions), keyboard.clone(), mouse, timer, rng, &mut (*looks), target_costumes.clone(), costume_dims.clone(), sound_queue.clone()).truthy()))
         }
         BlockKind::Not(v) => {
             let v = *v;
-            ScratchValue::Bool((!eval(v.clone(), &mut (*vars), frame.clone(), procs.clone(), &mut (*lists), broadcasts.clone(), &mut (*positions), keyboard.clone(), mouse, timer, &mut (*rng), &mut (*looks), target_costumes.clone(), costume_dims.clone(), sound_queue.clone()).truthy()))
+            ScratchValue::Bool((!eval(v.clone(), &mut (*vars), frame.clone(), procs.clone(), &mut (*lists), broadcasts.clone(), &mut (*positions), keyboard.clone(), mouse, timer, rng, &mut (*looks), target_costumes.clone(), costume_dims.clone(), sound_queue.clone()).truthy()))
         }
         BlockKind::Join(l, r) => {
             let l = *l;
             let r = *r;
-            ScratchValue::Str(Arc::<str>::from(Arc::<str>::from(format!("{}{}", eval(l.clone(), &mut (*vars), frame.clone(), procs.clone(), &mut (*lists), broadcasts.clone(), &mut (*positions), keyboard.clone(), mouse, timer, &mut (*rng), &mut (*looks), target_costumes.clone(), costume_dims.clone(), sound_queue.clone()), eval(r.clone(), &mut (*vars), frame.clone(), procs.clone(), &mut (*lists), broadcasts.clone(), &mut (*positions), keyboard.clone(), mouse, timer, &mut (*rng), &mut (*looks), target_costumes.clone(), costume_dims.clone(), sound_queue.clone())).as_str())))
+            ScratchValue::Str(Arc::<str>::from(Arc::<str>::from(format!("{}{}", eval(l.clone(), &mut (*vars), frame.clone(), procs.clone(), &mut (*lists), broadcasts.clone(), &mut (*positions), keyboard.clone(), mouse, timer, rng, &mut (*looks), target_costumes.clone(), costume_dims.clone(), sound_queue.clone()), eval(r.clone(), &mut (*vars), frame.clone(), procs.clone(), &mut (*lists), broadcasts.clone(), &mut (*positions), keyboard.clone(), mouse, timer, rng, &mut (*looks), target_costumes.clone(), costume_dims.clone(), sound_queue.clone())).as_str())))
         }
         BlockKind::LetterOf(idx_expr, str_expr) => {
             let idx_expr = *idx_expr;
             let str_expr = *str_expr;
-            let s: Arc<str> = Arc::<str>::from(Arc::<str>::from(format!("{}", eval(str_expr.clone(), &mut (*vars), frame.clone(), procs.clone(), &mut (*lists), broadcasts.clone(), &mut (*positions), keyboard.clone(), mouse, timer, &mut (*rng), &mut (*looks), target_costumes.clone(), costume_dims.clone(), sound_queue.clone())).as_str()));
+            let s: Arc<str> = Arc::<str>::from(Arc::<str>::from(format!("{}", eval(str_expr.clone(), &mut (*vars), frame.clone(), procs.clone(), &mut (*lists), broadcasts.clone(), &mut (*positions), keyboard.clone(), mouse, timer, rng, &mut (*looks), target_costumes.clone(), costume_dims.clone(), sound_queue.clone())).as_str()));
             let __strchars_s: Vec<char> = s.chars().collect();
-            let idx = eval(idx_expr.clone(), &mut (*vars), frame.clone(), procs.clone(), &mut (*lists), broadcasts.clone(), &mut (*positions), keyboard.clone(), mouse, timer, &mut (*rng), &mut (*looks), target_costumes.clone(), costume_dims.clone(), sound_queue.clone()).to_num().to_isize_checked().unwrap_or_else(|| 0);
+            let idx = eval(idx_expr.clone(), &mut (*vars), frame.clone(), procs.clone(), &mut (*lists), broadcasts.clone(), &mut (*positions), keyboard.clone(), mouse, timer, rng, &mut (*looks), target_costumes.clone(), costume_dims.clone(), sound_queue.clone()).to_num().to_isize_checked().unwrap_or_else(|| 0);
             if ((idx >= 1) && (idx <= (s.len() as isize))) {
                 let idx0 = (idx - 1);
-                ScratchValue::Str(Arc::from(s.chars().skip((idx0) as usize).take((idx) as usize-(idx0) as usize).collect::<String>().as_str()))
+                ScratchValue::Str(Arc::<str>::from(s.chars().skip((idx0) as usize).take((idx) as usize-(idx0) as usize).collect::<String>().as_str()))
             } else {
                 ScratchValue::Str(Arc::<str>::from(""))
             }
         }
         BlockKind::StringLength(str_expr) => {
             let str_expr = *str_expr;
-            ScratchValue::Num(ScratchNumber::from_isize((Arc::<str>::from(format!("{}", eval(str_expr.clone(), &mut (*vars), frame.clone(), procs.clone(), &mut (*lists), broadcasts.clone(), &mut (*positions), keyboard.clone(), mouse, timer, &mut (*rng), &mut (*looks), target_costumes.clone(), costume_dims.clone(), sound_queue.clone())).as_str()).len() as isize)))
+            ScratchValue::Num(ScratchNumber::from_isize((Arc::<str>::from(format!("{}", eval(str_expr.clone(), &mut (*vars), frame.clone(), procs.clone(), &mut (*lists), broadcasts.clone(), &mut (*positions), keyboard.clone(), mouse, timer, rng, &mut (*looks), target_costumes.clone(), costume_dims.clone(), sound_queue.clone())).as_str()).len() as isize)))
         }
         BlockKind::Contains(hay_expr, needle_expr) => {
             let hay_expr = *hay_expr;
             let needle_expr = *needle_expr;
-            let hay = Arc::<str>::from(Arc::<str>::from(format!("{}", eval(hay_expr.clone(), &mut (*vars), frame.clone(), procs.clone(), &mut (*lists), broadcasts.clone(), &mut (*positions), keyboard.clone(), mouse, timer, &mut (*rng), &mut (*looks), target_costumes.clone(), costume_dims.clone(), sound_queue.clone())).as_str()).to_lowercase().as_str());
-            let needle = Arc::<str>::from(Arc::<str>::from(format!("{}", eval(needle_expr.clone(), &mut (*vars), frame.clone(), procs.clone(), &mut (*lists), broadcasts.clone(), &mut (*positions), keyboard.clone(), mouse, timer, &mut (*rng), &mut (*looks), target_costumes.clone(), costume_dims.clone(), sound_queue.clone())).as_str()).to_lowercase().as_str());
+            let hay = Arc::<str>::from(Arc::<str>::from(format!("{}", eval(hay_expr.clone(), &mut (*vars), frame.clone(), procs.clone(), &mut (*lists), broadcasts.clone(), &mut (*positions), keyboard.clone(), mouse, timer, rng, &mut (*looks), target_costumes.clone(), costume_dims.clone(), sound_queue.clone())).as_str()).to_lowercase().as_str());
+            let needle = Arc::<str>::from(Arc::<str>::from(format!("{}", eval(needle_expr.clone(), &mut (*vars), frame.clone(), procs.clone(), &mut (*lists), broadcasts.clone(), &mut (*positions), keyboard.clone(), mouse, timer, rng, &mut (*looks), target_costumes.clone(), costume_dims.clone(), sound_queue.clone())).as_str()).to_lowercase().as_str());
             ScratchValue::Bool(hay.contains(&needle.as_ref()))
         }
         BlockKind::MathOp(op, num_expr) => {
             let num_expr = *num_expr;
-            let n = eval(num_expr.clone(), &mut (*vars), frame.clone(), procs.clone(), &mut (*lists), broadcasts.clone(), &mut (*positions), keyboard.clone(), mouse, timer, &mut (*rng), &mut (*looks), target_costumes.clone(), costume_dims.clone(), sound_queue.clone()).to_num().to_f64();
+            let n = eval(num_expr.clone(), &mut (*vars), frame.clone(), procs.clone(), &mut (*lists), broadcasts.clone(), &mut (*positions), keyboard.clone(), mouse, timer, rng, &mut (*looks), target_costumes.clone(), costume_dims.clone(), sound_queue.clone()).to_num().to_f64();
             let result =             match &*op {
                 "abs" => {
                     (n as f64).abs()
@@ -6377,23 +6377,23 @@ fn eval(b: Block, mut vars: &mut Vars, frame: Frame, procs: ProcTable, mut lists
         BlockKind::Random(from_expr, to_expr) => {
             let from_expr = *from_expr;
             let to_expr = *to_expr;
-            let from_f = eval(from_expr.clone(), &mut (*vars), frame.clone(), procs.clone(), &mut (*lists), broadcasts.clone(), &mut (*positions), keyboard.clone(), mouse, timer, &mut (*rng), &mut (*looks), target_costumes.clone(), costume_dims.clone(), sound_queue.clone()).to_num().to_f64();
-            let to_f = eval(to_expr.clone(), &mut (*vars), frame.clone(), procs.clone(), &mut (*lists), broadcasts.clone(), &mut (*positions), keyboard.clone(), mouse, timer, &mut (*rng), &mut (*looks), target_costumes.clone(), costume_dims.clone(), sound_queue.clone()).to_num().to_f64();
+            let from_f = eval(from_expr.clone(), &mut (*vars), frame.clone(), procs.clone(), &mut (*lists), broadcasts.clone(), &mut (*positions), keyboard.clone(), mouse, timer, rng, &mut (*looks), target_costumes.clone(), costume_dims.clone(), sound_queue.clone()).to_num().to_f64();
+            let to_f = eval(to_expr.clone(), &mut (*vars), frame.clone(), procs.clone(), &mut (*lists), broadcasts.clone(), &mut (*positions), keyboard.clone(), mouse, timer, rng, &mut (*looks), target_costumes.clone(), costume_dims.clone(), sound_queue.clone()).to_num().to_f64();
             if (from_f == to_f) {
-                ScratchValue::Num(ScratchNumber::from_f64(from_f))
+                ScratchValue::Num(ScratchNumber::from_f64(from_f.clone()))
             } else {
                 let min_v = {
                 if (from_f < to_f) {
-                    from_f
+                    from_f.clone()
                 } else {
-                    to_f
+                    to_f.clone()
                 }
 };
                 let max_v = {
                 if (from_f < to_f) {
-                    to_f
+                    to_f.clone()
                 } else {
-                    from_f
+                    from_f.clone()
                 }
 };
                 let use_float = (((min_v % 1.0) != 0.0) || ((max_v % 1.0) != 0.0));
@@ -6407,14 +6407,14 @@ fn eval(b: Block, mut vars: &mut Vars, frame: Frame, procs: ProcTable, mut lists
         }
         BlockKind::ListItemAt(list_id, idx_expr) => {
             let idx_expr = *idx_expr;
-            let idx_val = eval(idx_expr.clone(), &mut (*vars), frame.clone(), procs.clone(), &mut (*lists), broadcasts.clone(), &mut (*positions), keyboard.clone(), mouse, timer, &mut (*rng), &mut (*looks), target_costumes.clone(), costume_dims.clone(), sound_queue.clone());
+            let idx_val = eval(idx_expr.clone(), &mut (*vars), frame.clone(), procs.clone(), &mut (*lists), broadcasts.clone(), &mut (*positions), keyboard.clone(), mouse, timer, rng, &mut (*looks), target_costumes.clone(), costume_dims.clone(), sound_queue.clone());
             let len = (*lists).length(list_id.clone(), frame.target_id.clone().clone());
-            let idx0 = resolve_list_index(idx_val.clone(), len, false);
+            let idx0 = resolve_list_index(idx_val.clone(), len.clone(), false);
             (*lists).item_at(list_id.clone(), frame.target_id.clone().clone(), idx0.clone())
         }
         BlockKind::ListItemNum(list_id, item_expr) => {
             let item_expr = *item_expr;
-            let item = eval(item_expr.clone(), &mut (*vars), frame.clone(), procs.clone(), &mut (*lists), broadcasts.clone(), &mut (*positions), keyboard.clone(), mouse, timer, &mut (*rng), &mut (*looks), target_costumes.clone(), costume_dims.clone(), sound_queue.clone());
+            let item = eval(item_expr.clone(), &mut (*vars), frame.clone(), procs.clone(), &mut (*lists), broadcasts.clone(), &mut (*positions), keyboard.clone(), mouse, timer, rng, &mut (*looks), target_costumes.clone(), costume_dims.clone(), sound_queue.clone());
             ScratchValue::Num(ScratchNumber::from_isize((*lists).index_of(list_id.clone(), frame.target_id.clone().clone(), item.clone())))
         }
         BlockKind::ListLength(list_id) => {
@@ -6422,7 +6422,7 @@ fn eval(b: Block, mut vars: &mut Vars, frame: Frame, procs: ProcTable, mut lists
         }
         BlockKind::ListContains(list_id, item_expr) => {
             let item_expr = *item_expr;
-            let item = eval(item_expr.clone(), &mut (*vars), frame.clone(), procs.clone(), &mut (*lists), broadcasts.clone(), &mut (*positions), keyboard.clone(), mouse, timer, &mut (*rng), &mut (*looks), target_costumes.clone(), costume_dims.clone(), sound_queue.clone());
+            let item = eval(item_expr.clone(), &mut (*vars), frame.clone(), procs.clone(), &mut (*lists), broadcasts.clone(), &mut (*positions), keyboard.clone(), mouse, timer, rng, &mut (*looks), target_costumes.clone(), costume_dims.clone(), sound_queue.clone());
             let found = (*lists).has_item(list_id.clone(), frame.target_id.clone().clone(), item.clone());
             ScratchValue::Bool(found)
         }
@@ -6437,7 +6437,7 @@ fn eval(b: Block, mut vars: &mut Vars, frame: Frame, procs: ProcTable, mut lists
         }
         BlockKind::KeyPressed(key_expr) => {
             let key_expr = *key_expr;
-            let key_option: Arc<str> = Arc::<str>::from(Arc::<str>::from(format!("{}", eval(key_expr.clone(), &mut (*vars), frame.clone(), procs.clone(), &mut (*lists), broadcasts.clone(), &mut (*positions), keyboard.clone(), mouse, timer, &mut (*rng), &mut (*looks), target_costumes.clone(), costume_dims.clone(), sound_queue.clone())).as_str()));
+            let key_option: Arc<str> = Arc::<str>::from(Arc::<str>::from(format!("{}", eval(key_expr.clone(), &mut (*vars), frame.clone(), procs.clone(), &mut (*lists), broadcasts.clone(), &mut (*positions), keyboard.clone(), mouse, timer, rng, &mut (*looks), target_costumes.clone(), costume_dims.clone(), sound_queue.clone())).as_str()));
             ScratchValue::Bool(keyboard.is_pressed(key_option.clone()))
         }
         BlockKind::MouseX => {
@@ -6495,12 +6495,12 @@ fn eval(b: Block, mut vars: &mut Vars, frame: Frame, procs: ProcTable, mut lists
         }
         BlockKind::Touching(what_expr) => {
             let what_expr = *what_expr;
-            let what: Arc<str> = Arc::<str>::from(Arc::<str>::from(format!("{}", eval(what_expr.clone(), &mut (*vars), frame.clone(), procs.clone(), &mut (*lists), broadcasts.clone(), &mut (*positions), keyboard.clone(), mouse, timer, &mut (*rng), &mut (*looks), target_costumes.clone(), costume_dims.clone(), sound_queue.clone())).as_str()));
+            let what: Arc<str> = Arc::<str>::from(Arc::<str>::from(format!("{}", eval(what_expr.clone(), &mut (*vars), frame.clone(), procs.clone(), &mut (*lists), broadcasts.clone(), &mut (*positions), keyboard.clone(), mouse, timer, rng, &mut (*looks), target_costumes.clone(), costume_dims.clone(), sound_queue.clone())).as_str()));
             let self_id = frame.target_id.clone().clone();
             let self_pos = (*positions).get(self_id.clone());
             let self_looks = (*looks).get(self_id.clone());
             let self_origin = sound_queue.instance_type_of(self_id.clone());
-            let self_dim = costume_dims.get(self_origin, self_looks.costume_index);
+            let self_dim = costume_dims.get(self_origin.clone(), self_looks.costume_index);
             let self_scale = (self_looks.size / 100.0);
             let self_hw = ((self_dim.width * self_scale) / 2.0);
             let self_hh = ((self_dim.height * self_scale) / 2.0);
@@ -6524,7 +6524,7 @@ fn eval(b: Block, mut vars: &mut Vars, frame: Frame, procs: ProcTable, mut lists
         }
         BlockKind::TouchingColor(color_expr) => {
             let color_expr = *color_expr;
-            let hex: Arc<str> = Arc::<str>::from(Arc::<str>::from(format!("{}", eval(color_expr.clone(), &mut (*vars), frame.clone(), procs.clone(), &mut (*lists), broadcasts.clone(), &mut (*positions), keyboard.clone(), mouse, timer, &mut (*rng), &mut (*looks), target_costumes.clone(), costume_dims.clone(), sound_queue.clone())).as_str()));
+            let hex: Arc<str> = Arc::<str>::from(Arc::<str>::from(format!("{}", eval(color_expr.clone(), &mut (*vars), frame.clone(), procs.clone(), &mut (*lists), broadcasts.clone(), &mut (*positions), keyboard.clone(), mouse, timer, rng, &mut (*looks), target_costumes.clone(), costume_dims.clone(), sound_queue.clone())).as_str()));
             let target_color = hex_to_pen_color(hex.clone().clone());
             let self_id = frame.target_id.clone().clone();
             let self_looks = (*looks).get(self_id.clone());
@@ -6533,7 +6533,7 @@ fn eval(b: Block, mut vars: &mut Vars, frame: Frame, procs: ProcTable, mut lists
             } else {
                 let self_pos = (*positions).get(self_id.clone());
                 let self_origin = sound_queue.instance_type_of(self_id.clone());
-                let self_dim = costume_dims.get(self_origin, self_looks.costume_index);
+                let self_dim = costume_dims.get(self_origin.clone(), self_looks.costume_index);
                 let self_scale = (self_looks.size / 100.0);
                 let self_hw = ((self_dim.width * self_scale) / 2.0);
                 let self_hh = ((self_dim.height * self_scale) / 2.0);
@@ -6550,7 +6550,7 @@ fn eval(b: Block, mut vars: &mut Vars, frame: Frame, procs: ProcTable, mut lists
             if (self_id == Arc::<str>::from("Stage")) {
                 ScratchValue::Num(ScratchNumber::from_f32(10000.0))
             } else {
-                let what: Arc<str> = Arc::<str>::from(Arc::<str>::from(format!("{}", eval(what_expr.clone(), &mut (*vars), frame.clone(), procs.clone(), &mut (*lists), broadcasts.clone(), &mut (*positions), keyboard.clone(), mouse, timer, &mut (*rng), &mut (*looks), target_costumes.clone(), costume_dims.clone(), sound_queue.clone())).as_str()));
+                let what: Arc<str> = Arc::<str>::from(Arc::<str>::from(format!("{}", eval(what_expr.clone(), &mut (*vars), frame.clone(), procs.clone(), &mut (*lists), broadcasts.clone(), &mut (*positions), keyboard.clone(), mouse, timer, rng, &mut (*looks), target_costumes.clone(), costume_dims.clone(), sound_queue.clone())).as_str()));
                 let self_pos = (*positions).get(self_id.clone());
                 let target_x = {
                 if (what == Arc::<str>::from("_mouse_")) {
@@ -6575,7 +6575,7 @@ fn eval(b: Block, mut vars: &mut Vars, frame: Frame, procs: ProcTable, mut lists
         }
         BlockKind::SensingOf(object_expr, property) => {
             let object_expr = *object_expr;
-            let object_name: Arc<str> = Arc::<str>::from(Arc::<str>::from(format!("{}", eval(object_expr.clone(), &mut (*vars), frame.clone(), procs.clone(), &mut (*lists), broadcasts.clone(), &mut (*positions), keyboard.clone(), mouse, timer, &mut (*rng), &mut (*looks), target_costumes.clone(), costume_dims.clone(), sound_queue.clone())).as_str()));
+            let object_name: Arc<str> = Arc::<str>::from(Arc::<str>::from(format!("{}", eval(object_expr.clone(), &mut (*vars), frame.clone(), procs.clone(), &mut (*lists), broadcasts.clone(), &mut (*positions), keyboard.clone(), mouse, timer, rng, &mut (*looks), target_costumes.clone(), costume_dims.clone(), sound_queue.clone())).as_str()));
             if (object_name == Arc::<str>::from("_stage_")) {
                 if (property == Arc::<str>::from("backdrop #")) {
                     ScratchValue::Num(ScratchNumber::from_isize(((*looks).get(Arc::<str>::from("Stage")).costume_index + 1)))
@@ -6594,7 +6594,7 @@ fn eval(b: Block, mut vars: &mut Vars, frame: Frame, procs: ProcTable, mut lists
                     if (var_id == Arc::<str>::from("")) {
                         ScratchValue::Str(Arc::<str>::from(""))
                     } else {
-                        (*vars).get(var_id, frame.target_id.clone().clone())
+                        (*vars).get(var_id.clone(), frame.target_id.clone().clone())
                     }
                 }
             } else {
@@ -6623,7 +6623,7 @@ fn eval(b: Block, mut vars: &mut Vars, frame: Frame, procs: ProcTable, mut lists
                     if (var_id == Arc::<str>::from("")) {
                         ScratchValue::Str(Arc::<str>::from(""))
                     } else {
-                        (*vars).get(var_id, object_name.clone())
+                        (*vars).get(var_id.clone(), object_name.clone())
                     }
                 }
             }
@@ -6632,7 +6632,7 @@ fn eval(b: Block, mut vars: &mut Vars, frame: Frame, procs: ProcTable, mut lists
             let idx = (*looks).get(frame.target_id.clone().clone()).costume_index.clone();
             if (which == Arc::<str>::from("name")) {
                 let origin = sound_queue.instance_type_of(frame.target_id.clone().clone());
-                let names = target_costumes.get(origin);
+                let names = target_costumes.get(origin.clone());
                 if ((idx >= 0) && (idx < (names.len() as isize))) {
                     ScratchValue::Str(Arc::<str>::from(names[(idx) as usize].clone().to_string()))
                 } else {
@@ -6661,16 +6661,16 @@ fn eval(b: Block, mut vars: &mut Vars, frame: Frame, procs: ProcTable, mut lists
     }
 }
 
-fn exec_simple(b: Block, mut vars: &mut Vars, frame: Frame, procs: ProcTable, mut lists: &mut Lists, broadcasts: Broadcasts, mut positions: &mut Positions, keyboard: KeyboardState, mouse: &MouseState, timer: &ScratchTimer, mut rng: &mut Rng, mut looks: &mut LooksStates, mut layer_orders: &mut LayerOrders, target_costumes: TargetCostumes, costume_dims: TargetCostumeDims, mut sound_queue: &mut SoundQueue, mut speech_bubbles: &mut SpeechBubbles, mut spawned: &mut Vec<ReceiverScript>) -> () {
+fn exec_simple(b: Block, mut vars: &mut Vars, frame: Frame, procs: ProcTable, mut lists: &mut Lists, broadcasts: Broadcasts, mut positions: &mut Positions, keyboard: KeyboardState, mouse: &MouseState, timer: &ScratchTimer, mut rng: &mut Rng, mut looks: &mut LooksStates, mut layer_orders: &mut LayerOrders, target_costumes: TargetCostumes, costume_dims: TargetCostumeDims, mut sound_queue: &mut SoundQueue, mut speech_bubbles: &mut SpeechBubbles, spawned: &mut Vec<ReceiverScript>) -> () {
     match b.kind.clone() {
         BlockKind::SetVar(id, expr) => {
             let expr = *expr;
-            let v = eval(expr.clone(), &mut (*vars), frame.clone(), procs.clone(), &mut (*lists), broadcasts.clone(), &mut (*positions), keyboard.clone(), mouse, timer, &mut (*rng), &mut (*looks), target_costumes.clone(), costume_dims.clone(), (*sound_queue).clone());
+            let v = eval(expr.clone(), &mut (*vars), frame.clone(), procs.clone(), &mut (*lists), broadcasts.clone(), &mut (*positions), keyboard.clone(), mouse, timer, rng, &mut (*looks), target_costumes.clone(), costume_dims.clone(), (*sound_queue).clone());
             (*vars).set(id.clone(), frame.target_id.clone().clone(), v.clone());
         }
         BlockKind::ChangeVar(id, delta_expr) => {
             let delta_expr = *delta_expr;
-            let delta = eval(delta_expr.clone(), &mut (*vars), frame.clone(), procs.clone(), &mut (*lists), broadcasts.clone(), &mut (*positions), keyboard.clone(), mouse, timer, &mut (*rng), &mut (*looks), target_costumes.clone(), costume_dims.clone(), (*sound_queue).clone());
+            let delta = eval(delta_expr.clone(), &mut (*vars), frame.clone(), procs.clone(), &mut (*lists), broadcasts.clone(), &mut (*positions), keyboard.clone(), mouse, timer, rng, &mut (*looks), target_costumes.clone(), costume_dims.clone(), (*sound_queue).clone());
             let current = (*vars).get(id.clone(), frame.target_id.clone().clone());
             let updated = ScratchValue::Num(current.to_num().add_owned(delta.to_num()));
             (*vars).set(id.clone(), frame.target_id.clone().clone(), updated.clone());
@@ -6689,34 +6689,34 @@ fn exec_simple(b: Block, mut vars: &mut Vars, frame: Frame, procs: ProcTable, mu
         }
         BlockKind::Broadcast(msg_expr) => {
             let msg_expr = *msg_expr;
-            let msg_val = eval(msg_expr.clone(), &mut (*vars), frame.clone(), procs.clone(), &mut (*lists), broadcasts.clone(), &mut (*positions), keyboard.clone(), mouse, timer, &mut (*rng), &mut (*looks), target_costumes.clone(), costume_dims.clone(), (*sound_queue).clone());
+            let msg_val = eval(msg_expr.clone(), &mut (*vars), frame.clone(), procs.clone(), &mut (*lists), broadcasts.clone(), &mut (*positions), keyboard.clone(), mouse, timer, rng, &mut (*looks), target_costumes.clone(), costume_dims.clone(), (*sound_queue).clone());
             for script in broadcasts.get(Arc::<str>::from(Arc::<str>::from(format!("{}", msg_val).as_str()))).into_iter() {
-                for instance_id in instances_of(&(*sound_queue).instance_types, Arc::<str>::from(script.target_id.clone().to_string())).into_iter() {
-                    (*spawned).push(ReceiverScript { target_id: Arc::<str>::from(instance_id.to_string()), body: script.body.clone() });
+                for instance_id in instances_of(&(*sound_queue).instance_types, Arc::<str>::from(script.target_id.clone().clone().to_string())).into_iter() {
+                    spawned.push(ReceiverScript { target_id: Arc::<str>::from(instance_id.to_string()), body: script.body.clone() });
                 }
             }
         }
         BlockKind::BroadcastAndWait(msg_expr) => {
             let msg_expr = *msg_expr;
-            let msg_val = eval(msg_expr.clone(), &mut (*vars), frame.clone(), procs.clone(), &mut (*lists), broadcasts.clone(), &mut (*positions), keyboard.clone(), mouse, timer, &mut (*rng), &mut (*looks), target_costumes.clone(), costume_dims.clone(), (*sound_queue).clone());
+            let msg_val = eval(msg_expr.clone(), &mut (*vars), frame.clone(), procs.clone(), &mut (*lists), broadcasts.clone(), &mut (*positions), keyboard.clone(), mouse, timer, rng, &mut (*looks), target_costumes.clone(), costume_dims.clone(), (*sound_queue).clone());
             for script in broadcasts.get(Arc::<str>::from(Arc::<str>::from(format!("{}", msg_val).as_str()))).into_iter() {
-                for instance_id in instances_of(&(*sound_queue).instance_types, Arc::<str>::from(script.target_id.clone().to_string())).into_iter() {
+                for instance_id in instances_of(&(*sound_queue).instance_types, Arc::<str>::from(script.target_id.clone().clone().to_string())).into_iter() {
                     let receiver_script: ReceiverScript = ReceiverScript { target_id: Arc::<str>::from(instance_id.to_string()), body: script.body.clone() };
                     let mut receiver = spawn_thread(receiver_script.clone());
-                    drive_thread_to_completion(&mut receiver, &mut (*vars), procs.clone(), &mut (*lists), broadcasts.clone(), &mut (*positions), keyboard.clone(), mouse, timer, &mut (*rng), &mut (*looks), &mut (*layer_orders), target_costumes.clone(), costume_dims.clone(), &mut (*sound_queue), &mut (*speech_bubbles), spawned);
+                    drive_thread_to_completion(&mut receiver, &mut (*vars), procs.clone(), &mut (*lists), broadcasts.clone(), &mut (*positions), keyboard.clone(), mouse, timer, rng, &mut (*looks), &mut (*layer_orders), target_costumes.clone(), costume_dims.clone(), &mut (*sound_queue), &mut (*speech_bubbles), spawned);
                 }
             }
         }
         BlockKind::ListAdd(list_id, item_expr) => {
             let item_expr = *item_expr;
-            let item = eval(item_expr.clone(), &mut (*vars), frame.clone(), procs.clone(), &mut (*lists), broadcasts.clone(), &mut (*positions), keyboard.clone(), mouse, timer, &mut (*rng), &mut (*looks), target_costumes.clone(), costume_dims.clone(), (*sound_queue).clone());
+            let item = eval(item_expr.clone(), &mut (*vars), frame.clone(), procs.clone(), &mut (*lists), broadcasts.clone(), &mut (*positions), keyboard.clone(), mouse, timer, rng, &mut (*looks), target_costumes.clone(), costume_dims.clone(), (*sound_queue).clone());
             (*lists).add(list_id.clone(), frame.target_id.clone().clone(), item.clone());
         }
         BlockKind::ListDeleteAt(list_id, idx_expr) => {
             let idx_expr = *idx_expr;
-            let idx_val = eval(idx_expr.clone(), &mut (*vars), frame.clone(), procs.clone(), &mut (*lists), broadcasts.clone(), &mut (*positions), keyboard.clone(), mouse, timer, &mut (*rng), &mut (*looks), target_costumes.clone(), costume_dims.clone(), (*sound_queue).clone());
+            let idx_val = eval(idx_expr.clone(), &mut (*vars), frame.clone(), procs.clone(), &mut (*lists), broadcasts.clone(), &mut (*positions), keyboard.clone(), mouse, timer, rng, &mut (*looks), target_costumes.clone(), costume_dims.clone(), (*sound_queue).clone());
             let len = (*lists).length(list_id.clone(), frame.target_id.clone().clone());
-            let idx0 = resolve_list_index(idx_val.clone(), len, false);
+            let idx0 = resolve_list_index(idx_val.clone(), len.clone(), false);
             (*lists).delete_at(list_id.clone(), frame.target_id.clone().clone(), idx0.clone());
         }
         BlockKind::ListDeleteAll(list_id) => {
@@ -6725,56 +6725,56 @@ fn exec_simple(b: Block, mut vars: &mut Vars, frame: Frame, procs: ProcTable, mu
         BlockKind::ListInsertAt(list_id, idx_expr, item_expr) => {
             let idx_expr = *idx_expr;
             let item_expr = *item_expr;
-            let idx_val = eval(idx_expr.clone(), &mut (*vars), frame.clone(), procs.clone(), &mut (*lists), broadcasts.clone(), &mut (*positions), keyboard.clone(), mouse, timer, &mut (*rng), &mut (*looks), target_costumes.clone(), costume_dims.clone(), (*sound_queue).clone());
-            let item = eval(item_expr.clone(), &mut (*vars), frame.clone(), procs.clone(), &mut (*lists), broadcasts.clone(), &mut (*positions), keyboard.clone(), mouse, timer, &mut (*rng), &mut (*looks), target_costumes.clone(), costume_dims.clone(), (*sound_queue).clone());
+            let idx_val = eval(idx_expr.clone(), &mut (*vars), frame.clone(), procs.clone(), &mut (*lists), broadcasts.clone(), &mut (*positions), keyboard.clone(), mouse, timer, rng, &mut (*looks), target_costumes.clone(), costume_dims.clone(), (*sound_queue).clone());
+            let item = eval(item_expr.clone(), &mut (*vars), frame.clone(), procs.clone(), &mut (*lists), broadcasts.clone(), &mut (*positions), keyboard.clone(), mouse, timer, rng, &mut (*looks), target_costumes.clone(), costume_dims.clone(), (*sound_queue).clone());
             let len = (*lists).length(list_id.clone(), frame.target_id.clone().clone());
-            let idx0 = resolve_list_index(idx_val.clone(), len, true);
+            let idx0 = resolve_list_index(idx_val.clone(), len.clone(), true);
             (*lists).insert_at(list_id.clone(), frame.target_id.clone().clone(), idx0.clone(), item.clone());
         }
         BlockKind::ListReplaceAt(list_id, idx_expr, item_expr) => {
             let idx_expr = *idx_expr;
             let item_expr = *item_expr;
-            let idx_val = eval(idx_expr.clone(), &mut (*vars), frame.clone(), procs.clone(), &mut (*lists), broadcasts.clone(), &mut (*positions), keyboard.clone(), mouse, timer, &mut (*rng), &mut (*looks), target_costumes.clone(), costume_dims.clone(), (*sound_queue).clone());
-            let item = eval(item_expr.clone(), &mut (*vars), frame.clone(), procs.clone(), &mut (*lists), broadcasts.clone(), &mut (*positions), keyboard.clone(), mouse, timer, &mut (*rng), &mut (*looks), target_costumes.clone(), costume_dims.clone(), (*sound_queue).clone());
+            let idx_val = eval(idx_expr.clone(), &mut (*vars), frame.clone(), procs.clone(), &mut (*lists), broadcasts.clone(), &mut (*positions), keyboard.clone(), mouse, timer, rng, &mut (*looks), target_costumes.clone(), costume_dims.clone(), (*sound_queue).clone());
+            let item = eval(item_expr.clone(), &mut (*vars), frame.clone(), procs.clone(), &mut (*lists), broadcasts.clone(), &mut (*positions), keyboard.clone(), mouse, timer, rng, &mut (*looks), target_costumes.clone(), costume_dims.clone(), (*sound_queue).clone());
             let len = (*lists).length(list_id.clone(), frame.target_id.clone().clone());
-            let idx0 = resolve_list_index(idx_val.clone(), len, false);
+            let idx0 = resolve_list_index(idx_val.clone(), len.clone(), false);
             (*lists).replace_at(list_id.clone(), frame.target_id.clone().clone(), idx0.clone(), item.clone());
         }
         BlockKind::MoveSteps(steps_expr) => {
             let steps_expr = *steps_expr;
-            let steps = eval(steps_expr.clone(), &mut (*vars), frame.clone(), procs.clone(), &mut (*lists), broadcasts.clone(), &mut (*positions), keyboard.clone(), mouse, timer, &mut (*rng), &mut (*looks), target_costumes.clone(), costume_dims.clone(), (*sound_queue).clone()).to_num().to_f32();
+            let steps = eval(steps_expr.clone(), &mut (*vars), frame.clone(), procs.clone(), &mut (*lists), broadcasts.clone(), &mut (*positions), keyboard.clone(), mouse, timer, rng, &mut (*looks), target_costumes.clone(), costume_dims.clone(), (*sound_queue).clone()).to_num().to_f32();
             let p = (*positions).get(frame.target_id.clone().clone());
-            move_position(&mut (*positions), &mut (*sound_queue), Arc::<str>::from(frame.target_id.clone().clone().to_string()), &Position { x: (p.x + p.move_dx(steps)), y: (p.y + p.move_dy(steps)), direction: p.direction });
+            move_position(&mut (*positions), &mut (*sound_queue), Arc::<str>::from(frame.target_id.clone().clone().to_string()), &Position { x: (p.x + p.move_dx(steps.clone())), y: (p.y + p.move_dy(steps.clone())), direction: p.direction });
         }
         BlockKind::TurnRight(deg_expr) => {
             let deg_expr = *deg_expr;
-            let delta = eval(deg_expr.clone(), &mut (*vars), frame.clone(), procs.clone(), &mut (*lists), broadcasts.clone(), &mut (*positions), keyboard.clone(), mouse, timer, &mut (*rng), &mut (*looks), target_costumes.clone(), costume_dims.clone(), (*sound_queue).clone()).to_num().to_f32();
+            let delta = eval(deg_expr.clone(), &mut (*vars), frame.clone(), procs.clone(), &mut (*lists), broadcasts.clone(), &mut (*positions), keyboard.clone(), mouse, timer, rng, &mut (*looks), target_costumes.clone(), costume_dims.clone(), (*sound_queue).clone()).to_num().to_f32();
             let p = (*positions).get(frame.target_id.clone().clone());
             (*positions).set(frame.target_id.clone().clone(), Position { x: p.x, y: p.y, direction: normalize_direction((p.direction + delta)) });
         }
         BlockKind::TurnLeft(deg_expr) => {
             let deg_expr = *deg_expr;
-            let delta = eval(deg_expr.clone(), &mut (*vars), frame.clone(), procs.clone(), &mut (*lists), broadcasts.clone(), &mut (*positions), keyboard.clone(), mouse, timer, &mut (*rng), &mut (*looks), target_costumes.clone(), costume_dims.clone(), (*sound_queue).clone()).to_num().to_f32();
+            let delta = eval(deg_expr.clone(), &mut (*vars), frame.clone(), procs.clone(), &mut (*lists), broadcasts.clone(), &mut (*positions), keyboard.clone(), mouse, timer, rng, &mut (*looks), target_costumes.clone(), costume_dims.clone(), (*sound_queue).clone()).to_num().to_f32();
             let p = (*positions).get(frame.target_id.clone().clone());
             (*positions).set(frame.target_id.clone().clone(), Position { x: p.x, y: p.y, direction: normalize_direction((p.direction - delta)) });
         }
         BlockKind::PointInDirection(dir_expr) => {
             let dir_expr = *dir_expr;
-            let dir = eval(dir_expr.clone(), &mut (*vars), frame.clone(), procs.clone(), &mut (*lists), broadcasts.clone(), &mut (*positions), keyboard.clone(), mouse, timer, &mut (*rng), &mut (*looks), target_costumes.clone(), costume_dims.clone(), (*sound_queue).clone()).to_num().to_f32();
+            let dir = eval(dir_expr.clone(), &mut (*vars), frame.clone(), procs.clone(), &mut (*lists), broadcasts.clone(), &mut (*positions), keyboard.clone(), mouse, timer, rng, &mut (*looks), target_costumes.clone(), costume_dims.clone(), (*sound_queue).clone()).to_num().to_f32();
             let p = (*positions).get(frame.target_id.clone().clone());
-            (*positions).set(frame.target_id.clone().clone(), Position { x: p.x, y: p.y, direction: normalize_direction(dir) });
+            (*positions).set(frame.target_id.clone().clone(), Position { x: p.x, y: p.y, direction: normalize_direction(dir.clone()) });
         }
         BlockKind::GotoXY(x_expr, y_expr) => {
             let x_expr = *x_expr;
             let y_expr = *y_expr;
-            let x = eval(x_expr.clone(), &mut (*vars), frame.clone(), procs.clone(), &mut (*lists), broadcasts.clone(), &mut (*positions), keyboard.clone(), mouse, timer, &mut (*rng), &mut (*looks), target_costumes.clone(), costume_dims.clone(), (*sound_queue).clone()).to_num().to_f32();
-            let y = eval(y_expr.clone(), &mut (*vars), frame.clone(), procs.clone(), &mut (*lists), broadcasts.clone(), &mut (*positions), keyboard.clone(), mouse, timer, &mut (*rng), &mut (*looks), target_costumes.clone(), costume_dims.clone(), (*sound_queue).clone()).to_num().to_f32();
+            let x = eval(x_expr.clone(), &mut (*vars), frame.clone(), procs.clone(), &mut (*lists), broadcasts.clone(), &mut (*positions), keyboard.clone(), mouse, timer, rng, &mut (*looks), target_costumes.clone(), costume_dims.clone(), (*sound_queue).clone()).to_num().to_f32();
+            let y = eval(y_expr.clone(), &mut (*vars), frame.clone(), procs.clone(), &mut (*lists), broadcasts.clone(), &mut (*positions), keyboard.clone(), mouse, timer, rng, &mut (*looks), target_costumes.clone(), costume_dims.clone(), (*sound_queue).clone()).to_num().to_f32();
             let p = (*positions).get(frame.target_id.clone().clone());
             move_position(&mut (*positions), &mut (*sound_queue), Arc::<str>::from(frame.target_id.clone().clone().to_string()), &Position { x: x, y: y, direction: p.direction });
         }
         BlockKind::GoTo(to_expr) => {
             let to_expr = *to_expr;
-            let to: Arc<str> = Arc::<str>::from(Arc::<str>::from(format!("{}", eval(to_expr.clone(), &mut (*vars), frame.clone(), procs.clone(), &mut (*lists), broadcasts.clone(), &mut (*positions), keyboard.clone(), mouse, timer, &mut (*rng), &mut (*looks), target_costumes.clone(), costume_dims.clone(), (*sound_queue).clone())).as_str()));
+            let to: Arc<str> = Arc::<str>::from(Arc::<str>::from(format!("{}", eval(to_expr.clone(), &mut (*vars), frame.clone(), procs.clone(), &mut (*lists), broadcasts.clone(), &mut (*positions), keyboard.clone(), mouse, timer, rng, &mut (*looks), target_costumes.clone(), costume_dims.clone(), (*sound_queue).clone())).as_str()));
             let p = (*positions).get(frame.target_id.clone().clone());
             if (to == Arc::<str>::from("_mouse_")) {
                 move_position(&mut (*positions), &mut (*sound_queue), Arc::<str>::from(frame.target_id.clone().clone().to_string()), &Position { x: mouse.x, y: mouse.y, direction: p.direction });
@@ -6791,7 +6791,7 @@ fn exec_simple(b: Block, mut vars: &mut Vars, frame: Frame, procs: ProcTable, mu
         }
         BlockKind::PointTowards(towards_expr) => {
             let towards_expr = *towards_expr;
-            let towards: Arc<str> = Arc::<str>::from(Arc::<str>::from(format!("{}", eval(towards_expr.clone(), &mut (*vars), frame.clone(), procs.clone(), &mut (*lists), broadcasts.clone(), &mut (*positions), keyboard.clone(), mouse, timer, &mut (*rng), &mut (*looks), target_costumes.clone(), costume_dims.clone(), (*sound_queue).clone())).as_str()));
+            let towards: Arc<str> = Arc::<str>::from(Arc::<str>::from(format!("{}", eval(towards_expr.clone(), &mut (*vars), frame.clone(), procs.clone(), &mut (*lists), broadcasts.clone(), &mut (*positions), keyboard.clone(), mouse, timer, rng, &mut (*looks), target_costumes.clone(), costume_dims.clone(), (*sound_queue).clone())).as_str()));
             let p = (*positions).get(frame.target_id.clone().clone());
             if (towards == Arc::<str>::from("_random_")) {
                 let r = (*rng).next_f64_01();
@@ -6828,7 +6828,7 @@ fn exec_simple(b: Block, mut vars: &mut Vars, frame: Frame, procs: ProcTable, mu
             let p = (*positions).get(frame.target_id.clone().clone());
             let s = (*looks).get(frame.target_id.clone().clone());
             let origin_name = (*sound_queue).instance_type_of(frame.target_id.clone().clone());
-            let dim = costume_dims.get(origin_name, s.costume_index);
+            let dim = costume_dims.get(origin_name.clone(), s.costume_index);
             let scale = (s.size / 100.0);
             let hw = ((dim.width * scale) / 2.0);
             let hh = ((dim.height * scale) / 2.0);
@@ -6975,36 +6975,36 @@ fn exec_simple(b: Block, mut vars: &mut Vars, frame: Frame, procs: ProcTable, mu
         }
         BlockKind::ChangeXBy(dx_expr) => {
             let dx_expr = *dx_expr;
-            let dx = eval(dx_expr.clone(), &mut (*vars), frame.clone(), procs.clone(), &mut (*lists), broadcasts.clone(), &mut (*positions), keyboard.clone(), mouse, timer, &mut (*rng), &mut (*looks), target_costumes.clone(), costume_dims.clone(), (*sound_queue).clone()).to_num().to_f32();
+            let dx = eval(dx_expr.clone(), &mut (*vars), frame.clone(), procs.clone(), &mut (*lists), broadcasts.clone(), &mut (*positions), keyboard.clone(), mouse, timer, rng, &mut (*looks), target_costumes.clone(), costume_dims.clone(), (*sound_queue).clone()).to_num().to_f32();
             let p = (*positions).get(frame.target_id.clone().clone());
             move_position(&mut (*positions), &mut (*sound_queue), Arc::<str>::from(frame.target_id.clone().clone().to_string()), &Position { x: (p.x + dx), y: p.y, direction: p.direction });
         }
         BlockKind::SetX(x_expr) => {
             let x_expr = *x_expr;
-            let x = eval(x_expr.clone(), &mut (*vars), frame.clone(), procs.clone(), &mut (*lists), broadcasts.clone(), &mut (*positions), keyboard.clone(), mouse, timer, &mut (*rng), &mut (*looks), target_costumes.clone(), costume_dims.clone(), (*sound_queue).clone()).to_num().to_f32();
+            let x = eval(x_expr.clone(), &mut (*vars), frame.clone(), procs.clone(), &mut (*lists), broadcasts.clone(), &mut (*positions), keyboard.clone(), mouse, timer, rng, &mut (*looks), target_costumes.clone(), costume_dims.clone(), (*sound_queue).clone()).to_num().to_f32();
             let p = (*positions).get(frame.target_id.clone().clone());
             move_position(&mut (*positions), &mut (*sound_queue), Arc::<str>::from(frame.target_id.clone().clone().to_string()), &Position { x: x, y: p.y, direction: p.direction });
         }
         BlockKind::ChangeYBy(dy_expr) => {
             let dy_expr = *dy_expr;
-            let dy = eval(dy_expr.clone(), &mut (*vars), frame.clone(), procs.clone(), &mut (*lists), broadcasts.clone(), &mut (*positions), keyboard.clone(), mouse, timer, &mut (*rng), &mut (*looks), target_costumes.clone(), costume_dims.clone(), (*sound_queue).clone()).to_num().to_f32();
+            let dy = eval(dy_expr.clone(), &mut (*vars), frame.clone(), procs.clone(), &mut (*lists), broadcasts.clone(), &mut (*positions), keyboard.clone(), mouse, timer, rng, &mut (*looks), target_costumes.clone(), costume_dims.clone(), (*sound_queue).clone()).to_num().to_f32();
             let p = (*positions).get(frame.target_id.clone().clone());
             move_position(&mut (*positions), &mut (*sound_queue), Arc::<str>::from(frame.target_id.clone().clone().to_string()), &Position { x: p.x, y: (p.y + dy), direction: p.direction });
         }
         BlockKind::SetY(y_expr) => {
             let y_expr = *y_expr;
-            let y = eval(y_expr.clone(), &mut (*vars), frame.clone(), procs.clone(), &mut (*lists), broadcasts.clone(), &mut (*positions), keyboard.clone(), mouse, timer, &mut (*rng), &mut (*looks), target_costumes.clone(), costume_dims.clone(), (*sound_queue).clone()).to_num().to_f32();
+            let y = eval(y_expr.clone(), &mut (*vars), frame.clone(), procs.clone(), &mut (*lists), broadcasts.clone(), &mut (*positions), keyboard.clone(), mouse, timer, rng, &mut (*looks), target_costumes.clone(), costume_dims.clone(), (*sound_queue).clone()).to_num().to_f32();
             let p = (*positions).get(frame.target_id.clone().clone());
             move_position(&mut (*positions), &mut (*sound_queue), Arc::<str>::from(frame.target_id.clone().clone().to_string()), &Position { x: p.x, y: y, direction: p.direction });
         }
         BlockKind::PlaySound(sound_expr) => {
             let sound_expr = *sound_expr;
-            let sound_name: Arc<str> = Arc::<str>::from(Arc::<str>::from(format!("{}", eval(sound_expr.clone(), &mut (*vars), frame.clone(), procs.clone(), &mut (*lists), broadcasts.clone(), &mut (*positions), keyboard.clone(), mouse, timer, &mut (*rng), &mut (*looks), target_costumes.clone(), costume_dims.clone(), (*sound_queue).clone())).as_str()));
+            let sound_name: Arc<str> = Arc::<str>::from(Arc::<str>::from(format!("{}", eval(sound_expr.clone(), &mut (*vars), frame.clone(), procs.clone(), &mut (*lists), broadcasts.clone(), &mut (*positions), keyboard.clone(), mouse, timer, rng, &mut (*looks), target_costumes.clone(), costume_dims.clone(), (*sound_queue).clone())).as_str()));
             let volume = (*sound_queue).get_volume(frame.target_id.clone().clone());
             let origin_name = (*sound_queue).instance_type_of(frame.target_id.clone().clone());
             let pitch = (*sound_queue).get_pitch(frame.target_id.clone().clone());
             let pan = (*sound_queue).get_pan(frame.target_id.clone().clone());
-            (*sound_queue).play_queue.push(SoundRequest { target_id: Arc::<str>::from(origin_name.to_string()), sound_name: sound_name.clone().clone(), volume: volume, pitch: pitch, pan: pan });
+            (*sound_queue).play_queue.push(SoundRequest { target_id: Arc::<str>::from(origin_name.clone().to_string()), sound_name: sound_name.clone().clone(), volume: volume, pitch: pitch, pan: pan });
         }
         BlockKind::StopAllSounds => {
             (*sound_queue).stop_all_requested = true;
@@ -7030,96 +7030,96 @@ fn exec_simple(b: Block, mut vars: &mut Vars, frame: Frame, procs: ProcTable, mu
         }
         BlockKind::SetPenColorToColor(color_expr) => {
             let color_expr = *color_expr;
-            let hex: Arc<str> = Arc::<str>::from(Arc::<str>::from(format!("{}", eval(color_expr.clone(), &mut (*vars), frame.clone(), procs.clone(), &mut (*lists), broadcasts.clone(), &mut (*positions), keyboard.clone(), mouse, timer, &mut (*rng), &mut (*looks), target_costumes.clone(), costume_dims.clone(), (*sound_queue).clone())).as_str()));
+            let hex: Arc<str> = Arc::<str>::from(Arc::<str>::from(format!("{}", eval(color_expr.clone(), &mut (*vars), frame.clone(), procs.clone(), &mut (*lists), broadcasts.clone(), &mut (*positions), keyboard.clone(), mouse, timer, rng, &mut (*looks), target_costumes.clone(), costume_dims.clone(), (*sound_queue).clone())).as_str()));
             let current = (*sound_queue).get_pen_state(frame.target_id.clone().clone());
             (*sound_queue).set_pen_state(frame.target_id.clone().clone(), pen_state_from_hex_color(hex.clone().clone(), &current));
         }
         BlockKind::ChangePenColorParamBy(param, value_expr) => {
             let value_expr = *value_expr;
-            let v = eval(value_expr.clone(), &mut (*vars), frame.clone(), procs.clone(), &mut (*lists), broadcasts.clone(), &mut (*positions), keyboard.clone(), mouse, timer, &mut (*rng), &mut (*looks), target_costumes.clone(), costume_dims.clone(), (*sound_queue).clone()).to_num().to_f32();
+            let v = eval(value_expr.clone(), &mut (*vars), frame.clone(), procs.clone(), &mut (*lists), broadcasts.clone(), &mut (*positions), keyboard.clone(), mouse, timer, rng, &mut (*looks), target_costumes.clone(), costume_dims.clone(), (*sound_queue).clone()).to_num().to_f32();
             let current = (*sound_queue).get_pen_state(frame.target_id.clone().clone());
-            (*sound_queue).set_pen_state(frame.target_id.clone().clone(), apply_pen_color_param(Arc::<str>::from(param.clone().to_string()), v, &current, true));
+            (*sound_queue).set_pen_state(frame.target_id.clone().clone(), apply_pen_color_param(Arc::<str>::from(param.clone().to_string()), v.clone(), &current, true));
         }
         BlockKind::SetPenColorParamTo(param, value_expr) => {
             let value_expr = *value_expr;
-            let v = eval(value_expr.clone(), &mut (*vars), frame.clone(), procs.clone(), &mut (*lists), broadcasts.clone(), &mut (*positions), keyboard.clone(), mouse, timer, &mut (*rng), &mut (*looks), target_costumes.clone(), costume_dims.clone(), (*sound_queue).clone()).to_num().to_f32();
+            let v = eval(value_expr.clone(), &mut (*vars), frame.clone(), procs.clone(), &mut (*lists), broadcasts.clone(), &mut (*positions), keyboard.clone(), mouse, timer, rng, &mut (*looks), target_costumes.clone(), costume_dims.clone(), (*sound_queue).clone()).to_num().to_f32();
             let current = (*sound_queue).get_pen_state(frame.target_id.clone().clone());
-            (*sound_queue).set_pen_state(frame.target_id.clone().clone(), apply_pen_color_param(Arc::<str>::from(param.clone().to_string()), v, &current, false));
+            (*sound_queue).set_pen_state(frame.target_id.clone().clone(), apply_pen_color_param(Arc::<str>::from(param.clone().to_string()), v.clone(), &current, false));
         }
         BlockKind::ChangePenSizeBy(size_expr) => {
             let size_expr = *size_expr;
-            let v = eval(size_expr.clone(), &mut (*vars), frame.clone(), procs.clone(), &mut (*lists), broadcasts.clone(), &mut (*positions), keyboard.clone(), mouse, timer, &mut (*rng), &mut (*looks), target_costumes.clone(), costume_dims.clone(), (*sound_queue).clone()).to_num().to_f32();
+            let v = eval(size_expr.clone(), &mut (*vars), frame.clone(), procs.clone(), &mut (*lists), broadcasts.clone(), &mut (*positions), keyboard.clone(), mouse, timer, rng, &mut (*looks), target_costumes.clone(), costume_dims.clone(), (*sound_queue).clone()).to_num().to_f32();
             let current = (*sound_queue).get_pen_state(frame.target_id.clone().clone());
             (*sound_queue).set_pen_state(frame.target_id.clone().clone(), PenState { down: current.down, hue: current.hue, saturation: current.saturation, brightness: current.brightness, transparency: current.transparency, diameter: clamp_pen_size((current.diameter + v)), shade: current.shade });
         }
         BlockKind::SetPenSizeTo(size_expr) => {
             let size_expr = *size_expr;
-            let v = eval(size_expr.clone(), &mut (*vars), frame.clone(), procs.clone(), &mut (*lists), broadcasts.clone(), &mut (*positions), keyboard.clone(), mouse, timer, &mut (*rng), &mut (*looks), target_costumes.clone(), costume_dims.clone(), (*sound_queue).clone()).to_num().to_f32();
+            let v = eval(size_expr.clone(), &mut (*vars), frame.clone(), procs.clone(), &mut (*lists), broadcasts.clone(), &mut (*positions), keyboard.clone(), mouse, timer, rng, &mut (*looks), target_costumes.clone(), costume_dims.clone(), (*sound_queue).clone()).to_num().to_f32();
             let current = (*sound_queue).get_pen_state(frame.target_id.clone().clone());
-            (*sound_queue).set_pen_state(frame.target_id.clone().clone(), PenState { down: current.down, hue: current.hue, saturation: current.saturation, brightness: current.brightness, transparency: current.transparency, diameter: clamp_pen_size(v), shade: current.shade });
+            (*sound_queue).set_pen_state(frame.target_id.clone().clone(), PenState { down: current.down, hue: current.hue, saturation: current.saturation, brightness: current.brightness, transparency: current.transparency, diameter: clamp_pen_size(v.clone()), shade: current.shade });
         }
         BlockKind::SetPenHueToNumber(hue_expr) => {
             let hue_expr = *hue_expr;
-            let hue_value = eval(hue_expr.clone(), &mut (*vars), frame.clone(), procs.clone(), &mut (*lists), broadcasts.clone(), &mut (*positions), keyboard.clone(), mouse, timer, &mut (*rng), &mut (*looks), target_costumes.clone(), costume_dims.clone(), (*sound_queue).clone()).to_num().to_f32();
+            let hue_value = eval(hue_expr.clone(), &mut (*vars), frame.clone(), procs.clone(), &mut (*lists), broadcasts.clone(), &mut (*positions), keyboard.clone(), mouse, timer, rng, &mut (*looks), target_costumes.clone(), costume_dims.clone(), (*sound_queue).clone()).to_num().to_f32();
             let current = (*sound_queue).get_pen_state(frame.target_id.clone().clone());
-            (*sound_queue).set_pen_state(frame.target_id.clone().clone(), set_pen_hue_to_number(&current, hue_value));
+            (*sound_queue).set_pen_state(frame.target_id.clone().clone(), set_pen_hue_to_number(&current, hue_value.clone()));
         }
         BlockKind::ChangePenHueBy(hue_expr) => {
             let hue_expr = *hue_expr;
-            let hue_change = eval(hue_expr.clone(), &mut (*vars), frame.clone(), procs.clone(), &mut (*lists), broadcasts.clone(), &mut (*positions), keyboard.clone(), mouse, timer, &mut (*rng), &mut (*looks), target_costumes.clone(), costume_dims.clone(), (*sound_queue).clone()).to_num().to_f32();
+            let hue_change = eval(hue_expr.clone(), &mut (*vars), frame.clone(), procs.clone(), &mut (*lists), broadcasts.clone(), &mut (*positions), keyboard.clone(), mouse, timer, rng, &mut (*looks), target_costumes.clone(), costume_dims.clone(), (*sound_queue).clone()).to_num().to_f32();
             let current = (*sound_queue).get_pen_state(frame.target_id.clone().clone());
-            (*sound_queue).set_pen_state(frame.target_id.clone().clone(), change_pen_hue_by(&current, hue_change));
+            (*sound_queue).set_pen_state(frame.target_id.clone().clone(), change_pen_hue_by(&current, hue_change.clone()));
         }
         BlockKind::SetPenShadeToNumber(shade_expr) => {
             let shade_expr = *shade_expr;
-            let shade_value = eval(shade_expr.clone(), &mut (*vars), frame.clone(), procs.clone(), &mut (*lists), broadcasts.clone(), &mut (*positions), keyboard.clone(), mouse, timer, &mut (*rng), &mut (*looks), target_costumes.clone(), costume_dims.clone(), (*sound_queue).clone()).to_num().to_f32();
+            let shade_value = eval(shade_expr.clone(), &mut (*vars), frame.clone(), procs.clone(), &mut (*lists), broadcasts.clone(), &mut (*positions), keyboard.clone(), mouse, timer, rng, &mut (*looks), target_costumes.clone(), costume_dims.clone(), (*sound_queue).clone()).to_num().to_f32();
             let current = (*sound_queue).get_pen_state(frame.target_id.clone().clone());
-            (*sound_queue).set_pen_state(frame.target_id.clone().clone(), set_pen_shade_to_number(&current, shade_value));
+            (*sound_queue).set_pen_state(frame.target_id.clone().clone(), set_pen_shade_to_number(&current, shade_value.clone()));
         }
         BlockKind::ChangePenShadeBy(shade_expr) => {
             let shade_expr = *shade_expr;
-            let shade_change = eval(shade_expr.clone(), &mut (*vars), frame.clone(), procs.clone(), &mut (*lists), broadcasts.clone(), &mut (*positions), keyboard.clone(), mouse, timer, &mut (*rng), &mut (*looks), target_costumes.clone(), costume_dims.clone(), (*sound_queue).clone()).to_num().to_f32();
+            let shade_change = eval(shade_expr.clone(), &mut (*vars), frame.clone(), procs.clone(), &mut (*lists), broadcasts.clone(), &mut (*positions), keyboard.clone(), mouse, timer, rng, &mut (*looks), target_costumes.clone(), costume_dims.clone(), (*sound_queue).clone()).to_num().to_f32();
             let current = (*sound_queue).get_pen_state(frame.target_id.clone().clone());
-            (*sound_queue).set_pen_state(frame.target_id.clone().clone(), change_pen_shade_by(&current, shade_change));
+            (*sound_queue).set_pen_state(frame.target_id.clone().clone(), change_pen_shade_by(&current, shade_change.clone()));
         }
         BlockKind::Stamp => {
             let pos = (*positions).get(frame.target_id.clone().clone());
             let style = (*sound_queue).get_rotation_style(frame.target_id.clone().clone());
             let s = (*looks).get(frame.target_id.clone().clone());
-            (*sound_queue).stamp_requests.push(StampRequest { target_id: Arc::<str>::from(frame.target_id.clone().clone().to_string()), x: pos.x, y: pos.y, direction: pos.direction, rotation_style: Arc::<str>::from(style.to_string()), ghost: s.ghost, costume_index: s.costume_index, size: s.size });
+            (*sound_queue).stamp_requests.push(StampRequest { target_id: Arc::<str>::from(frame.target_id.clone().clone().to_string()), x: pos.x, y: pos.y, direction: pos.direction, rotation_style: Arc::<str>::from(style.clone().to_string()), ghost: s.ghost, costume_index: s.costume_index, size: s.size });
         }
         BlockKind::ResetTimer => {
             (*sound_queue).reset_timer_requested = true;
         }
         BlockKind::SetVolumeTo(volume_expr) => {
             let volume_expr = *volume_expr;
-            let v = eval(volume_expr.clone(), &mut (*vars), frame.clone(), procs.clone(), &mut (*lists), broadcasts.clone(), &mut (*positions), keyboard.clone(), mouse, timer, &mut (*rng), &mut (*looks), target_costumes.clone(), costume_dims.clone(), (*sound_queue).clone()).to_num().to_f32();
-            (*sound_queue).set_volume(frame.target_id.clone().clone(), clamp_volume(v));
+            let v = eval(volume_expr.clone(), &mut (*vars), frame.clone(), procs.clone(), &mut (*lists), broadcasts.clone(), &mut (*positions), keyboard.clone(), mouse, timer, rng, &mut (*looks), target_costumes.clone(), costume_dims.clone(), (*sound_queue).clone()).to_num().to_f32();
+            (*sound_queue).set_volume(frame.target_id.clone().clone(), clamp_volume(v.clone()));
         }
         BlockKind::ChangeVolumeBy(volume_expr) => {
             let volume_expr = *volume_expr;
-            let v = eval(volume_expr.clone(), &mut (*vars), frame.clone(), procs.clone(), &mut (*lists), broadcasts.clone(), &mut (*positions), keyboard.clone(), mouse, timer, &mut (*rng), &mut (*looks), target_costumes.clone(), costume_dims.clone(), (*sound_queue).clone()).to_num().to_f32();
+            let v = eval(volume_expr.clone(), &mut (*vars), frame.clone(), procs.clone(), &mut (*lists), broadcasts.clone(), &mut (*positions), keyboard.clone(), mouse, timer, rng, &mut (*looks), target_costumes.clone(), costume_dims.clone(), (*sound_queue).clone()).to_num().to_f32();
             let current = (*sound_queue).get_volume(frame.target_id.clone().clone());
             (*sound_queue).set_volume(frame.target_id.clone().clone(), clamp_volume((current + v)));
         }
         BlockKind::SetSoundEffectTo(effect, value_expr) => {
             let value_expr = *value_expr;
             if (effect == Arc::<str>::from("PITCH")) {
-                let v = eval(value_expr.clone(), &mut (*vars), frame.clone(), procs.clone(), &mut (*lists), broadcasts.clone(), &mut (*positions), keyboard.clone(), mouse, timer, &mut (*rng), &mut (*looks), target_costumes.clone(), costume_dims.clone(), (*sound_queue).clone()).to_num().to_f32();
-                (*sound_queue).set_pitch(frame.target_id.clone().clone(), clamp_pitch(v));
+                let v = eval(value_expr.clone(), &mut (*vars), frame.clone(), procs.clone(), &mut (*lists), broadcasts.clone(), &mut (*positions), keyboard.clone(), mouse, timer, rng, &mut (*looks), target_costumes.clone(), costume_dims.clone(), (*sound_queue).clone()).to_num().to_f32();
+                (*sound_queue).set_pitch(frame.target_id.clone().clone(), clamp_pitch(v.clone()));
             } else if (effect == Arc::<str>::from("PAN")) {
-                let v = eval(value_expr.clone(), &mut (*vars), frame.clone(), procs.clone(), &mut (*lists), broadcasts.clone(), &mut (*positions), keyboard.clone(), mouse, timer, &mut (*rng), &mut (*looks), target_costumes.clone(), costume_dims.clone(), (*sound_queue).clone()).to_num().to_f32();
-                (*sound_queue).set_pan(frame.target_id.clone().clone(), clamp_pan(v));
+                let v = eval(value_expr.clone(), &mut (*vars), frame.clone(), procs.clone(), &mut (*lists), broadcasts.clone(), &mut (*positions), keyboard.clone(), mouse, timer, rng, &mut (*looks), target_costumes.clone(), costume_dims.clone(), (*sound_queue).clone()).to_num().to_f32();
+                (*sound_queue).set_pan(frame.target_id.clone().clone(), clamp_pan(v.clone()));
             }
         }
         BlockKind::ChangeSoundEffectBy(effect, value_expr) => {
             let value_expr = *value_expr;
             if (effect == Arc::<str>::from("PITCH")) {
-                let v = eval(value_expr.clone(), &mut (*vars), frame.clone(), procs.clone(), &mut (*lists), broadcasts.clone(), &mut (*positions), keyboard.clone(), mouse, timer, &mut (*rng), &mut (*looks), target_costumes.clone(), costume_dims.clone(), (*sound_queue).clone()).to_num().to_f32();
+                let v = eval(value_expr.clone(), &mut (*vars), frame.clone(), procs.clone(), &mut (*lists), broadcasts.clone(), &mut (*positions), keyboard.clone(), mouse, timer, rng, &mut (*looks), target_costumes.clone(), costume_dims.clone(), (*sound_queue).clone()).to_num().to_f32();
                 let current = (*sound_queue).get_pitch(frame.target_id.clone().clone());
                 (*sound_queue).set_pitch(frame.target_id.clone().clone(), clamp_pitch((current + v)));
             } else if (effect == Arc::<str>::from("PAN")) {
-                let v = eval(value_expr.clone(), &mut (*vars), frame.clone(), procs.clone(), &mut (*lists), broadcasts.clone(), &mut (*positions), keyboard.clone(), mouse, timer, &mut (*rng), &mut (*looks), target_costumes.clone(), costume_dims.clone(), (*sound_queue).clone()).to_num().to_f32();
+                let v = eval(value_expr.clone(), &mut (*vars), frame.clone(), procs.clone(), &mut (*lists), broadcasts.clone(), &mut (*positions), keyboard.clone(), mouse, timer, rng, &mut (*looks), target_costumes.clone(), costume_dims.clone(), (*sound_queue).clone()).to_num().to_f32();
                 let current = (*sound_queue).get_pan(frame.target_id.clone().clone());
                 (*sound_queue).set_pan(frame.target_id.clone().clone(), clamp_pan((current + v)));
             }
@@ -7130,12 +7130,12 @@ fn exec_simple(b: Block, mut vars: &mut Vars, frame: Frame, procs: ProcTable, mu
         }
         BlockKind::Say(msg_expr) => {
             let msg_expr = *msg_expr;
-            let msg: Arc<str> = Arc::<str>::from(Arc::<str>::from(format!("{}", eval(msg_expr.clone(), &mut (*vars), frame.clone(), procs.clone(), &mut (*lists), broadcasts.clone(), &mut (*positions), keyboard.clone(), mouse, timer, &mut (*rng), &mut (*looks), target_costumes.clone(), costume_dims.clone(), (*sound_queue).clone())).as_str()));
+            let msg: Arc<str> = Arc::<str>::from(Arc::<str>::from(format!("{}", eval(msg_expr.clone(), &mut (*vars), frame.clone(), procs.clone(), &mut (*lists), broadcasts.clone(), &mut (*positions), keyboard.clone(), mouse, timer, rng, &mut (*looks), target_costumes.clone(), costume_dims.clone(), (*sound_queue).clone())).as_str()));
             (*speech_bubbles).set(frame.target_id.clone().clone(), SpeechBubble { text: msg.clone().clone(), is_thought: false });
         }
         BlockKind::Think(msg_expr) => {
             let msg_expr = *msg_expr;
-            let msg: Arc<str> = Arc::<str>::from(Arc::<str>::from(format!("{}", eval(msg_expr.clone(), &mut (*vars), frame.clone(), procs.clone(), &mut (*lists), broadcasts.clone(), &mut (*positions), keyboard.clone(), mouse, timer, &mut (*rng), &mut (*looks), target_costumes.clone(), costume_dims.clone(), (*sound_queue).clone())).as_str()));
+            let msg: Arc<str> = Arc::<str>::from(Arc::<str>::from(format!("{}", eval(msg_expr.clone(), &mut (*vars), frame.clone(), procs.clone(), &mut (*lists), broadcasts.clone(), &mut (*positions), keyboard.clone(), mouse, timer, rng, &mut (*looks), target_costumes.clone(), costume_dims.clone(), (*sound_queue).clone())).as_str()));
             (*speech_bubbles).set(frame.target_id.clone().clone(), SpeechBubble { text: msg.clone().clone(), is_thought: true });
         }
         BlockKind::Show => {
@@ -7148,28 +7148,28 @@ fn exec_simple(b: Block, mut vars: &mut Vars, frame: Frame, procs: ProcTable, mu
         }
         BlockKind::SetSizeTo(percent_expr) => {
             let percent_expr = *percent_expr;
-            let percent = eval(percent_expr.clone(), &mut (*vars), frame.clone(), procs.clone(), &mut (*lists), broadcasts.clone(), &mut (*positions), keyboard.clone(), mouse, timer, &mut (*rng), &mut (*looks), target_costumes.clone(), costume_dims.clone(), (*sound_queue).clone()).to_num().to_f32();
+            let percent = eval(percent_expr.clone(), &mut (*vars), frame.clone(), procs.clone(), &mut (*lists), broadcasts.clone(), &mut (*positions), keyboard.clone(), mouse, timer, rng, &mut (*looks), target_costumes.clone(), costume_dims.clone(), (*sound_queue).clone()).to_num().to_f32();
             let s = (*looks).get(frame.target_id.clone().clone());
             (*looks).set(frame.target_id.clone().clone(), LooksState { visible: s.visible, size: percent, costume_index: s.costume_index, ghost: s.ghost });
         }
         BlockKind::ChangeSizeBy(delta_expr) => {
             let delta_expr = *delta_expr;
-            let delta = eval(delta_expr.clone(), &mut (*vars), frame.clone(), procs.clone(), &mut (*lists), broadcasts.clone(), &mut (*positions), keyboard.clone(), mouse, timer, &mut (*rng), &mut (*looks), target_costumes.clone(), costume_dims.clone(), (*sound_queue).clone()).to_num().to_f32();
+            let delta = eval(delta_expr.clone(), &mut (*vars), frame.clone(), procs.clone(), &mut (*lists), broadcasts.clone(), &mut (*positions), keyboard.clone(), mouse, timer, rng, &mut (*looks), target_costumes.clone(), costume_dims.clone(), (*sound_queue).clone()).to_num().to_f32();
             let s = (*looks).get(frame.target_id.clone().clone());
             (*looks).set(frame.target_id.clone().clone(), LooksState { visible: s.visible, size: (s.size + delta), costume_index: s.costume_index, ghost: s.ghost });
         }
         BlockKind::SwitchCostumeTo(costume_expr) => {
             let costume_expr = *costume_expr;
-            let val = eval(costume_expr.clone(), &mut (*vars), frame.clone(), procs.clone(), &mut (*lists), broadcasts.clone(), &mut (*positions), keyboard.clone(), mouse, timer, &mut (*rng), &mut (*looks), target_costumes.clone(), costume_dims.clone(), (*sound_queue).clone());
+            let val = eval(costume_expr.clone(), &mut (*vars), frame.clone(), procs.clone(), &mut (*lists), broadcasts.clone(), &mut (*positions), keyboard.clone(), mouse, timer, rng, &mut (*looks), target_costumes.clone(), costume_dims.clone(), (*sound_queue).clone());
             let origin_name = (*sound_queue).instance_type_of(frame.target_id.clone().clone());
             let names = target_costumes.get(origin_name.clone());
             let count = (names.len() as isize).clone();
             if (count > 0) {
                 let name_str: Arc<str> = Arc::<str>::from(Arc::<str>::from(format!("{}", val).as_str()));
-                let matched = target_costumes.index_of(origin_name, name_str.clone());
+                let matched = target_costumes.index_of(origin_name.clone(), name_str.clone());
                 let s = (*looks).get(frame.target_id.clone().clone());
                 if (matched > 0) {
-                    (*looks).set(frame.target_id.clone().clone(), LooksState { visible: s.visible, size: s.size, costume_index: (matched - 1), ghost: s.ghost });
+                    (*looks).set(frame.target_id.clone().clone(), LooksState { visible: s.visible, size: s.size, costume_index: matched.wrapping_sub((1 as isize)), ghost: s.ghost });
                 } else if (name_str == Arc::<str>::from("next costume")) {
                     let new_idx = wrap_costume_index((s.costume_index + 1), count);
                     (*looks).set(frame.target_id.clone().clone(), LooksState { visible: s.visible, size: s.size, costume_index: new_idx, ghost: s.ghost });
@@ -7186,7 +7186,7 @@ fn exec_simple(b: Block, mut vars: &mut Vars, frame: Frame, procs: ProcTable, mu
         }
         BlockKind::SwitchBackdropTo(backdrop_expr) => {
             let backdrop_expr = *backdrop_expr;
-            let val = eval(backdrop_expr.clone(), &mut (*vars), frame.clone(), procs.clone(), &mut (*lists), broadcasts.clone(), &mut (*positions), keyboard.clone(), mouse, timer, &mut (*rng), &mut (*looks), target_costumes.clone(), costume_dims.clone(), (*sound_queue).clone());
+            let val = eval(backdrop_expr.clone(), &mut (*vars), frame.clone(), procs.clone(), &mut (*lists), broadcasts.clone(), &mut (*positions), keyboard.clone(), mouse, timer, rng, &mut (*looks), target_costumes.clone(), costume_dims.clone(), (*sound_queue).clone());
             let names = target_costumes.get(Arc::<str>::from("Stage"));
             let count = (names.len() as isize).clone();
             if (count > 0) {
@@ -7194,7 +7194,7 @@ fn exec_simple(b: Block, mut vars: &mut Vars, frame: Frame, procs: ProcTable, mu
                 let matched = target_costumes.index_of(Arc::<str>::from("Stage"), name_str.clone());
                 let s = (*looks).get(Arc::<str>::from("Stage"));
                 if (matched > 0) {
-                    (*looks).set(Arc::<str>::from("Stage"), LooksState { visible: s.visible, size: s.size, costume_index: (matched - 1), ghost: s.ghost });
+                    (*looks).set(Arc::<str>::from("Stage"), LooksState { visible: s.visible, size: s.size, costume_index: matched.wrapping_sub((1 as isize)), ghost: s.ghost });
                 } else if (name_str == Arc::<str>::from("next backdrop")) {
                     let new_idx = wrap_costume_index((s.costume_index + 1), count);
                     (*looks).set(Arc::<str>::from("Stage"), LooksState { visible: s.visible, size: s.size, costume_index: new_idx, ghost: s.ghost });
@@ -7203,7 +7203,7 @@ fn exec_simple(b: Block, mut vars: &mut Vars, frame: Frame, procs: ProcTable, mu
                     (*looks).set(Arc::<str>::from("Stage"), LooksState { visible: s.visible, size: s.size, costume_index: new_idx, ghost: s.ghost });
                 } else if (name_str == Arc::<str>::from("random backdrop")) {
                     if (count > 1) {
-                        let new_idx = rand_int_excluding(&mut (*rng), 0, (count - 1), s.costume_index.clone());
+                        let new_idx = rand_int_excluding(rng, 0, (count - 1), s.costume_index.clone());
                         (*looks).set(Arc::<str>::from("Stage"), LooksState { visible: s.visible, size: s.size, costume_index: new_idx, ghost: s.ghost });
                     }
                 } else {
@@ -7216,7 +7216,7 @@ fn exec_simple(b: Block, mut vars: &mut Vars, frame: Frame, procs: ProcTable, mu
         }
         BlockKind::SwitchBackdropToAndWait(backdrop_expr) => {
             let backdrop_expr = *backdrop_expr;
-            let val = eval(backdrop_expr.clone(), &mut (*vars), frame.clone(), procs.clone(), &mut (*lists), broadcasts.clone(), &mut (*positions), keyboard.clone(), mouse, timer, &mut (*rng), &mut (*looks), target_costumes.clone(), costume_dims.clone(), (*sound_queue).clone());
+            let val = eval(backdrop_expr.clone(), &mut (*vars), frame.clone(), procs.clone(), &mut (*lists), broadcasts.clone(), &mut (*positions), keyboard.clone(), mouse, timer, rng, &mut (*looks), target_costumes.clone(), costume_dims.clone(), (*sound_queue).clone());
             let names = target_costumes.get(Arc::<str>::from("Stage"));
             let count = (names.len() as isize).clone();
             if (count > 0) {
@@ -7225,14 +7225,14 @@ fn exec_simple(b: Block, mut vars: &mut Vars, frame: Frame, procs: ProcTable, mu
                 let s = (*looks).get(Arc::<str>::from("Stage"));
                 let mut new_idx = s.costume_index.clone();
                 if (matched > 0) {
-                    new_idx = (matched - 1);
+                    new_idx = matched.wrapping_sub((1 as isize));
                 } else if (name_str == Arc::<str>::from("next backdrop")) {
                     new_idx = wrap_costume_index((s.costume_index + 1), count);
                 } else if (name_str == Arc::<str>::from("previous backdrop")) {
                     new_idx = wrap_costume_index((s.costume_index - 1), count);
                 } else if (name_str == Arc::<str>::from("random backdrop")) {
                     if (count > 1) {
-                        new_idx = rand_int_excluding(&mut (*rng), 0, (count - 1), s.costume_index.clone());
+                        new_idx = rand_int_excluding(rng, 0, (count - 1), s.costume_index.clone());
                     }
                 } else {
                     if let Some(n) = val.to_num().to_isize_checked() {
@@ -7253,7 +7253,7 @@ fn exec_simple(b: Block, mut vars: &mut Vars, frame: Frame, procs: ProcTable, mu
                         for instance_id in instances_of(&(*sound_queue).instance_types, Arc::<str>::from(hat.script.target_id.clone().to_string())).into_iter() {
                             let receiver_script: ReceiverScript = ReceiverScript { target_id: Arc::<str>::from(instance_id.to_string()), body: hat.script.body.clone() };
                             let mut receiver = spawn_thread(receiver_script.clone());
-                            drive_thread_to_completion(&mut receiver, &mut (*vars), procs.clone(), &mut (*lists), broadcasts.clone(), &mut (*positions), keyboard.clone(), mouse, timer, &mut (*rng), &mut (*looks), &mut (*layer_orders), target_costumes.clone(), costume_dims.clone(), &mut (*sound_queue), &mut (*speech_bubbles), spawned);
+                            drive_thread_to_completion(&mut receiver, &mut (*vars), procs.clone(), &mut (*lists), broadcasts.clone(), &mut (*positions), keyboard.clone(), mouse, timer, rng, &mut (*looks), &mut (*layer_orders), target_costumes.clone(), costume_dims.clone(), &mut (*sound_queue), &mut (*speech_bubbles), spawned);
                         }
                     }
                 }
@@ -7261,7 +7261,7 @@ fn exec_simple(b: Block, mut vars: &mut Vars, frame: Frame, procs: ProcTable, mu
         }
         BlockKind::NextCostume => {
             let origin_name = (*sound_queue).instance_type_of(frame.target_id.clone().clone());
-            let names = target_costumes.get(origin_name);
+            let names = target_costumes.get(origin_name.clone());
             let count = (names.len() as isize).clone();
             if (count > 0) {
                 let s = (*looks).get(frame.target_id.clone().clone());
@@ -7281,8 +7281,8 @@ fn exec_simple(b: Block, mut vars: &mut Vars, frame: Frame, procs: ProcTable, mu
         BlockKind::SetGraphicEffectTo(effect, value_expr) => {
             let value_expr = *value_expr;
             if (effect == Arc::<str>::from("ghost")) {
-                let v = eval(value_expr.clone(), &mut (*vars), frame.clone(), procs.clone(), &mut (*lists), broadcasts.clone(), &mut (*positions), keyboard.clone(), mouse, timer, &mut (*rng), &mut (*looks), target_costumes.clone(), costume_dims.clone(), (*sound_queue).clone()).to_num().to_f32();
-                let clamped = clamp_ghost(v);
+                let v = eval(value_expr.clone(), &mut (*vars), frame.clone(), procs.clone(), &mut (*lists), broadcasts.clone(), &mut (*positions), keyboard.clone(), mouse, timer, rng, &mut (*looks), target_costumes.clone(), costume_dims.clone(), (*sound_queue).clone()).to_num().to_f32();
+                let clamped = clamp_ghost(v.clone());
                 let s = (*looks).get(frame.target_id.clone().clone());
                 (*looks).set(frame.target_id.clone().clone(), LooksState { visible: s.visible, size: s.size, costume_index: s.costume_index, ghost: clamped });
             }
@@ -7290,7 +7290,7 @@ fn exec_simple(b: Block, mut vars: &mut Vars, frame: Frame, procs: ProcTable, mu
         BlockKind::ChangeGraphicEffectBy(effect, value_expr) => {
             let value_expr = *value_expr;
             if (effect == Arc::<str>::from("ghost")) {
-                let v = eval(value_expr.clone(), &mut (*vars), frame.clone(), procs.clone(), &mut (*lists), broadcasts.clone(), &mut (*positions), keyboard.clone(), mouse, timer, &mut (*rng), &mut (*looks), target_costumes.clone(), costume_dims.clone(), (*sound_queue).clone()).to_num().to_f32();
+                let v = eval(value_expr.clone(), &mut (*vars), frame.clone(), procs.clone(), &mut (*lists), broadcasts.clone(), &mut (*positions), keyboard.clone(), mouse, timer, rng, &mut (*looks), target_costumes.clone(), costume_dims.clone(), (*sound_queue).clone()).to_num().to_f32();
                 let s = (*looks).get(frame.target_id.clone().clone());
                 let clamped = clamp_ghost((s.ghost + v));
                 (*looks).set(frame.target_id.clone().clone(), LooksState { visible: s.visible, size: s.size, costume_index: s.costume_index, ghost: clamped });
@@ -7309,7 +7309,7 @@ fn exec_simple(b: Block, mut vars: &mut Vars, frame: Frame, procs: ProcTable, mu
         }
         BlockKind::GoForwardBackwardLayers(num_expr, which) => {
             let num_expr = *num_expr;
-            let num = eval(num_expr.clone(), &mut (*vars), frame.clone(), procs.clone(), &mut (*lists), broadcasts.clone(), &mut (*positions), keyboard.clone(), mouse, timer, &mut (*rng), &mut (*looks), target_costumes.clone(), costume_dims.clone(), (*sound_queue).clone()).to_num().to_isize_checked().unwrap_or_else(|| 0);
+            let num = eval(num_expr.clone(), &mut (*vars), frame.clone(), procs.clone(), &mut (*lists), broadcasts.clone(), &mut (*positions), keyboard.clone(), mouse, timer, rng, &mut (*looks), target_costumes.clone(), costume_dims.clone(), (*sound_queue).clone()).to_num().to_isize_checked().unwrap_or_else(|| 0);
             let delta = {
             if (which == Arc::<str>::from("backward")) {
                 ((0i64 as isize) - num)
@@ -7317,11 +7317,11 @@ fn exec_simple(b: Block, mut vars: &mut Vars, frame: Frame, procs: ProcTable, mu
                 num
             }
 };
-            (*layer_orders).go_forward_backward(frame.target_id.clone().clone(), delta);
+            (*layer_orders).go_forward_backward(frame.target_id.clone().clone(), delta.clone());
         }
         BlockKind::CreateCloneOf(target_expr) => {
             let target_expr = *target_expr;
-            let target_str: Arc<str> = Arc::<str>::from(Arc::<str>::from(format!("{}", eval(target_expr.clone(), &mut (*vars), frame.clone(), procs.clone(), &mut (*lists), broadcasts.clone(), &mut (*positions), keyboard.clone(), mouse, timer, &mut (*rng), &mut (*looks), target_costumes.clone(), costume_dims.clone(), (*sound_queue).clone())).as_str()));
+            let target_str: Arc<str> = Arc::<str>::from(Arc::<str>::from(format!("{}", eval(target_expr.clone(), &mut (*vars), frame.clone(), procs.clone(), &mut (*lists), broadcasts.clone(), &mut (*positions), keyboard.clone(), mouse, timer, rng, &mut (*looks), target_costumes.clone(), costume_dims.clone(), (*sound_queue).clone())).as_str()));
             let source_id = {
             if (target_str == Arc::<str>::from("_myself_")) {
                 frame.target_id.clone().clone()
@@ -7346,7 +7346,7 @@ fn exec_simple(b: Block, mut vars: &mut Vars, frame: Frame, procs: ProcTable, mu
                 (*sound_queue).set_instance_type(new_id.clone(), origin_name.clone());
                 (*vars).copy_local(source_id.clone(), new_id.clone());
                 (*lists).copy_local(source_id.clone(), new_id.clone());
-                (*sound_queue).clone_requests.push(CloneRequest { source_instance_id: Arc::<str>::from(source_id.to_string()), new_id: new_id.clone().clone(), origin_name: Arc::<str>::from(origin_name.to_string()) });
+                (*sound_queue).clone_requests.push(CloneRequest { source_instance_id: Arc::<str>::from(source_id.to_string()), new_id: new_id.clone().clone(), origin_name: Arc::<str>::from(origin_name.clone().to_string()) });
             }
         }
         _ => {
@@ -7601,7 +7601,7 @@ fn step_thread(mut thread: &mut Thread, mut vars: &mut Vars, procs: ProcTable, m
                     }
                 }
                 FrameKind::RepeatUntilCond(cond) => {
-                    if eval(cond.clone(), &mut (*vars), frame.scope.clone(), procs.clone(), &mut (*lists), broadcasts.clone(), &mut (*positions), keyboard.clone(), mouse, timer, &mut (*rng), &mut (*looks), target_costumes.clone(), costume_dims.clone(), (*sound_queue).clone()).truthy() {
+                    if eval(cond.clone(), &mut (*vars), frame.scope.clone(), procs.clone(), &mut (*lists), broadcasts.clone(), &mut (*positions), keyboard.clone(), mouse, timer, rng, &mut (*looks), target_costumes.clone(), costume_dims.clone(), (*sound_queue).clone()).truthy() {
                         stack.remove({ let __boring_idx = top as i64; if __boring_idx < 0 { (stack.len() as i64 + __boring_idx) as usize } else { __boring_idx as usize } });
                     } else {
                         stack[(top) as usize] = ExecFrame { body: frame.body, index: 0, kind: FrameKind::RepeatUntilCond(cond.clone()), scope: frame.scope };
@@ -7631,7 +7631,7 @@ fn step_thread(mut thread: &mut Thread, mut vars: &mut Vars, procs: ProcTable, m
                     }
                 }
                 FrameKind::WaitingUntilCond(cond) => {
-                    if eval(cond.clone(), &mut (*vars), frame.scope.clone(), procs.clone(), &mut (*lists), broadcasts.clone(), &mut (*positions), keyboard.clone(), mouse, timer, &mut (*rng), &mut (*looks), target_costumes.clone(), costume_dims.clone(), (*sound_queue).clone()).truthy() {
+                    if eval(cond.clone(), &mut (*vars), frame.scope.clone(), procs.clone(), &mut (*lists), broadcasts.clone(), &mut (*positions), keyboard.clone(), mouse, timer, rng, &mut (*looks), target_costumes.clone(), costume_dims.clone(), (*sound_queue).clone()).truthy() {
                         stack.remove({ let __boring_idx = top as i64; if __boring_idx < 0 { (stack.len() as i64 + __boring_idx) as usize } else { __boring_idx as usize } });
                     } else {
                         (*thread).stack = stack;
@@ -7676,40 +7676,40 @@ fn step_thread(mut thread: &mut Thread, mut vars: &mut Vars, procs: ProcTable, m
             match stmt.kind.clone() {
                 BlockKind::If(cond, body) => {
                     let cond = *cond;
-                    if eval(cond.clone(), &mut (*vars), scope.clone(), procs.clone(), &mut (*lists), broadcasts.clone(), &mut (*positions), keyboard.clone(), mouse, timer, &mut (*rng), &mut (*looks), target_costumes.clone(), costume_dims.clone(), (*sound_queue).clone()).truthy() {
-                        stack.push(ExecFrame { body: body, index: 0, kind: FrameKind::TopLevel, scope: scope });
+                    if eval(cond.clone(), &mut (*vars), scope.clone(), procs.clone(), &mut (*lists), broadcasts.clone(), &mut (*positions), keyboard.clone(), mouse, timer, rng, &mut (*looks), target_costumes.clone(), costume_dims.clone(), (*sound_queue).clone()).truthy() {
+                        stack.push(ExecFrame { body: body.clone(), index: 0, kind: FrameKind::TopLevel, scope: scope });
                     }
                 }
                 BlockKind::IfElse(cond, then_body, else_body) => {
                     let cond = *cond;
-                    if eval(cond.clone(), &mut (*vars), scope.clone(), procs.clone(), &mut (*lists), broadcasts.clone(), &mut (*positions), keyboard.clone(), mouse, timer, &mut (*rng), &mut (*looks), target_costumes.clone(), costume_dims.clone(), (*sound_queue).clone()).truthy() {
-                        stack.push(ExecFrame { body: then_body, index: 0, kind: FrameKind::TopLevel, scope: scope });
+                    if eval(cond.clone(), &mut (*vars), scope.clone(), procs.clone(), &mut (*lists), broadcasts.clone(), &mut (*positions), keyboard.clone(), mouse, timer, rng, &mut (*looks), target_costumes.clone(), costume_dims.clone(), (*sound_queue).clone()).truthy() {
+                        stack.push(ExecFrame { body: then_body.clone(), index: 0, kind: FrameKind::TopLevel, scope: scope });
                     } else {
-                        stack.push(ExecFrame { body: else_body, index: 0, kind: FrameKind::TopLevel, scope: scope });
+                        stack.push(ExecFrame { body: else_body.clone(), index: 0, kind: FrameKind::TopLevel, scope: scope });
                     }
                 }
                 BlockKind::Seq(stmts) => {
-                    stack.push(ExecFrame { body: stmts, index: 0, kind: FrameKind::TopLevel, scope: scope });
+                    stack.push(ExecFrame { body: stmts.clone(), index: 0, kind: FrameKind::TopLevel, scope: scope });
                 }
                 BlockKind::Repeat(count_expr, body) => {
                     let count_expr = *count_expr;
-                    let times = eval(count_expr.clone(), &mut (*vars), scope.clone(), procs.clone(), &mut (*lists), broadcasts.clone(), &mut (*positions), keyboard.clone(), mouse, timer, &mut (*rng), &mut (*looks), target_costumes.clone(), costume_dims.clone(), (*sound_queue).clone()).to_num().to_isize_checked().unwrap_or_else(|| 0);
+                    let times = eval(count_expr.clone(), &mut (*vars), scope.clone(), procs.clone(), &mut (*lists), broadcasts.clone(), &mut (*positions), keyboard.clone(), mouse, timer, rng, &mut (*looks), target_costumes.clone(), costume_dims.clone(), (*sound_queue).clone()).to_num().to_isize_checked().unwrap_or_else(|| 0);
                     if (times > 0) {
-                        stack.push(ExecFrame { body: body, index: 0, kind: FrameKind::RepeatN((times - 1)), scope: scope });
+                        stack.push(ExecFrame { body: body.clone(), index: 0, kind: FrameKind::RepeatN((times - 1)), scope: scope });
                     }
                 }
                 BlockKind::RepeatUntil(cond, body) => {
                     let cond = *cond;
-                    if (!eval(cond.clone(), &mut (*vars), scope.clone(), procs.clone(), &mut (*lists), broadcasts.clone(), &mut (*positions), keyboard.clone(), mouse, timer, &mut (*rng), &mut (*looks), target_costumes.clone(), costume_dims.clone(), (*sound_queue).clone()).truthy()) {
-                        stack.push(ExecFrame { body: body, index: 0, kind: FrameKind::RepeatUntilCond(cond.clone()), scope: scope });
+                    if (!eval(cond.clone(), &mut (*vars), scope.clone(), procs.clone(), &mut (*lists), broadcasts.clone(), &mut (*positions), keyboard.clone(), mouse, timer, rng, &mut (*looks), target_costumes.clone(), costume_dims.clone(), (*sound_queue).clone()).truthy()) {
+                        stack.push(ExecFrame { body: body.clone(), index: 0, kind: FrameKind::RepeatUntilCond(cond.clone()), scope: scope });
                     }
                 }
                 BlockKind::Forever(body) => {
-                    stack.push(ExecFrame { body: body, index: 0, kind: FrameKind::Forever, scope: scope });
+                    stack.push(ExecFrame { body: body.clone(), index: 0, kind: FrameKind::Forever, scope: scope });
                 }
                 BlockKind::Wait(seconds_expr) => {
                     let seconds_expr = *seconds_expr;
-                    let secs = eval(seconds_expr.clone(), &mut (*vars), scope.clone(), procs.clone(), &mut (*lists), broadcasts.clone(), &mut (*positions), keyboard.clone(), mouse, timer, &mut (*rng), &mut (*looks), target_costumes.clone(), costume_dims.clone(), (*sound_queue).clone()).to_num().to_f32();
+                    let secs = eval(seconds_expr.clone(), &mut (*vars), scope.clone(), procs.clone(), &mut (*lists), broadcasts.clone(), &mut (*positions), keyboard.clone(), mouse, timer, rng, &mut (*looks), target_costumes.clone(), costume_dims.clone(), (*sound_queue).clone()).to_num().to_f32();
                     let target = (timer.elapsed + secs);
                     stack.push(ExecFrame { body: vec![], index: 0, kind: FrameKind::WaitingUntil(target), scope: scope });
                     (*thread).stack = stack;
@@ -7717,13 +7717,13 @@ fn step_thread(mut thread: &mut Thread, mut vars: &mut Vars, procs: ProcTable, m
                 }
                 BlockKind::PlayUntilDone(sound_expr) => {
                     let sound_expr = *sound_expr;
-                    let sound_name: Arc<str> = Arc::<str>::from(Arc::<str>::from(format!("{}", eval(sound_expr.clone(), &mut (*vars), scope.clone(), procs.clone(), &mut (*lists), broadcasts.clone(), &mut (*positions), keyboard.clone(), mouse, timer, &mut (*rng), &mut (*looks), target_costumes.clone(), costume_dims.clone(), (*sound_queue).clone())).as_str()));
+                    let sound_name: Arc<str> = Arc::<str>::from(Arc::<str>::from(format!("{}", eval(sound_expr.clone(), &mut (*vars), scope.clone(), procs.clone(), &mut (*lists), broadcasts.clone(), &mut (*positions), keyboard.clone(), mouse, timer, rng, &mut (*looks), target_costumes.clone(), costume_dims.clone(), (*sound_queue).clone())).as_str()));
                     let origin_name = (*sound_queue).instance_type_of(scope.target_id.clone());
                     let volume = (*sound_queue).get_volume(scope.target_id.clone());
                     let pitch = (*sound_queue).get_pitch(scope.target_id.clone());
                     let pan = (*sound_queue).get_pan(scope.target_id.clone());
                     (*sound_queue).play_queue.push(SoundRequest { target_id: Arc::<str>::from(origin_name.clone().to_string()), sound_name: Arc::<str>::from(sound_name.clone().to_string()), volume: volume, pitch: pitch, pan: pan });
-                    let duration = (*sound_queue).get_sound_duration(origin_name, sound_name.clone());
+                    let duration = (*sound_queue).get_sound_duration(origin_name.clone(), sound_name.clone());
                     if (duration > 0.0) {
                         let target = (timer.elapsed + duration);
                         stack.push(ExecFrame { body: vec![], index: 0, kind: FrameKind::WaitingUntil(target), scope: scope });
@@ -7733,7 +7733,7 @@ fn step_thread(mut thread: &mut Thread, mut vars: &mut Vars, procs: ProcTable, m
                 }
                 BlockKind::WaitUntil(cond) => {
                     let cond = *cond;
-                    if (!eval(cond.clone(), &mut (*vars), scope.clone(), procs.clone(), &mut (*lists), broadcasts.clone(), &mut (*positions), keyboard.clone(), mouse, timer, &mut (*rng), &mut (*looks), target_costumes.clone(), costume_dims.clone(), (*sound_queue).clone()).truthy()) {
+                    if (!eval(cond.clone(), &mut (*vars), scope.clone(), procs.clone(), &mut (*lists), broadcasts.clone(), &mut (*positions), keyboard.clone(), mouse, timer, rng, &mut (*looks), target_costumes.clone(), costume_dims.clone(), (*sound_queue).clone()).truthy()) {
                         stack.push(ExecFrame { body: vec![], index: 0, kind: FrameKind::WaitingUntilCond(cond.clone()), scope: scope });
                         (*thread).stack = stack;
                         return false;
@@ -7741,7 +7741,7 @@ fn step_thread(mut thread: &mut Thread, mut vars: &mut Vars, procs: ProcTable, m
                 }
                 BlockKind::AskAndWait(question_expr) => {
                     let question_expr = *question_expr;
-                    let question: Arc<str> = Arc::<str>::from(Arc::<str>::from(format!("{}", eval(question_expr.clone(), &mut (*vars), scope.clone(), procs.clone(), &mut (*lists), broadcasts.clone(), &mut (*positions), keyboard.clone(), mouse, timer, &mut (*rng), &mut (*looks), target_costumes.clone(), costume_dims.clone(), (*sound_queue).clone())).as_str()));
+                    let question: Arc<str> = Arc::<str>::from(Arc::<str>::from(format!("{}", eval(question_expr.clone(), &mut (*vars), scope.clone(), procs.clone(), &mut (*lists), broadcasts.clone(), &mut (*positions), keyboard.clone(), mouse, timer, rng, &mut (*looks), target_costumes.clone(), costume_dims.clone(), (*sound_queue).clone())).as_str()));
                     let my_id = (*vars).next_ask_id.clone();
                     (*vars).next_ask_id += 1;
                     (*vars).ask_queue.push(PendingAsk { ask_id: my_id, target_id: Arc::<str>::from(scope.target_id.clone().to_string()), question: question.clone().clone() });
@@ -7752,9 +7752,9 @@ fn step_thread(mut thread: &mut Thread, mut vars: &mut Vars, procs: ProcTable, m
                 BlockKind::SayForSecs(msg_expr, secs_expr) => {
                     let msg_expr = *msg_expr;
                     let secs_expr = *secs_expr;
-                    let msg: Arc<str> = Arc::<str>::from(Arc::<str>::from(format!("{}", eval(msg_expr.clone(), &mut (*vars), scope.clone(), procs.clone(), &mut (*lists), broadcasts.clone(), &mut (*positions), keyboard.clone(), mouse, timer, &mut (*rng), &mut (*looks), target_costumes.clone(), costume_dims.clone(), (*sound_queue).clone())).as_str()));
+                    let msg: Arc<str> = Arc::<str>::from(Arc::<str>::from(format!("{}", eval(msg_expr.clone(), &mut (*vars), scope.clone(), procs.clone(), &mut (*lists), broadcasts.clone(), &mut (*positions), keyboard.clone(), mouse, timer, rng, &mut (*looks), target_costumes.clone(), costume_dims.clone(), (*sound_queue).clone())).as_str()));
                     (*speech_bubbles).set(scope.target_id.clone(), SpeechBubble { text: msg.clone().clone(), is_thought: false });
-                    let secs = eval(secs_expr.clone(), &mut (*vars), scope.clone(), procs.clone(), &mut (*lists), broadcasts.clone(), &mut (*positions), keyboard.clone(), mouse, timer, &mut (*rng), &mut (*looks), target_costumes.clone(), costume_dims.clone(), (*sound_queue).clone()).to_num().to_f32();
+                    let secs = eval(secs_expr.clone(), &mut (*vars), scope.clone(), procs.clone(), &mut (*lists), broadcasts.clone(), &mut (*positions), keyboard.clone(), mouse, timer, rng, &mut (*looks), target_costumes.clone(), costume_dims.clone(), (*sound_queue).clone()).to_num().to_f32();
                     let target = (timer.elapsed + secs);
                     stack.push(ExecFrame { body: vec![], index: 0, kind: FrameKind::WaitingUntilThenClearBubble(target), scope: scope });
                     (*thread).stack = stack;
@@ -7763,9 +7763,9 @@ fn step_thread(mut thread: &mut Thread, mut vars: &mut Vars, procs: ProcTable, m
                 BlockKind::ThinkForSecs(msg_expr, secs_expr) => {
                     let msg_expr = *msg_expr;
                     let secs_expr = *secs_expr;
-                    let msg: Arc<str> = Arc::<str>::from(Arc::<str>::from(format!("{}", eval(msg_expr.clone(), &mut (*vars), scope.clone(), procs.clone(), &mut (*lists), broadcasts.clone(), &mut (*positions), keyboard.clone(), mouse, timer, &mut (*rng), &mut (*looks), target_costumes.clone(), costume_dims.clone(), (*sound_queue).clone())).as_str()));
+                    let msg: Arc<str> = Arc::<str>::from(Arc::<str>::from(format!("{}", eval(msg_expr.clone(), &mut (*vars), scope.clone(), procs.clone(), &mut (*lists), broadcasts.clone(), &mut (*positions), keyboard.clone(), mouse, timer, rng, &mut (*looks), target_costumes.clone(), costume_dims.clone(), (*sound_queue).clone())).as_str()));
                     (*speech_bubbles).set(scope.target_id.clone(), SpeechBubble { text: msg.clone().clone(), is_thought: true });
-                    let secs = eval(secs_expr.clone(), &mut (*vars), scope.clone(), procs.clone(), &mut (*lists), broadcasts.clone(), &mut (*positions), keyboard.clone(), mouse, timer, &mut (*rng), &mut (*looks), target_costumes.clone(), costume_dims.clone(), (*sound_queue).clone()).to_num().to_f32();
+                    let secs = eval(secs_expr.clone(), &mut (*vars), scope.clone(), procs.clone(), &mut (*lists), broadcasts.clone(), &mut (*positions), keyboard.clone(), mouse, timer, rng, &mut (*looks), target_costumes.clone(), costume_dims.clone(), (*sound_queue).clone()).to_num().to_f32();
                     let target = (timer.elapsed + secs);
                     stack.push(ExecFrame { body: vec![], index: 0, kind: FrameKind::WaitingUntilThenClearBubble(target), scope: scope });
                     (*thread).stack = stack;
@@ -7775,9 +7775,9 @@ fn step_thread(mut thread: &mut Thread, mut vars: &mut Vars, procs: ProcTable, m
                     let secs_expr = *secs_expr;
                     let x_expr = *x_expr;
                     let y_expr = *y_expr;
-                    let secs = eval(secs_expr.clone(), &mut (*vars), scope.clone(), procs.clone(), &mut (*lists), broadcasts.clone(), &mut (*positions), keyboard.clone(), mouse, timer, &mut (*rng), &mut (*looks), target_costumes.clone(), costume_dims.clone(), (*sound_queue).clone()).to_num().to_f32();
-                    let target_x = eval(x_expr.clone(), &mut (*vars), scope.clone(), procs.clone(), &mut (*lists), broadcasts.clone(), &mut (*positions), keyboard.clone(), mouse, timer, &mut (*rng), &mut (*looks), target_costumes.clone(), costume_dims.clone(), (*sound_queue).clone()).to_num().to_f32();
-                    let target_y = eval(y_expr.clone(), &mut (*vars), scope.clone(), procs.clone(), &mut (*lists), broadcasts.clone(), &mut (*positions), keyboard.clone(), mouse, timer, &mut (*rng), &mut (*looks), target_costumes.clone(), costume_dims.clone(), (*sound_queue).clone()).to_num().to_f32();
+                    let secs = eval(secs_expr.clone(), &mut (*vars), scope.clone(), procs.clone(), &mut (*lists), broadcasts.clone(), &mut (*positions), keyboard.clone(), mouse, timer, rng, &mut (*looks), target_costumes.clone(), costume_dims.clone(), (*sound_queue).clone()).to_num().to_f32();
+                    let target_x = eval(x_expr.clone(), &mut (*vars), scope.clone(), procs.clone(), &mut (*lists), broadcasts.clone(), &mut (*positions), keyboard.clone(), mouse, timer, rng, &mut (*looks), target_costumes.clone(), costume_dims.clone(), (*sound_queue).clone()).to_num().to_f32();
+                    let target_y = eval(y_expr.clone(), &mut (*vars), scope.clone(), procs.clone(), &mut (*lists), broadcasts.clone(), &mut (*positions), keyboard.clone(), mouse, timer, rng, &mut (*looks), target_costumes.clone(), costume_dims.clone(), (*sound_queue).clone()).to_num().to_f32();
                     let cur = (*positions).get(scope.target_id.clone());
                     if (secs <= 0.0) {
                         move_position(&mut (*positions), &mut (*sound_queue), Arc::<str>::from(scope.target_id.clone().to_string()), &Position { x: target_x, y: target_y, direction: cur.direction });
@@ -7790,8 +7790,8 @@ fn step_thread(mut thread: &mut Thread, mut vars: &mut Vars, procs: ProcTable, m
                 BlockKind::GlideTo(secs_expr, to_expr) => {
                     let secs_expr = *secs_expr;
                     let to_expr = *to_expr;
-                    let secs = eval(secs_expr.clone(), &mut (*vars), scope.clone(), procs.clone(), &mut (*lists), broadcasts.clone(), &mut (*positions), keyboard.clone(), mouse, timer, &mut (*rng), &mut (*looks), target_costumes.clone(), costume_dims.clone(), (*sound_queue).clone()).to_num().to_f32();
-                    let to: Arc<str> = Arc::<str>::from(Arc::<str>::from(format!("{}", eval(to_expr.clone(), &mut (*vars), scope.clone(), procs.clone(), &mut (*lists), broadcasts.clone(), &mut (*positions), keyboard.clone(), mouse, timer, &mut (*rng), &mut (*looks), target_costumes.clone(), costume_dims.clone(), (*sound_queue).clone())).as_str()));
+                    let secs = eval(secs_expr.clone(), &mut (*vars), scope.clone(), procs.clone(), &mut (*lists), broadcasts.clone(), &mut (*positions), keyboard.clone(), mouse, timer, rng, &mut (*looks), target_costumes.clone(), costume_dims.clone(), (*sound_queue).clone()).to_num().to_f32();
+                    let to: Arc<str> = Arc::<str>::from(Arc::<str>::from(format!("{}", eval(to_expr.clone(), &mut (*vars), scope.clone(), procs.clone(), &mut (*lists), broadcasts.clone(), &mut (*positions), keyboard.clone(), mouse, timer, rng, &mut (*looks), target_costumes.clone(), costume_dims.clone(), (*sound_queue).clone())).as_str()));
                     let cur = (*positions).get(scope.target_id.clone());
                     let mut target_x = cur.x.clone();
                     let mut target_y = cur.y.clone();
@@ -7833,7 +7833,7 @@ fn step_thread(mut thread: &mut Thread, mut vars: &mut Vars, procs: ProcTable, m
                     let mut new_params = HashMap::new();
                     let mut i = 0;
                     for arg_expr in arg_exprs.iter().cloned() {
-                        let v = eval(arg_expr.clone(), &mut (*vars), scope.clone(), procs.clone(), &mut (*lists), broadcasts.clone(), &mut (*positions), keyboard.clone(), mouse, timer, &mut (*rng), &mut (*looks), target_costumes.clone(), costume_dims.clone(), (*sound_queue).clone());
+                        let v = eval(arg_expr.clone(), &mut (*vars), scope.clone(), procs.clone(), &mut (*lists), broadcasts.clone(), &mut (*positions), keyboard.clone(), mouse, timer, rng, &mut (*looks), target_costumes.clone(), costume_dims.clone(), (*sound_queue).clone());
                         if (i < (proc.param_names.len() as isize)) {
                             new_params.insert(proc.param_names[(i) as usize].clone(), v.clone());
                         }
@@ -7842,11 +7842,11 @@ fn step_thread(mut thread: &mut Thread, mut vars: &mut Vars, procs: ProcTable, m
                     let new_scope: Frame = Frame { params: new_params, target_id: Arc::<str>::from(scope.target_id.clone().to_string()) };
                     if (proc_call_depth < proc_call_depth_cap) {
                         proc_call_depth += 1;
-                        stack.push(ExecFrame { body: proc.body, index: 0, kind: FrameKind::ProcCallFrame(proc.warp), scope: new_scope.clone() });
+                        stack.push(ExecFrame { body: proc.body, index: 0, kind: FrameKind::ProcCallFrame(proc.warp), scope: new_scope });
                     }
                 }
                 _ => {
-                    exec_simple(stmt, &mut (*vars), scope, procs.clone(), &mut (*lists), broadcasts.clone(), &mut (*positions), keyboard.clone(), mouse, timer, &mut (*rng), &mut (*looks), &mut (*layer_orders), target_costumes.clone(), costume_dims.clone(), &mut (*sound_queue), &mut (*speech_bubbles), &mut (*thread).spawned);
+                    exec_simple(stmt, &mut (*vars), scope, procs.clone(), &mut (*lists), broadcasts.clone(), &mut (*positions), keyboard.clone(), mouse, timer, rng, &mut (*looks), &mut (*layer_orders), target_costumes.clone(), costume_dims.clone(), &mut (*sound_queue), &mut (*speech_bubbles), &mut (*thread).spawned);
                 }
             }
         }
@@ -7854,14 +7854,14 @@ fn step_thread(mut thread: &mut Thread, mut vars: &mut Vars, procs: ProcTable, m
     false
 }
 
-fn drive_thread_to_completion(mut thread: &mut Thread, mut vars: &mut Vars, procs: ProcTable, mut lists: &mut Lists, broadcasts: Broadcasts, mut positions: &mut Positions, keyboard: KeyboardState, mouse: &MouseState, timer: &ScratchTimer, mut rng: &mut Rng, mut looks: &mut LooksStates, mut layer_orders: &mut LayerOrders, target_costumes: TargetCostumes, costume_dims: TargetCostumeDims, mut sound_queue: &mut SoundQueue, mut speech_bubbles: &mut SpeechBubbles, mut outer_spawned: &mut Vec<ReceiverScript>) -> () {
+fn drive_thread_to_completion(mut thread: &mut Thread, mut vars: &mut Vars, procs: ProcTable, mut lists: &mut Lists, broadcasts: Broadcasts, mut positions: &mut Positions, keyboard: KeyboardState, mouse: &MouseState, timer: &ScratchTimer, mut rng: &mut Rng, mut looks: &mut LooksStates, mut layer_orders: &mut LayerOrders, target_costumes: TargetCostumes, costume_dims: TargetCostumeDims, mut sound_queue: &mut SoundQueue, mut speech_bubbles: &mut SpeechBubbles, outer_spawned: &mut Vec<ReceiverScript>) -> () {
     let mut done = false;
     let mut iterations = 0;
     let iteration_cap = 100000;
     while ((!done) && (iterations < iteration_cap)) {
-        done = step_thread(&mut (*thread), &mut (*vars), procs.clone(), &mut (*lists), broadcasts.clone(), &mut (*positions), keyboard.clone(), mouse, timer, &mut (*rng), &mut (*looks), &mut (*layer_orders), target_costumes.clone(), costume_dims.clone(), &mut (*sound_queue), &mut (*speech_bubbles));
+        done = step_thread(&mut (*thread), &mut (*vars), procs.clone(), &mut (*lists), broadcasts.clone(), &mut (*positions), keyboard.clone(), mouse, timer, rng, &mut (*looks), &mut (*layer_orders), target_costumes.clone(), costume_dims.clone(), &mut (*sound_queue), &mut (*speech_bubbles));
         for script in (*thread).spawned.clone().into_iter() {
-            (*outer_spawned).push(script);
+            outer_spawned.push(script);
         }
         (*thread).spawned = vec![];
         iterations += 1;
@@ -7873,14 +7873,14 @@ fn drive_thread_to_completion(mut thread: &mut Thread, mut vars: &mut Vars, proc
 fn run_script(mut vars: &mut Vars, script: ReceiverScript, procs: ProcTable, mut lists: &mut Lists, broadcasts: Broadcasts, mut positions: &mut Positions, keyboard: KeyboardState, mouse: &MouseState, timer: &ScratchTimer, mut rng: &mut Rng, mut looks: &mut LooksStates, mut layer_orders: &mut LayerOrders, target_costumes: TargetCostumes, costume_dims: TargetCostumeDims, mut sound_queue: &mut SoundQueue, mut speech_bubbles: &mut SpeechBubbles) -> () {
     let mut thread = spawn_thread(script.clone());
     let mut round = vec![];
-    drive_thread_to_completion(&mut thread, &mut (*vars), procs.clone(), &mut (*lists), broadcasts.clone(), &mut (*positions), keyboard.clone(), mouse, timer, &mut (*rng), &mut (*looks), &mut (*layer_orders), target_costumes.clone(), costume_dims.clone(), &mut (*sound_queue), &mut (*speech_bubbles), &mut round);
+    drive_thread_to_completion(&mut thread, &mut (*vars), procs.clone(), &mut (*lists), broadcasts.clone(), &mut (*positions), keyboard.clone(), mouse, timer, rng, &mut (*looks), &mut (*layer_orders), target_costumes.clone(), costume_dims.clone(), &mut (*sound_queue), &mut (*speech_bubbles), &mut round);
     let mut to_process = round;
     let mut safety = 0;
     while (((to_process.len() as isize) > 0) && (safety < 10000)) {
         let mut next_round = vec![];
         for pending_script in to_process.iter().cloned() {
             let mut receiver = spawn_thread(pending_script);
-            drive_thread_to_completion(&mut receiver, &mut (*vars), procs.clone(), &mut (*lists), broadcasts.clone(), &mut (*positions), keyboard.clone(), mouse, timer, &mut (*rng), &mut (*looks), &mut (*layer_orders), target_costumes.clone(), costume_dims.clone(), &mut (*sound_queue), &mut (*speech_bubbles), &mut next_round);
+            drive_thread_to_completion(&mut receiver, &mut (*vars), procs.clone(), &mut (*lists), broadcasts.clone(), &mut (*positions), keyboard.clone(), mouse, timer, rng, &mut (*looks), &mut (*layer_orders), target_costumes.clone(), costume_dims.clone(), &mut (*sound_queue), &mut (*speech_bubbles), &mut next_round);
         }
         to_process = next_round;
         safety += 1;
@@ -7926,7 +7926,7 @@ fn run_and_build_headless_result(project: Sb3Project, path: Arc<str>) -> Headles
     for script in scripts.iter().cloned() {
         run_script(&mut vars, script.clone(), procs.clone(), &mut lists, broadcasts.clone(), &mut positions, keyboard.clone(), &mouse, &timer, &mut rng, &mut looks, &mut layer_orders, target_costumes.clone(), costume_dims.clone(), &mut sound_queue, &mut speech_bubbles);
     }
-    HeadlessResult { vars: vars.clone(), lists: lists.clone(), positions: positions.clone(), looks: looks.clone(), sound_queue: sound_queue.clone(), speech_bubbles: speech_bubbles.clone() }
+    HeadlessResult { vars: vars.clone(), lists: lists.clone(), positions: positions.clone(), looks: looks.clone(), sound_queue: sound_queue, speech_bubbles: speech_bubbles }
 }
 
 pub fn run_greenflag_and_report(path: Arc<str>, var_name: Arc<str>) -> Arc<str> {
@@ -7992,7 +7992,7 @@ pub fn scratch_number_test_overflow_add() -> Arc<str> {
 pub fn scratch_number_test_demotes_back_to_int() -> Arc<str> {
     let imax = ScratchNumber::from_i64(9223372036854775807);
     let one = ScratchNumber::from_i64(1);
-    imax.add_owned(one.clone()).sub_owned(one).debug_kind()
+    imax.add_owned(one.clone()).sub_owned(one.clone()).debug_kind()
 }
 
 pub fn scratch_number_test_exact_division() -> Arc<str> {
@@ -8018,8 +8018,8 @@ pub fn scratch_number_test_division_by_zero() -> Arc<str> {
 pub fn scratch_number_test_cross_tier_equality() -> Arc<str> {
     let imax = ScratchNumber::from_i64(9223372036854775807);
     let one = ScratchNumber::from_i64(1);
-    let via_bigint = imax.add_owned(one.clone()).sub_owned(one);
-    if via_bigint.eq_owned(imax) {
+    let via_bigint = imax.add_owned(one.clone()).sub_owned(one.clone());
+    if via_bigint.eq_owned(imax.clone()) {
         Arc::<str>::from("true")
     } else {
         Arc::<str>::from("false")
@@ -8167,7 +8167,7 @@ fn read_zip_entry_bytes(sb3Path: Arc<str>, entryFilename: Arc<str>) -> Option<Ve
     let Some(bytesRead) = (bytesReadOpt) else {
         return None;
     };
-    Some(buf.clone())
+    Some(buf)
 }
 
 pub fn rasterize_svg_to_png(svgBytes: &Vec<u8>) -> Option<Vec<u8>> {
@@ -8265,7 +8265,7 @@ fn extract_costume_bytes_to_temp_file(sb3Path: Arc<str>, costume: &Sb3Costume) -
     let Some(checked_extension) = (costume_extension_for_format(Arc::<str>::from(Arc::<str>::from(format!("{}", costume.data_format.clone()).as_str())))) else {
         return None;
     };
-    let rawOpt = read_zip_entry_bytes(Arc::<str>::from(sb3Path.clone().to_string()), Arc::<str>::from(costume.md5ext.to_string()));
+    let rawOpt = read_zip_entry_bytes(Arc::<str>::from(sb3Path.clone().to_string()), Arc::<str>::from(costume.md5ext.clone().to_string()));
     let Some(rawBytes) = (rawOpt) else {
         return None;
     };
@@ -8276,10 +8276,10 @@ fn extract_costume_bytes_to_temp_file(sb3Path: Arc<str>, costume: &Sb3Costume) -
         let Some(png) = (pngOpt) else {
             return None;
         };
-        outBytes = png;
+        outBytes = png.clone();
         extension = Arc::<str>::from("png");
     } else {
-        outBytes = rawBytes;
+        outBytes = rawBytes.clone();
         extension = checked_extension.clone();
     }
     let Some(assetsDir) = (Path::new(sb3Path.as_ref()).parent()) else {
@@ -8395,7 +8395,7 @@ pub fn extract_sound_to_temp_file(sb3Path: Arc<str>, targetName: Arc<str>, sound
     let Some(checked_extension) = (sound_extension_for_format(Arc::<str>::from(Arc::<str>::from(format!("{}", sound.data_format.clone()).as_str())))) else {
         return None;
     };
-    let rawOpt = read_zip_entry_bytes(Arc::<str>::from(sb3Path.clone().to_string()), Arc::<str>::from(sound.md5ext.to_string()));
+    let rawOpt = read_zip_entry_bytes(Arc::<str>::from(sb3Path.clone().to_string()), Arc::<str>::from(sound.md5ext.clone().to_string()));
     let Some(rawBytes) = (rawOpt) else {
         return None;
     };
@@ -8461,9 +8461,9 @@ fn canvas_py(stage_y: f32) -> f32 {
     (180.0 - stage_y)
 }
 
-fn blend_pixel(mut data: &mut Vec<u8>, i: isize, color: &PenColor) -> () {
-    if ((i >= 0) && (i.wrapping_add((3 as isize)) < ((*data).len() as isize))) {
-        let dst_a = (((*data)[(i.wrapping_add((3 as isize))) as usize].clone() as f32) / 255.0);
+fn blend_pixel(data: &mut Vec<u8>, i: isize, color: &PenColor) -> () {
+    if ((i >= 0) && (i.wrapping_add((3 as isize)) < (data.len() as isize))) {
+        let dst_a = ((data[(i.wrapping_add((3 as isize))) as usize].clone() as f32) / 255.0);
         let out_a = (color.a + (dst_a * (1.0 - color.a)));
         if (out_a <= 0.0) {
             data[(i) as usize] = (0i64 as u8);
@@ -8471,9 +8471,9 @@ fn blend_pixel(mut data: &mut Vec<u8>, i: isize, color: &PenColor) -> () {
             data[(i.wrapping_add((2 as isize))) as usize] = (0i64 as u8);
             data[(i.wrapping_add((3 as isize))) as usize] = (0i64 as u8);
         } else {
-            let dst_r = (((*data)[(i) as usize].clone() as f32) / 255.0);
-            let dst_g = (((*data)[(i.wrapping_add((1 as isize))) as usize].clone() as f32) / 255.0);
-            let dst_b = (((*data)[(i.wrapping_add((2 as isize))) as usize].clone() as f32) / 255.0);
+            let dst_r = ((data[(i) as usize].clone() as f32) / 255.0);
+            let dst_g = ((data[(i.wrapping_add((1 as isize))) as usize].clone() as f32) / 255.0);
+            let dst_b = ((data[(i.wrapping_add((2 as isize))) as usize].clone() as f32) / 255.0);
             let out_r = (((color.r * color.a) + ((dst_r * dst_a) * (1.0 - color.a))) / out_a);
             let out_g = (((color.g * color.a) + ((dst_g * dst_a) * (1.0 - color.a))) / out_a);
             let out_b = (((color.b * color.a) + ((dst_b * dst_a) * (1.0 - color.a))) / out_a);
@@ -8485,7 +8485,7 @@ fn blend_pixel(mut data: &mut Vec<u8>, i: isize, color: &PenColor) -> () {
     }
 }
 
-fn draw_pen_line(mut data: &mut Vec<u8>, x1: f32, y1: f32, x2: f32, y2: f32, color: &PenColor, diameter: f32) -> () {
+fn draw_pen_line(data: &mut Vec<u8>, x1: f32, y1: f32, x2: f32, y2: f32, color: &PenColor, diameter: f32) -> () {
     let radius = (diameter / 2.0);
     let min_x_f = {
     if (x1 < x2) {
@@ -8546,7 +8546,7 @@ fn draw_pen_line(mut data: &mut Vec<u8>, x1: f32, y1: f32, x2: f32, y2: f32, col
                     let dist_sq = ((ddx * ddx) + (ddy * ddy));
                     if (dist_sq <= (radius * radius)) {
                         let i = (((py * 480) + px) * 4);
-                        blend_pixel(&mut (*data), i, color);
+                        blend_pixel(data, i, color);
                     }
                 }
                 px += 1;
@@ -8605,7 +8605,7 @@ impl std::fmt::Display for StampSource {
 impl StampSource {
 }
 
-fn draw_stamp(mut data: &mut Vec<u8>, src: StampSource) -> () {
+fn draw_stamp(data: &mut Vec<u8>, src: StampSource) -> () {
     let half_w = (src.dest_width / 2.0);
     let half_h = (src.dest_height / 2.0);
     let mut radians = 0.0;
@@ -8699,7 +8699,7 @@ fn draw_stamp(mut data: &mut Vec<u8>, src: StampSource) -> () {
                             let sa = ((byte_a as f32) / 255.0);
                             let color: PenColor = PenColor { r: ((byte_r as f32) / 255.0), g: ((byte_g as f32) / 255.0), b: ((byte_b as f32) / 255.0), a: (sa * src.alpha_mult) };
                             let dst_i = (((py * 480) + px) * 4);
-                            blend_pixel(&mut (*data), dst_i, &color);
+                            blend_pixel(data, dst_i, &color);
                         }
                     }
                 }
@@ -8730,7 +8730,7 @@ pub fn draw_stamps(mut sound_queue: ResMut<SoundQueue>, costume_dims: Res<Target
             if let Some(src_image) = Assets::get(&images, &handle) {
                 if let Some(src_pixels) = src_image.data.clone() {
                     let origin = sound_queue.instance_type_of(stamp_req.target_id.clone());
-                    let dim = costume_dims.get(origin, idx.clone());
+                    let dim = costume_dims.get(origin.clone(), idx.clone());
                     let scale = (stamp_req.size / 100.0);
                     let alpha_mult = (1.0 - (stamp_req.ghost / 100.0));
                     sources.push(StampSource { pixels: src_pixels, src_width: (src_image.width() as f32), src_height: (src_image.height() as f32), dest_width: (dim.width * scale), dest_height: (dim.height * scale), x: stamp_req.x, y: stamp_req.y, direction: stamp_req.direction, rotation_style: Arc::<str>::from(stamp_req.rotation_style.clone().to_string()), alpha_mult: alpha_mult });
@@ -8824,7 +8824,7 @@ pub fn compose_scene_for_touching(positions: Res<Positions>, looks: Res<LooksSta
                     if let Some(src_image) = Assets::get(&images, &handle) {
                         if let Some(src_pixels) = src_image.data.clone() {
                             let origin = sound_queue.instance_type_of(target_id.clone());
-                            let dim = costume_dims.get(origin, idx.clone());
+                            let dim = costume_dims.get(origin.clone(), idx.clone());
                             let scale = (s.size / 100.0);
                             let alpha_mult = (1.0 - (s.ghost / 100.0));
                             let p = positions.get(target_id.clone());
@@ -8947,7 +8947,7 @@ impl BigUint {
         }
         let mut result: BigUint = BigUint { limbs: result_limbs };
         result.normalize();
-        result.clone()
+        result
     }
 
     fn sub_checked(&self, other: BigUint) -> Result<BigUint, Box<dyn std::error::Error + Send + Sync>> {
@@ -8979,7 +8979,7 @@ impl BigUint {
         }
         let mut result = BigUint { limbs: result_limbs };
         result.normalize();
-        Ok(result.clone())
+        Ok(result)
     }
 
     fn to_f64(&self) -> f64 {
@@ -9013,7 +9013,7 @@ impl BigUint {
         }
         let mut result: BigUint = BigUint { limbs: result_limbs };
         result.normalize();
-        result.clone()
+        result
     }
 
     fn mul(&self, other: BigUint) -> BigUint {
@@ -9058,7 +9058,7 @@ impl BigUint {
         }
         let mut result: BigUint = BigUint { limbs: result_limbs };
         result.normalize();
-        result.clone()
+        result
     }
 
     fn divmod_small(&self, divisor: u32) -> (BigUint, u32) {
@@ -9080,7 +9080,7 @@ impl BigUint {
         }
         let mut quotient: BigUint = BigUint { limbs: q_limbs };
         quotient.normalize();
-        (quotient.clone(), (rem as u32))
+        (quotient, (rem as u32))
     }
 
     fn divmod(&self, other: BigUint) -> Result<(BigUint, BigUint), Box<dyn std::error::Error + Send + Sync>> {
@@ -9151,7 +9151,7 @@ let error = __boring_e;
         let mut ls: Vec<u32> = vec![];
         ls.push(((v & 4294967295) as u32));
         ls.push(((v >> 32) as u32));
-        let mut b: BigUint = BigUint { limbs: ls };
+        let mut b: BigUint = BigUint { limbs: ls.clone() };
         b.normalize();
         b.clone()
     }
@@ -9175,7 +9175,7 @@ let error = __boring_e;
             if (remaining < 9) {
                 take = remaining;
             }
-            let chunk_str: Arc<str> = Arc::from(s.chars().skip((i) as usize).take(((i + take)) as usize-(i) as usize).collect::<String>().as_str());
+            let chunk_str: Arc<str> = Arc::<str>::from(s.chars().skip((i) as usize).take(((i + take)) as usize-(i) as usize).collect::<String>().as_str());
             let Some(chunk_val) = (parse_int_str(chunk_str.clone().clone())) else {
                 return Err(Box::new(BoringError::Other(std::any::TypeId::of::<BigUintError>(), Box::new(BigUintError::InvalidInput) as Box<dyn BoringVal + Send + Sync>)));
             };
@@ -9249,24 +9249,24 @@ impl BigInt {
                 1
             }
         } else {
-            let mag_cmp = self.magnitude.compare(other.magnitude);
+            let mag_cmp = self.magnitude.compare(other.magnitude.clone());
             if self.negative {
-                (0 - mag_cmp)
+                (0 as isize).wrapping_sub(mag_cmp)
             } else {
-                mag_cmp
+                mag_cmp.clone()
             }
         }
     }
 
     fn add(&self, other: BigInt) -> BigInt {
         if (self.negative == other.negative) {
-            let mag = self.magnitude.add(other.magnitude);
-            BigInt { negative: (self.negative && (!mag.is_zero())), magnitude: mag }
+            let mag = self.magnitude.add(other.magnitude.clone());
+            BigInt { negative: (self.negative && (!mag.is_zero())), magnitude: mag.clone() }
         } else {
             if (self.magnitude.compare(other.magnitude.clone()) >= 0) {
                 let mag = {
 match (|| -> Result<_, Box<dyn std::error::Error + Send + Sync>> {
-                Ok(self.magnitude.sub_checked(other.magnitude)?)
+                Ok(self.magnitude.sub_checked(other.magnitude.clone())?)
 })() {
 Ok(__boring_v) => __boring_v,
 Err(__boring_e) => {
@@ -9298,13 +9298,13 @@ let error = __boring_e;
     }
 
     fn mul(&self, other: BigInt) -> BigInt {
-        let mag = self.magnitude.mul(other.magnitude);
+        let mag = self.magnitude.mul(other.magnitude.clone());
         let neg = ((self.negative != other.negative) && (!mag.is_zero()));
-        BigInt { negative: neg, magnitude: mag }
+        BigInt { negative: neg, magnitude: mag.clone() }
     }
 
     fn divmod(&self, other: BigInt) -> Result<(BigInt, BigInt), Box<dyn std::error::Error + Send + Sync>> {
-        let (q_mag, r_mag) = self.magnitude.divmod(other.magnitude)?;
+        let (q_mag, r_mag) = self.magnitude.divmod(other.magnitude.clone())?;
         let q_neg = ((self.negative != other.negative) && (!q_mag.is_zero()));
         let r_neg = (self.negative && (!r_mag.is_zero()));
         Ok((BigInt { negative: q_neg, magnitude: q_mag }, BigInt { negative: r_neg, magnitude: r_mag }))
@@ -9315,7 +9315,7 @@ let error = __boring_e;
         if self.negative {
             (0.0 - mag)
         } else {
-            mag
+            mag.clone()
         }
     }
 
@@ -9363,8 +9363,8 @@ let error = __boring_e;
         if !(((s.len() as isize) > 0)) {
             return Err(Box::new(BoringError::Other(std::any::TypeId::of::<BigUintError>(), Box::new(BigUintError::InvalidInput) as Box<dyn BoringVal + Send + Sync>)));
         }
-        if (Arc::from(s.chars().skip((0) as usize).take((1) as usize-(0) as usize).collect::<String>().as_str()) == Arc::<str>::from("-")) {
-            let mag = BigUint::from_decimal_string(Arc::from(s.chars().skip((1) as usize).take(((s.len() as isize)) as usize-(1) as usize).collect::<String>().as_str()))?;
+        if (Arc::<str>::from(s.chars().skip((0) as usize).take((1) as usize-(0) as usize).collect::<String>().as_str()) == Arc::<str>::from("-")) {
+            let mag = BigUint::from_decimal_string(Arc::<str>::from(s.chars().skip((1) as usize).take(((s.len() as isize)) as usize-(1) as usize).collect::<String>().as_str()))?;
             Ok(BigInt { negative: (!mag.is_zero()), magnitude: mag.clone() })
         } else {
             let mag = BigUint::from_decimal_string(s.clone())?;
@@ -9421,36 +9421,36 @@ impl BigFraction {
     }
 
     fn compare(&self, other: BigFraction) -> isize {
-        let lhs = self.numerator.mul(other.denominator);
+        let lhs = self.numerator.mul(other.denominator.clone());
         let rhs = other.numerator.mul(self.denominator.clone());
-        lhs.compare(rhs)
+        lhs.compare(rhs.clone())
     }
 
     fn add_frac(&self, other: BigFraction) -> Result<BigFraction, Box<dyn std::error::Error + Send + Sync>> {
         let num = self.numerator.mul(other.denominator.clone()).add(other.numerator.mul(self.denominator.clone()));
-        let den = self.denominator.mul(other.denominator);
-        Ok(BigFraction::from_bigints(num, den)?)
+        let den = self.denominator.mul(other.denominator.clone());
+        Ok(BigFraction::from_bigints(num.clone(), den.clone())?)
     }
 
     fn sub_frac(&self, other: BigFraction) -> Result<BigFraction, Box<dyn std::error::Error + Send + Sync>> {
         let num = self.numerator.mul(other.denominator.clone()).sub(other.numerator.mul(self.denominator.clone()));
-        let den = self.denominator.mul(other.denominator);
-        Ok(BigFraction::from_bigints(num, den)?)
+        let den = self.denominator.mul(other.denominator.clone());
+        Ok(BigFraction::from_bigints(num.clone(), den.clone())?)
     }
 
     fn mul_frac(&self, other: BigFraction) -> Result<BigFraction, Box<dyn std::error::Error + Send + Sync>> {
-        let num = self.numerator.mul(other.numerator);
-        let den = self.denominator.mul(other.denominator);
-        Ok(BigFraction::from_bigints(num, den)?)
+        let num = self.numerator.mul(other.numerator.clone());
+        let den = self.denominator.mul(other.denominator.clone());
+        Ok(BigFraction::from_bigints(num.clone(), den.clone())?)
     }
 
     fn div_frac(&self, other: BigFraction) -> Result<BigFraction, Box<dyn std::error::Error + Send + Sync>> {
         if !((!other.numerator.is_zero())) {
             return Err(Box::new(BoringError::Other(std::any::TypeId::of::<BigFractionError>(), Box::new(BigFractionError::DivisionByZero) as Box<dyn BoringVal + Send + Sync>)));
         }
-        let num = self.numerator.mul(other.denominator);
-        let den = self.denominator.mul(other.numerator);
-        Ok(BigFraction::from_bigints(num, den)?)
+        let num = self.numerator.mul(other.denominator.clone());
+        let den = self.denominator.mul(other.numerator.clone());
+        Ok(BigFraction::from_bigints(num.clone(), den.clone())?)
     }
 
     fn to_f64(&self) -> f64 {

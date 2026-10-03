@@ -92,7 +92,7 @@ def [uint8]? read_zip_entry_bytes(string sb3Path, string entryFilename):
     # `read_project_json_from_zip` guards `project.json` itself.
     if entry.size() > MAX_ZIP_ENTRY_BYTES:
         return nil
-    var [uint8] buf = []
+    mut [uint8] buf = []
     let bytesReadOpt = try? ZipFile.readToEnd(entry, buf)
     guard let bytesRead = bytesReadOpt else return nil
     buf
@@ -374,7 +374,7 @@ pub def TargetCostumeDims build_target_costume_dims(string sb3Path, Sb3Project p
     for target in project.targets:
         let target_id = "{target.name_string()}"
         var mut dims = []
-        var mut i = 0
+        var i = 0
         while i < target.costumes.length:
             # Real Scratch scales a bitmap costume's *logical* size down by
             # its own saved `bitmapResolution` (2 for a retina-authored
