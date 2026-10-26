@@ -45,7 +45,7 @@ fn test_app() -> App {
 
 fn var(app: &mut App, name: &'static str) -> Arc<str> {
     let vars = app.world().resource::<Vars>().clone();
-    stage_var_value(Arc::from(FIXTURE), vars, Arc::from(name))
+    stage_var_value(Arc::from(FIXTURE), &vars, Arc::from(name))
 }
 
 #[test]

@@ -55,7 +55,7 @@ fn test_app() -> App {
 
 fn pos(app: &mut App, target_name: &'static str, axis: &'static str) -> Arc<str> {
     let positions = app.world().resource::<Positions>().clone();
-    position_value(positions, Arc::from(target_name), Arc::from(axis))
+    position_value(&positions, Arc::from(target_name), Arc::from(axis))
 }
 
 #[test]

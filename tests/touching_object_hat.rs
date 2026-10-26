@@ -53,7 +53,7 @@ fn test_app() -> App {
 
 fn touch_count(app: &mut App) -> Arc<str> {
     let vars = app.world().resource::<Vars>().clone();
-    stage_var_value(Arc::from(FIXTURE), vars, Arc::from("touch_count"))
+    stage_var_value(Arc::from(FIXTURE), &vars, Arc::from("touch_count"))
 }
 
 fn move_a_to(app: &mut App, x: f32) {

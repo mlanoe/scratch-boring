@@ -65,7 +65,7 @@ fn event_whenstageclicked_fires_a_real_click_on_the_stage() {
 
     let var = |app: &mut App, name: &'static str| {
         let vars = app.world().resource::<Vars>().clone();
-        stage_var_value(Arc::from(FIXTURE), vars, Arc::from(name))
+        stage_var_value(Arc::from(FIXTURE), &vars, Arc::from(name))
     };
 
     // Tick 1: nothing pressed yet, and the green-flag scripts run too

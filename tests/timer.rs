@@ -74,7 +74,7 @@ fn test_app() -> App {
 
 fn fire_count(app: &mut App) -> String {
     let vars = app.world().resource::<Vars>().clone();
-    stage_var_value(Arc::from("assets/timer.json"), vars, Arc::from("fireCount")).to_string()
+    stage_var_value(Arc::from("assets/timer.json"), &vars, Arc::from("fireCount")).to_string()
 }
 
 #[test]

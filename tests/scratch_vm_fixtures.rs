@@ -485,7 +485,7 @@ fn edge_triggered_hat_sb3_fires_once_at_the_first_tick() {
     app.update();
     let positions = app.world().resource::<Positions>().clone();
     assert_eq!(
-        format!("{}", scratch_boring::position_value(positions.clone(), Arc::from("Sprite1"), Arc::from("x"))),
+        format!("{}", scratch_boring::position_value(&positions, Arc::from("Sprite1"), Arc::from("x"))),
         "60",
         "the hat should have fired once at tick 1 and moved the sprite from x=50 to x=60"
     );
@@ -494,7 +494,7 @@ fn edge_triggered_hat_sb3_fires_once_at_the_first_tick() {
     app.update();
     let positions = app.world().resource::<Positions>().clone();
     assert_eq!(
-        format!("{}", scratch_boring::position_value(positions, Arc::from("Sprite1"), Arc::from("x"))),
+        format!("{}", scratch_boring::position_value(&positions, Arc::from("Sprite1"), Arc::from("x"))),
         "60",
         "must not re-fire on a later tick (edge-triggered, not level-triggered)"
     );

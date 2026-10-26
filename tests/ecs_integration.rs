@@ -87,7 +87,7 @@ fn update_tick_runs_the_queued_greenflag_script_via_run_pending_threads() {
 
     let vars = app.world().resource::<Vars>().clone();
     let path: Arc<str> = Arc::from("assets/broadcasts.json");
-    let get = |name: &'static str| stage_var_value(path.clone(), vars.clone(), Arc::from(name));
+    let get = |name: &'static str| stage_var_value(path.clone(), &vars, Arc::from(name));
 
     assert_eq!(
         get("receivedA").as_ref(),
@@ -105,7 +105,7 @@ fn update_tick_runs_the_queued_greenflag_script_via_run_pending_threads() {
     // document.
     app.update();
     let vars = app.world().resource::<Vars>().clone();
-    let get = |name: &'static str| stage_var_value(path.clone(), vars.clone(), Arc::from(name));
+    let get = |name: &'static str| stage_var_value(path.clone(), &vars, Arc::from(name));
     assert_eq!(get("receivedA").as_ref(), "true", "same-sprite \"go\" receiver should have run by the second tick");
     assert_eq!(get("receivedB").as_ref(), "true", "other-sprite \"go\" receiver should have run by the second tick (project-wide fan-out)");
 }
