@@ -399,7 +399,13 @@ pub def draw_stamps(mut ResMut<SoundQueue> sound_queue, Res<TargetCostumeDims> c
                     let dim = costume_dims.get(origin, idx)
                     let scale = stamp_req.size / 100.0
                     let alpha_mult = 1.0 - (stamp_req.ghost / 100.0)
-                    sources.push(StampSource(pixels = src_pixels, src_width = src_image.width() as float32, src_height = src_image.height() as float32, dest_width = dim.width * scale, dest_height = dim.height * scale, x = stamp_req.x, y = stamp_req.y, direction = stamp_req.direction, rotation_style = stamp_req.rotation_style.clone(), alpha_mult = alpha_mult))
+                    # Real Scratch's stamp includes the sprite's graphic
+                    # effects: run the same CPU pass `sync_graphic_effects`
+                    # uses over the source pixels first (same-size output).
+                    var mut stamp_pixels = src_pixels.clone()
+                    if !effects_are_identity(stamp_req.fx_color, stamp_req.fx_fisheye, stamp_req.fx_whirl, stamp_req.fx_pixelate, stamp_req.fx_mosaic, stamp_req.fx_brightness):
+                        stamp_pixels = apply_graphic_effects(src_pixels, src_image.width() as float32, src_image.height() as float32, dim.width, dim.height, stamp_req.fx_color, stamp_req.fx_fisheye, stamp_req.fx_whirl, stamp_req.fx_pixelate, stamp_req.fx_mosaic, stamp_req.fx_brightness)
+                    sources.push(StampSource(pixels = stamp_pixels, src_width = src_image.width() as float32, src_height = src_image.height() as float32, dest_width = dim.width * scale, dest_height = dim.height * scale, x = stamp_req.x, y = stamp_req.y, direction = stamp_req.direction, rotation_style = stamp_req.rotation_style.clone(), alpha_mult = alpha_mult))
                     resolved = true
         if !resolved:
             still_pending.push(stamp_req.clone())

@@ -1,0 +1,194 @@
+# Graphic effects (`looks_seteffectto`/`looks_changeeffectby`) other than
+# `ghost` (which maps straight onto `Sprite.color`'s alpha): `color`,
+# `fisheye`, `whirl`, `pixelate`, `mosaic`, `brightness`.
+#
+# Ported from scratch-render's `sprite.frag`/`sprite.vert` effect code, but
+# as a *CPU* pass over the costume's own pixel buffer rather than a GPU
+# shader -- this project has no custom material/shader pipeline, and a
+# costume is small enough (and an effect's value changes rarely enough)
+# that re-deriving a processed copy of the image only when the effect
+# vector changes is cheap. Pure function over primitives (no ECS, no
+# `Assets<Image>`), same "headless entry point a `cargo test` can call
+# directly" shape as `pen.br`'s `render_stamp_for_test`.
+#
+# Per destination pixel the shader's own order is preserved: mosaic,
+# pixelate, whirl, fisheye (all UV remaps, applied in that order), then a
+# nearest-neighbor sample (out-of-range UV -> transparent), then `color`
+# (hue rotation in HSV) and `brightness` (additive on RGB) on the sampled
+# color. Nearest-neighbor, not bilinear -- a documented approximation.
+
+# Hue-rotates one RGB triple (each 0..1). Returns [r, g, b].
+# Scratch forces near-black / near-gray pixels slightly saturated first so a
+# hue shift of a gray costume is still visible (`minV`/`minS` in its own
+# fragment shader).
+def [float32] shift_hue(float32 r, float32 g, float32 b, float32 amount):
+    var mx = r
+    if g > mx:
+        mx = g
+    if b > mx:
+        mx = b
+    var mn = r
+    if g < mn:
+        mn = g
+    if b < mn:
+        mn = b
+    let delta = mx - mn
+    var float32 h = 0.0
+    if delta > 0.0:
+        if mx == r:
+            h = ((g - b) / delta) / 6.0
+        elif mx == g:
+            h = (((b - r) / delta) + 2.0) / 6.0
+        else:
+            h = (((r - g) / delta) + 4.0) / 6.0
+    var float32 s = 0.0
+    if mx > 0.0:
+        s = delta / mx
+    var float32 v = mx
+    if v < 0.055:
+        h = 0.0
+        s = 1.0
+        v = 0.055
+    elif s < 0.09:
+        h = 0.0
+        s = 0.09
+    h = h + amount
+    h = h - floor(h)
+    # HSV -> RGB
+    let float32 hh = h * 6.0
+    let sector = floor(hh)
+    let f = hh - sector
+    let p = v * (1.0 - s)
+    let q = v * (1.0 - (s * f))
+    let t = v * (1.0 - (s * (1.0 - f)))
+    let k = (sector as isize) % 6
+    if k == 0:
+        [v, t, p]
+    elif k == 1:
+        [q, v, p]
+    elif k == 2:
+        [p, v, t]
+    elif k == 3:
+        [p, q, v]
+    elif k == 4:
+        [t, p, v]
+    else:
+        [v, p, q]
+
+def float32 clamp01(float32 x):
+    if x < 0.0:
+        0.0
+    elif x > 1.0:
+        1.0
+    else:
+        x
+
+# True when every effect is at its default -- callers skip the whole pass.
+pub def bool effects_are_identity(float32 color, float32 fisheye, float32 whirl, float32 pixelate, float32 mosaic, float32 brightness):
+    color == 0.0 and fisheye == 0.0 and whirl == 0.0 and pixelate == 0.0 and mosaic == 0.0 and brightness == 0.0
+
+# Returns a new RGBA8 buffer (same `w` x `h` as `src`) with the six effects
+# applied. `dest_w`/`dest_h` are the costume's logical on-screen size,
+# only used to size `pixelate`'s blocks the way scratch-render does
+# (relative to the sprite's stage-space size, not its texture size).
+pub def [uint8] apply_graphic_effects([uint8] src, float32 w, float32 h, float32 dest_w, float32 dest_h, float32 color, float32 fisheye, float32 whirl, float32 pixelate, float32 mosaic, float32 brightness):
+    let wi = w as isize
+    let hi = h as isize
+    mut out = []
+    # shader uniforms
+    let hue_amount = color / 200.0
+    let bright = brightness / 100.0
+    var fish = (fisheye + 100.0) / 100.0
+    if fish < 0.0:
+        fish = 0.0
+    let whirl_rad = (whirl * 0.017453292) * -1.0
+    var mosaic_n = floor(((abs(mosaic) + 10.0) / 10.0) + 0.5)
+    if mosaic_n < 1.0:
+        mosaic_n = 1.0
+    if mosaic_n > 512.0:
+        mosaic_n = 512.0
+    let pix = abs(pixelate) / 10.0
+    var pix_cx = 1.0
+    var pix_cy = 1.0
+    if pix > 1.0:
+        pix_cx = dest_w / pix
+        pix_cy = dest_h / pix
+        # A costume smaller than one block still has at least one block
+        # per axis (otherwise the remapped UV lands outside the image).
+        if pix_cx < 1.0:
+            pix_cx = 1.0
+        if pix_cy < 1.0:
+            pix_cy = 1.0
+    var y = 0
+    while y < hi:
+        var x = 0
+        while x < wi:
+            var u = ((x as float32) + 0.5) / w
+            var v = ((y as float32) + 0.5) / h
+            if mosaic_n > 1.0:
+                let mu = u * mosaic_n
+                let mv = v * mosaic_n
+                u = mu - floor(mu)
+                v = mv - floor(mv)
+            if pix > 1.0:
+                u = (floor(u * pix_cx) + 0.5) / pix_cx
+                v = (floor(v * pix_cy) + 0.5) / pix_cy
+            if whirl != 0.0:
+                let ox = u - 0.5
+                let oy = v - 0.5
+                let mag = sqrt((ox * ox) + (oy * oy))
+                var factor = 1.0 - (mag / 0.5)
+                if factor < 0.0:
+                    factor = 0.0
+                let ang = whirl_rad * factor * factor
+                let sn = sin(ang)
+                let cs = cos(ang)
+                u = ((cs * ox) + (sn * oy)) + 0.5
+                v = ((0.0 - (sn * ox)) + (cs * oy)) + 0.5
+            if fisheye != 0.0:
+                let vx = (u - 0.5) * 2.0
+                let vy = (v - 0.5) * 2.0
+                let len = sqrt((vx * vx) + (vy * vy))
+                if len > 0.0:
+                    var m = len
+                    if m > 1.0:
+                        m = 1.0
+                    var scale = len
+                    if scale < 1.0:
+                        scale = 1.0
+                    let r = pow(m, fish) * scale
+                    u = 0.5 + (((vx / len) * r) * 0.5)
+                    v = 0.5 + (((vy / len) * r) * 0.5)
+            var rr = 0.0
+            var gg = 0.0
+            var bb = 0.0
+            var aa = 0
+            if u >= 0.0 and u < 1.0 and v >= 0.0 and v < 1.0:
+                var sx = (u * w) as isize
+                var sy = (v * h) as isize
+                if sx >= wi:
+                    sx = wi - 1
+                if sy >= hi:
+                    sy = hi - 1
+                let idx = ((sy * wi) + sx) * 4
+                rr = (src[idx] as float32) / 255.0
+                gg = (src[idx + 1] as float32) / 255.0
+                bb = (src[idx + 2] as float32) / 255.0
+                aa = src[idx + 3] as isize
+            if aa > 0:
+                if color != 0.0:
+                    let hsv = shift_hue(rr, gg, bb, hue_amount)
+                    rr = hsv[0]
+                    gg = hsv[1]
+                    bb = hsv[2]
+                if brightness != 0.0:
+                    rr = clamp01(rr + bright)
+                    gg = clamp01(gg + bright)
+                    bb = clamp01(bb + bright)
+            out.push((rr * 255.0) as uint8)
+            out.push((gg * 255.0) as uint8)
+            out.push((bb * 255.0) as uint8)
+            out.push(aa as uint8)
+            x = x + 1
+        y = y + 1
+    out

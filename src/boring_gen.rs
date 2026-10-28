@@ -309,6 +309,7 @@ impl std::error::Error for KernelError {}
 
 
 
+
 use bevy::prelude::*;
 
 use bevy::audio::Volume;
@@ -320,7 +321,7 @@ use bevy_input::ButtonState;
 use bevy_sprite::Anchor;
 
 
-#[derive(Debug, Clone, PartialEq, Component)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Component)]
 pub struct ScratchSprite {
     pub target_id: Arc<str>,
 }
@@ -348,7 +349,22 @@ impl std::fmt::Display for TargetCostumeHandles {
 impl TargetCostumeHandles {
 }
 
-#[derive(Debug, Clone, PartialEq, Component)]
+#[derive(Debug, Clone, PartialEq, Resource)]
+pub struct EffectCache {
+    keys: /* var */ HashMap<Arc<str>, Arc<str>>,
+    handles: /* var */ HashMap<Arc<str>, Handle<Image>>,
+}
+
+impl std::fmt::Display for EffectCache {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        write!(f, "{:?}", self)
+    }
+}
+
+impl EffectCache {
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Component)]
 pub struct SpeechBubbleAnchor {
     pub target_id: Arc<str>,
 }
@@ -362,7 +378,7 @@ impl std::fmt::Display for SpeechBubbleAnchor {
 impl SpeechBubbleAnchor {
 }
 
-#[derive(Debug, Clone, PartialEq, Component)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Component)]
 pub struct VariableWatcherTag {
     pub variable_id: Arc<str>,
     pub label: Arc<str>,
@@ -393,7 +409,7 @@ impl std::fmt::Display for ReporterWatcherTag {
 impl ReporterWatcherTag {
 }
 
-#[derive(Debug, Clone, PartialEq, Component)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Component)]
 pub struct ListWatcherTag {
     pub list_id: Arc<str>,
     pub label: Arc<str>,
@@ -408,7 +424,7 @@ impl std::fmt::Display for ListWatcherTag {
 impl ListWatcherTag {
 }
 
-#[derive(Debug, Clone, PartialEq, Component)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Component)]
 pub struct AskBoxText {
 }
 
@@ -421,7 +437,7 @@ impl std::fmt::Display for AskBoxText {
 impl AskBoxText {
 }
 
-#[derive(Debug, Clone, PartialEq, Resource)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Resource)]
 pub struct ProjectPath {
     pub path: Arc<str>,
 }
@@ -507,7 +523,8 @@ pub fn setup_scratch_project(mut commands: Commands, project_path: Res<ProjectPa
         commands.insert_resource(DragState { dragging_id: Arc::<str>::from(""), offset_x: 0.0, offset_y: 0.0 });
         commands.insert_resource(ScratchTimer { elapsed: 0.0 });
         commands.insert_resource(Rng { state: (88172645463325252i64 as u64) });
-        commands.insert_resource(SoundQueue { play_queue: vec![], stop_all_requested: false, volumes: build_sound_volume_table(&project), pitches: HashMap::new(), pans: HashMap::new(), rotation_styles: build_target_rotation_styles(&project), sound_durations: build_target_sound_durations(&project), instance_types: build_instance_types_table(&project), next_clone_id: 0, clone_requests: vec![], despawn_requests: vec![], live_clone_count: 0, reset_timer_requested: false, backdrop_switch_hats: backdrop_switch_hats.clone(), draggable: build_target_draggable(&project), pen_states: HashMap::new(), pen_line_requests: vec![], pen_clear_requested: false, stamp_requests: vec![], scene_composite: blank_scene_composite_data() });
+        commands.insert_resource(SoundQueue { play_queue: vec![], stop_all_requested: false, volumes: build_sound_volume_table(&project), pitches: HashMap::new(), pans: HashMap::new(), effects: HashMap::new(), rotation_styles: build_target_rotation_styles(&project), sound_durations: build_target_sound_durations(&project), instance_types: build_instance_types_table(&project), next_clone_id: 0, clone_requests: vec![], despawn_requests: vec![], live_clone_count: 0, reset_timer_requested: false, backdrop_switch_hats: backdrop_switch_hats.clone(), draggable: build_target_draggable(&project), pen_states: HashMap::new(), pen_line_requests: vec![], pen_clear_requested: false, stamp_requests: vec![], scene_composite: blank_scene_composite_data() });
+        commands.insert_resource(EffectCache { keys: HashMap::new(), handles: HashMap::new() });
         commands.insert_resource(SpeechBubbles { table: HashMap::new() });
         let mut greenflag_threads = vec![];
         for script in greenflag_scripts.iter() {
@@ -577,7 +594,7 @@ pub fn run_pending_threads(mut vars: ResMut<Vars>, mut lists: ResMut<Lists>, pro
     pending.queue = still_running;
 }
 
-#[derive(Debug, Clone, PartialEq, Component)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Component)]
 pub struct PlayingSound {
 }
 
@@ -601,7 +618,7 @@ pub fn play_queued_sounds(mut commands: Commands, project_path: Res<ProjectPath>
     sound_queue.play_queue = vec![];
     for request in requests.iter().cloned() {
         let volume = request.volume.clone();
-        let rate = ((2.0 as f64).powf(((request.pitch / 120.0) as f64)) as f32);
+        let rate = ((2.0 as f32).powf(((request.pitch / 120.0) as f32)) as f32);
         if let Some(sound_path) = extract_sound_to_temp_file(Arc::<str>::from(project_path.path.clone().to_string()), Arc::<str>::from(request.target_id.clone().to_string()), Arc::<str>::from(request.sound_name.clone().to_string())) {
             let handle: Handle<AudioSource> = asset_server.load(sound_path.to_string());
             let base_settings = PlaybackSettings::DESPAWN.clone();
@@ -653,6 +670,7 @@ pub fn despawn_pending_clones(mut commands: Commands, mut sound_queue: ResMut<So
         sound_queue.remove_volume(instance_id.clone());
         sound_queue.remove_pitch(instance_id.clone());
         sound_queue.remove_pan(instance_id.clone());
+        sound_queue.clear_effects(instance_id.clone());
         sound_queue.remove_rotation_style(instance_id.clone());
         sound_queue.remove_draggable(instance_id.clone());
         sound_queue.remove_pen_state(instance_id.clone());
@@ -1214,6 +1232,48 @@ pub fn sync_ghost_effect_from_looks_states(query: Query<(&mut Sprite, &ScratchSp
     }
 }
 
+pub fn sync_graphic_effects(query: Query<(&mut Sprite, &TargetCostumeHandles, &ScratchSprite)>, looks: Res<LooksStates>, sound_queue: Res<SoundQueue>, costume_dims: Res<TargetCostumeDims>, mut images: ResMut<Assets<Image>>, mut cache: ResMut<EffectCache>) -> () {
+    for (mut sprite, costumes, tag) in query.into_iter() {
+        let tid = tag.target_id.clone();
+        let c = sound_queue.get_effect(tid.clone(), Arc::<str>::from("color"));
+        let f = sound_queue.get_effect(tid.clone(), Arc::<str>::from("fisheye"));
+        let w = sound_queue.get_effect(tid.clone(), Arc::<str>::from("whirl"));
+        let p = sound_queue.get_effect(tid.clone(), Arc::<str>::from("pixelate"));
+        let m = sound_queue.get_effect(tid.clone(), Arc::<str>::from("mosaic"));
+        let b = sound_queue.get_effect(tid.clone(), Arc::<str>::from("brightness"));
+        if (effects_are_identity(c.clone(), f.clone(), w.clone(), p.clone(), m.clone(), b.clone()) || ((costumes.handles.len() as isize) == 0)) {
+            cache.keys.remove(&tid.clone());
+            cache.handles.remove(&tid.clone());
+        } else {
+            let idx = wrap_costume_index(looks.get(tid.clone()).costume_index.clone(), (costumes.handles.len() as isize).clone());
+            let key = Arc::<str>::from(format!("{}{}{}{}{}{}{}{}{}{}{}{}{}", idx.to_string(), "|", c.to_string(), "|", f.to_string(), "|", w.to_string(), "|", p.to_string(), "|", m.to_string(), "|", b.to_string()));
+            let cached_key = cache.keys.get(&tid.clone()).cloned().unwrap_or_else(|| Arc::<str>::from(""));
+            if (cached_key == key) {
+                if let Some(h) = cache.handles.get(&tid.clone()).cloned() {
+                    sprite.image = h.clone();
+                }
+            } else {
+                if let Some(base) = Assets::get(&images, &costumes.handles[(idx) as usize].clone().clone()) {
+                    if let Some(base_pixels) = base.data.clone() {
+                        let origin = sound_queue.instance_type_of(tid.clone());
+                        let dim = costume_dims.get(origin.clone(), idx.clone());
+                        let bw = (base.width() as f32);
+                        let bh = (base.height() as f32);
+                        let processed = apply_graphic_effects(&base_pixels, bw, bh, dim.width.clone(), dim.height.clone(), c.clone(), f.clone(), w.clone(), p.clone(), m.clone(), b.clone());
+                        let mut img = base.clone();
+                        let wrapped: Option<Vec<u8>> = Some(processed);
+                        img.data = wrapped;
+                        let handle = images.add(img);
+                        cache.keys.insert(tid.clone(), key.clone());
+                        cache.handles.insert(tid.clone(), handle.clone());
+                        sprite.image = handle;
+                    }
+                }
+            }
+        }
+    }
+}
+
 pub fn sync_z_from_layer_orders(query: Query<(&mut Transform, &ScratchSprite)>, layer_orders: Res<LayerOrders>) -> () {
     for (mut transform, tag) in query.into_iter() {
         let order = layer_orders.get(tag.target_id.clone());
@@ -1226,7 +1286,7 @@ pub fn build_app(project_path: Arc<str>) -> App {
     app.add_plugins(DefaultPlugins);
     app.insert_resource(ProjectPath { path: project_path.clone().clone() });
     app.add_systems(Startup, (spawn_camera, spawn_pen_canvas, setup_scratch_project));
-    app.add_systems(Update, ((sync_keyboard_state, sync_mouse_state, sync_scratch_timer, check_key_press_hats, check_greater_than_hats, check_touching_object_hats, check_click_hats, check_backdrop_switch_hats, handle_ask_text_input, run_pending_threads, handle_sprite_dragging, draw_pen_marks, draw_stamps, play_queued_sounds, spawn_pending_clones, despawn_pending_clones).chain(), (sync_transforms_from_positions, sync_visibility_and_size_from_looks_states, sync_costume_from_looks_states, sync_ghost_effect_from_looks_states, sync_z_from_layer_orders, sync_speech_bubbles, sync_variable_watchers, sync_reporter_watchers, sync_list_watchers, sync_ask_ui).chain(), compose_scene_for_touching).chain());
+    app.add_systems(Update, ((sync_keyboard_state, sync_mouse_state, sync_scratch_timer, check_key_press_hats, check_greater_than_hats, check_touching_object_hats, check_click_hats, check_backdrop_switch_hats, handle_ask_text_input, run_pending_threads, handle_sprite_dragging, draw_pen_marks, draw_stamps, play_queued_sounds, spawn_pending_clones, despawn_pending_clones).chain(), (sync_transforms_from_positions, sync_visibility_and_size_from_looks_states, sync_costume_from_looks_states, sync_graphic_effects, sync_ghost_effect_from_looks_states, sync_z_from_layer_orders, sync_speech_bubbles, sync_variable_watchers, sync_reporter_watchers, sync_list_watchers, sync_ask_ui).chain(), compose_scene_for_touching).chain());
     app
 }
 
@@ -2752,7 +2812,7 @@ impl ScratchNumber {
                 }
             }
             ScratchNumberKind::BigFracV(n, d) => {
-                if (d.compare(BigInt::from_i64(1)) == 0) {
+                if (d.compare(&BigInt::from_i64(1)) == 0) {
                     n.to_i64_checked()
                 } else {
                     None
@@ -3033,7 +3093,7 @@ fn make_fraction_big(n_in: &BigInt, d_in: &BigInt) -> ScratchNumber {
     let g = n.magnitude.gcd(&d.magnitude.clone());
     let (n_mag, _) = {
 match (|| -> Result<_, Box<dyn std::error::Error + Send + Sync>> {
-    Ok(n.magnitude.divmod(g.clone())?)
+    Ok(n.magnitude.divmod(&g.clone())?)
 })() {
 Ok(__boring_v) => __boring_v,
 Err(__boring_e) => {
@@ -3044,7 +3104,7 @@ let error = __boring_e;
 };
     let (d_mag, _) = {
 match (|| -> Result<_, Box<dyn std::error::Error + Send + Sync>> {
-    Ok(d.magnitude.divmod(g.clone())?)
+    Ok(d.magnitude.divmod(&g)?)
 })() {
 Ok(__boring_v) => __boring_v,
 Err(__boring_e) => {
@@ -3055,7 +3115,7 @@ let error = __boring_e;
 };
     let rn: BigInt = BigInt { negative: (n.negative && (!n_mag.is_zero())), magnitude: n_mag };
     let rd: BigInt = BigInt { negative: false, magnitude: d_mag };
-    if (rd.compare(BigInt::from_i64(1)) == 0) {
+    if (rd.compare(&BigInt::from_i64(1)) == 0) {
         demote_bigint_sn(&rn)
     } else {
         if let Some(rni) = rn.to_i64_checked() {
@@ -3096,10 +3156,10 @@ fn add_i64_tier(n1: i64, d1: i64, n2: i64, d2: i64) -> Option<ScratchNumber> {
 }
 
 fn add_big_tier(n1: &BigInt, d1: &BigInt, n2: &BigInt, d2: &BigInt) -> ScratchNumber {
-    if (d1.compare(d2.clone()) == 0) {
+    if (d1.compare(d2) == 0) {
         make_fraction_big(&n1.add(n2.clone()), d1)
     } else {
-        make_fraction_big(&n1.mul(d2.clone()).add(n2.mul(d1.clone())), &d1.mul(d2.clone()))
+        make_fraction_big(&n1.mul(d2).add(n2.mul(d1)), &d1.mul(d2))
     }
 }
 
@@ -3132,10 +3192,10 @@ fn sub_i64_tier(n1: i64, d1: i64, n2: i64, d2: i64) -> Option<ScratchNumber> {
 }
 
 fn sub_big_tier(n1: &BigInt, d1: &BigInt, n2: &BigInt, d2: &BigInt) -> ScratchNumber {
-    if (d1.compare(d2.clone()) == 0) {
+    if (d1.compare(d2) == 0) {
         make_fraction_big(&n1.sub(n2), d1)
     } else {
-        make_fraction_big(&n1.mul(d2.clone()).sub(&n2.mul(d1.clone())), &d1.mul(d2.clone()))
+        make_fraction_big(&n1.mul(d2).sub(&n2.mul(d1)), &d1.mul(d2))
     }
 }
 
@@ -3152,7 +3212,7 @@ fn mul_i64_tier(n1: i64, d1: i64, n2: i64, d2: i64) -> Option<ScratchNumber> {
 }
 
 fn mul_big_tier(n1: &BigInt, d1: &BigInt, n2: &BigInt, d2: &BigInt) -> ScratchNumber {
-    make_fraction_big(&n1.mul(n2.clone()), &d1.mul(d2.clone()))
+    make_fraction_big(&n1.mul(n2), &d1.mul(d2))
 }
 
 fn div_i64_tier(n1: i64, d1: i64, n2: i64, d2: i64) -> Option<ScratchNumber> {
@@ -3168,7 +3228,7 @@ fn div_i64_tier(n1: i64, d1: i64, n2: i64, d2: i64) -> Option<ScratchNumber> {
 }
 
 fn div_big_tier(n1: &BigInt, d1: &BigInt, n2: &BigInt, d2: &BigInt) -> ScratchNumber {
-    make_fraction_big(&n1.mul(d2.clone()), &d1.mul(n2.clone()))
+    make_fraction_big(&n1.mul(d2), &d1.mul(n2))
 }
 
 fn rem_i64_tier(n1: i64, d1: i64, n2: i64, d2: i64) -> Option<ScratchNumber> {
@@ -3200,12 +3260,12 @@ fn rem_i64_tier(n1: i64, d1: i64, n2: i64, d2: i64) -> Option<ScratchNumber> {
 }
 
 fn rem_big_tier(n1: &BigInt, d1: &BigInt, n2: &BigInt, d2: &BigInt) -> ScratchNumber {
-    let na = n1.mul(d2.clone());
-    let nb = n2.mul(d1.clone());
-    let d = d1.mul(d2.clone());
+    let na = n1.mul(&d2.clone());
+    let nb = n2.mul(&d1.clone());
+    let d = d1.mul(d2);
     let mut r = {
 match (|| -> Result<_, Box<dyn std::error::Error + Send + Sync>> {
-    Ok(na.divmod(nb.clone())?)
+    Ok(na.divmod(&nb.clone())?)
 })() {
 Ok(__boring_v) => __boring_v,
 Err(__boring_e) => {
@@ -3217,7 +3277,7 @@ let error = __boring_e;
     let (_, rr) = r;
     let mut rem = rr;
     if ((!rem.is_zero()) && (rem.is_negative() != nb.is_negative())) {
-        rem = rem.add(nb);
+        rem = rem.add(nb.clone());
     }
     make_fraction_big(&rem, &d)
 }
@@ -3250,12 +3310,12 @@ fn compare_i64_tier(n1: i64, d1: i64, n2: i64, d2: i64) -> Option<isize> {
 }
 
 fn compare_big_tier(n1: &BigInt, d1: &BigInt, n2: &BigInt, d2: &BigInt) -> isize {
-    if (d1.compare(d2.clone()) == 0) {
-        n1.compare(n2.clone())
+    if (d1.compare(d2) == 0) {
+        n1.compare(n2)
     } else {
-        let lhs = n1.mul(d2.clone());
-        let rhs = n2.mul(d1.clone());
-        lhs.compare(rhs.clone())
+        let lhs = n1.mul(d2);
+        let rhs = n2.mul(d1);
+        lhs.compare(&rhs)
     }
 }
 
@@ -3753,7 +3813,7 @@ impl Lists {
         }
     }
 
-    fn set_items(&mut self, id: Arc<str>, calling_instance_id: Arc<str>, items: Vec<ScratchValue>) -> () {
+    fn set_items(&mut self, id: Arc<str>, calling_instance_id: Arc<str>, items: &Vec<ScratchValue>) -> () {
         let owner = self.list_owner.get(&*id).cloned().unwrap_or_else(|| Arc::<str>::from(""));
         if (owner == Arc::<str>::from("")) {
             self.table.insert(id.clone(), items.clone());
@@ -3797,7 +3857,7 @@ impl Lists {
     fn add(&mut self, id: Arc<str>, calling_instance_id: Arc<str>, item: ScratchValue) -> () {
         let mut items = self.get(id.clone(), calling_instance_id.clone());
         items.push(item.clone());
-        self.set_items(id.clone(), calling_instance_id.clone(), items.clone());
+        self.set_items(id.clone(), calling_instance_id.clone(), &items);
     }
 
     fn delete_at(&mut self, id: Arc<str>, calling_instance_id: Arc<str>, index0: isize) -> () {
@@ -3805,11 +3865,11 @@ impl Lists {
         if ((index0 >= 0) && (index0 < (items.len() as isize))) {
             items.remove({ let __boring_idx = index0 as i64; if __boring_idx < 0 { (items.len() as i64 + __boring_idx) as usize } else { __boring_idx as usize } });
         }
-        self.set_items(id.clone(), calling_instance_id.clone(), items.clone());
+        self.set_items(id.clone(), calling_instance_id.clone(), &items);
     }
 
     fn delete_all(&mut self, id: Arc<str>, calling_instance_id: Arc<str>) -> () {
-        self.set_items(id.clone(), calling_instance_id.clone(), vec![]);
+        self.set_items(id.clone(), calling_instance_id.clone(), &vec![]);
     }
 
     fn insert_at(&mut self, id: Arc<str>, calling_instance_id: Arc<str>, index0: isize, item: ScratchValue) -> () {
@@ -3817,7 +3877,7 @@ impl Lists {
         if ((index0 >= 0) && (index0 <= (items.len() as isize))) {
             items.insert((index0.clone() as usize), item.clone());
         }
-        self.set_items(id.clone(), calling_instance_id.clone(), items.clone());
+        self.set_items(id.clone(), calling_instance_id.clone(), &items);
     }
 
     fn replace_at(&mut self, id: Arc<str>, calling_instance_id: Arc<str>, index0: isize, item: ScratchValue) -> () {
@@ -3825,7 +3885,7 @@ impl Lists {
         if ((index0 >= 0) && (index0 < (items.len() as isize))) {
             items[(index0) as usize] = item.clone();
         }
-        self.set_items(id.clone(), calling_instance_id.clone(), items.clone());
+        self.set_items(id.clone(), calling_instance_id.clone(), &items);
     }
 
     fn item_at(&self, id: Arc<str>, calling_instance_id: Arc<str>, index0: isize) -> ScratchValue {
@@ -4190,7 +4250,7 @@ fn current_loudness() -> f32 {
     (-1.0)
 }
 
-#[derive(Debug, Clone, PartialEq, Resource)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Resource)]
 pub struct KeyboardState {
     pressed_keys: /* var */ Vec<Arc<str>>,
     any_key_pressed: /* var */ bool,
@@ -4259,7 +4319,7 @@ impl std::fmt::Display for ScratchTimer {
 impl ScratchTimer {
 }
 
-#[derive(Debug, Clone, PartialEq, Resource)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Resource)]
 pub struct Rng {
     state: /* var */ u64,
 }
@@ -4452,7 +4512,7 @@ impl std::fmt::Display for SoundRequest {
 impl SoundRequest {
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 struct CloneRequest {
     pub source_instance_id: Arc<str>,
     pub new_id: Arc<str>,
@@ -4796,6 +4856,12 @@ struct StampRequest {
     pub ghost: f32,
     pub costume_index: isize,
     pub size: f32,
+    pub fx_color: f32,
+    pub fx_fisheye: f32,
+    pub fx_whirl: f32,
+    pub fx_pixelate: f32,
+    pub fx_mosaic: f32,
+    pub fx_brightness: f32,
 }
 
 impl std::fmt::Display for StampRequest {
@@ -4824,6 +4890,7 @@ pub struct SoundQueue {
     volumes: /* var */ HashMap<Arc<str>, f32>,
     pitches: /* var */ HashMap<Arc<str>, f32>,
     pans: /* var */ HashMap<Arc<str>, f32>,
+    effects: /* var */ HashMap<Arc<str>, f32>,
     rotation_styles: /* var */ HashMap<Arc<str>, Arc<str>>,
     instance_types: /* var */ HashMap<Arc<str>, Arc<str>>,
     next_clone_id: /* var */ isize,
@@ -4906,7 +4973,7 @@ impl SoundQueue {
         self.pen_states.get(&*target_id).cloned().unwrap_or_else(|| default_pen_state())
     }
 
-    fn set_pen_state(&mut self, target_id: Arc<str>, s: PenState) -> () {
+    fn set_pen_state(&mut self, target_id: Arc<str>, s: &PenState) -> () {
         self.pen_states.insert(target_id.clone(), s.clone());
     }
 
@@ -4938,6 +5005,23 @@ impl SoundQueue {
         self.pans.remove(&*target_id);
     }
 
+    fn get_effect(&self, target_id: Arc<str>, name: Arc<str>) -> f32 {
+        self.effects.get(&Arc::<str>::from(format!("{}{}{}", target_id, "|", name))).cloned().unwrap_or_else(|| 0.0)
+    }
+
+    fn set_effect(&mut self, target_id: Arc<str>, name: Arc<str>, v: f32) -> () {
+        self.effects.insert(Arc::<str>::from(format!("{}{}{}", target_id, "|", name)), v.clone());
+    }
+
+    fn clear_effects(&mut self, target_id: Arc<str>) -> () {
+        self.effects.remove(&Arc::<str>::from(format!("{}{}", target_id, "|color")));
+        self.effects.remove(&Arc::<str>::from(format!("{}{}", target_id, "|fisheye")));
+        self.effects.remove(&Arc::<str>::from(format!("{}{}", target_id, "|whirl")));
+        self.effects.remove(&Arc::<str>::from(format!("{}{}", target_id, "|pixelate")));
+        self.effects.remove(&Arc::<str>::from(format!("{}{}", target_id, "|mosaic")));
+        self.effects.remove(&Arc::<str>::from(format!("{}{}", target_id, "|brightness")));
+    }
+
     fn instance_type_of(&self, instance_id: Arc<str>) -> Arc<str> {
         self.instance_types.get(&*instance_id).cloned().unwrap_or_else(|| instance_id.clone())
     }
@@ -4962,7 +5046,7 @@ fn instances_of(instance_types: &HashMap<Arc<str>, Arc<str>>, origin: Arc<str>) 
     result
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 struct PendingAsk {
     pub ask_id: isize,
     pub target_id: Arc<str>,
@@ -4978,7 +5062,7 @@ impl std::fmt::Display for PendingAsk {
 impl PendingAsk {
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 struct SpeechBubble {
     pub text: Arc<str>,
     pub is_thought: bool,
@@ -7086,7 +7170,7 @@ fn exec_simple(b: &Block, mut vars: &mut Vars, frame: &Frame, procs: &ProcTable,
         BlockKind::PenDown => {
             let current = (*sound_queue).get_pen_state(frame.target_id.clone().clone());
             if (!current.down) {
-                (*sound_queue).set_pen_state(frame.target_id.clone().clone(), PenState { down: true, hue: current.hue, saturation: current.saturation, brightness: current.brightness, transparency: current.transparency, diameter: current.diameter, shade: current.shade });
+                (*sound_queue).set_pen_state(frame.target_id.clone().clone(), &PenState { down: true, hue: current.hue, saturation: current.saturation, brightness: current.brightness, transparency: current.transparency, diameter: current.diameter, shade: current.shade });
             }
             let pos = (*positions).get(frame.target_id.clone().clone());
             let color = pen_color_of(&current);
@@ -7094,67 +7178,67 @@ fn exec_simple(b: &Block, mut vars: &mut Vars, frame: &Frame, procs: &ProcTable,
         }
         BlockKind::PenUp => {
             let current = (*sound_queue).get_pen_state(frame.target_id.clone().clone());
-            (*sound_queue).set_pen_state(frame.target_id.clone().clone(), PenState { down: false, hue: current.hue, saturation: current.saturation, brightness: current.brightness, transparency: current.transparency, diameter: current.diameter, shade: current.shade });
+            (*sound_queue).set_pen_state(frame.target_id.clone().clone(), &PenState { down: false, hue: current.hue, saturation: current.saturation, brightness: current.brightness, transparency: current.transparency, diameter: current.diameter, shade: current.shade });
         }
         BlockKind::SetPenColorToColor(color_expr) => {
             let color_expr = *color_expr;
             let hex: Arc<str> = Arc::<str>::from(Arc::<str>::from(format!("{}", eval(&color_expr, vars, frame, procs, lists, broadcasts, positions, keyboard, mouse, timer, rng, looks, target_costumes, costume_dims, sound_queue)).as_str()));
             let current = (*sound_queue).get_pen_state(frame.target_id.clone().clone());
-            (*sound_queue).set_pen_state(frame.target_id.clone().clone(), pen_state_from_hex_color(hex.clone().clone(), &current));
+            (*sound_queue).set_pen_state(frame.target_id.clone().clone(), &pen_state_from_hex_color(hex.clone().clone(), &current));
         }
         BlockKind::ChangePenColorParamBy(param, value_expr) => {
             let value_expr = *value_expr;
             let v = eval(&value_expr, vars, frame, procs, lists, broadcasts, positions, keyboard, mouse, timer, rng, looks, target_costumes, costume_dims, sound_queue).to_num().to_f32();
             let current = (*sound_queue).get_pen_state(frame.target_id.clone().clone());
-            (*sound_queue).set_pen_state(frame.target_id.clone().clone(), apply_pen_color_param(Arc::<str>::from(param.clone().to_string()), v.clone(), &current, true));
+            (*sound_queue).set_pen_state(frame.target_id.clone().clone(), &apply_pen_color_param(Arc::<str>::from(param.clone().to_string()), v.clone(), &current, true));
         }
         BlockKind::SetPenColorParamTo(param, value_expr) => {
             let value_expr = *value_expr;
             let v = eval(&value_expr, vars, frame, procs, lists, broadcasts, positions, keyboard, mouse, timer, rng, looks, target_costumes, costume_dims, sound_queue).to_num().to_f32();
             let current = (*sound_queue).get_pen_state(frame.target_id.clone().clone());
-            (*sound_queue).set_pen_state(frame.target_id.clone().clone(), apply_pen_color_param(Arc::<str>::from(param.clone().to_string()), v.clone(), &current, false));
+            (*sound_queue).set_pen_state(frame.target_id.clone().clone(), &apply_pen_color_param(Arc::<str>::from(param.clone().to_string()), v.clone(), &current, false));
         }
         BlockKind::ChangePenSizeBy(size_expr) => {
             let size_expr = *size_expr;
             let v = eval(&size_expr, vars, frame, procs, lists, broadcasts, positions, keyboard, mouse, timer, rng, looks, target_costumes, costume_dims, sound_queue).to_num().to_f32();
             let current = (*sound_queue).get_pen_state(frame.target_id.clone().clone());
-            (*sound_queue).set_pen_state(frame.target_id.clone().clone(), PenState { down: current.down, hue: current.hue, saturation: current.saturation, brightness: current.brightness, transparency: current.transparency, diameter: clamp_pen_size((current.diameter + v)), shade: current.shade });
+            (*sound_queue).set_pen_state(frame.target_id.clone().clone(), &PenState { down: current.down, hue: current.hue, saturation: current.saturation, brightness: current.brightness, transparency: current.transparency, diameter: clamp_pen_size((current.diameter + v)), shade: current.shade });
         }
         BlockKind::SetPenSizeTo(size_expr) => {
             let size_expr = *size_expr;
             let v = eval(&size_expr, vars, frame, procs, lists, broadcasts, positions, keyboard, mouse, timer, rng, looks, target_costumes, costume_dims, sound_queue).to_num().to_f32();
             let current = (*sound_queue).get_pen_state(frame.target_id.clone().clone());
-            (*sound_queue).set_pen_state(frame.target_id.clone().clone(), PenState { down: current.down, hue: current.hue, saturation: current.saturation, brightness: current.brightness, transparency: current.transparency, diameter: clamp_pen_size(v.clone()), shade: current.shade });
+            (*sound_queue).set_pen_state(frame.target_id.clone().clone(), &PenState { down: current.down, hue: current.hue, saturation: current.saturation, brightness: current.brightness, transparency: current.transparency, diameter: clamp_pen_size(v.clone()), shade: current.shade });
         }
         BlockKind::SetPenHueToNumber(hue_expr) => {
             let hue_expr = *hue_expr;
             let hue_value = eval(&hue_expr, vars, frame, procs, lists, broadcasts, positions, keyboard, mouse, timer, rng, looks, target_costumes, costume_dims, sound_queue).to_num().to_f32();
             let current = (*sound_queue).get_pen_state(frame.target_id.clone().clone());
-            (*sound_queue).set_pen_state(frame.target_id.clone().clone(), set_pen_hue_to_number(&current, hue_value.clone()));
+            (*sound_queue).set_pen_state(frame.target_id.clone().clone(), &set_pen_hue_to_number(&current, hue_value.clone()));
         }
         BlockKind::ChangePenHueBy(hue_expr) => {
             let hue_expr = *hue_expr;
             let hue_change = eval(&hue_expr, vars, frame, procs, lists, broadcasts, positions, keyboard, mouse, timer, rng, looks, target_costumes, costume_dims, sound_queue).to_num().to_f32();
             let current = (*sound_queue).get_pen_state(frame.target_id.clone().clone());
-            (*sound_queue).set_pen_state(frame.target_id.clone().clone(), change_pen_hue_by(&current, hue_change.clone()));
+            (*sound_queue).set_pen_state(frame.target_id.clone().clone(), &change_pen_hue_by(&current, hue_change.clone()));
         }
         BlockKind::SetPenShadeToNumber(shade_expr) => {
             let shade_expr = *shade_expr;
             let shade_value = eval(&shade_expr, vars, frame, procs, lists, broadcasts, positions, keyboard, mouse, timer, rng, looks, target_costumes, costume_dims, sound_queue).to_num().to_f32();
             let current = (*sound_queue).get_pen_state(frame.target_id.clone().clone());
-            (*sound_queue).set_pen_state(frame.target_id.clone().clone(), set_pen_shade_to_number(&current, shade_value.clone()));
+            (*sound_queue).set_pen_state(frame.target_id.clone().clone(), &set_pen_shade_to_number(&current, shade_value.clone()));
         }
         BlockKind::ChangePenShadeBy(shade_expr) => {
             let shade_expr = *shade_expr;
             let shade_change = eval(&shade_expr, vars, frame, procs, lists, broadcasts, positions, keyboard, mouse, timer, rng, looks, target_costumes, costume_dims, sound_queue).to_num().to_f32();
             let current = (*sound_queue).get_pen_state(frame.target_id.clone().clone());
-            (*sound_queue).set_pen_state(frame.target_id.clone().clone(), change_pen_shade_by(&current, shade_change.clone()));
+            (*sound_queue).set_pen_state(frame.target_id.clone().clone(), &change_pen_shade_by(&current, shade_change.clone()));
         }
         BlockKind::Stamp => {
             let pos = (*positions).get(frame.target_id.clone().clone());
             let style = (*sound_queue).get_rotation_style(frame.target_id.clone().clone());
             let s = (*looks).get(frame.target_id.clone().clone());
-            (*sound_queue).stamp_requests.push(StampRequest { target_id: Arc::<str>::from(frame.target_id.clone().clone().to_string()), x: pos.x, y: pos.y, direction: pos.direction, rotation_style: Arc::<str>::from(style.clone().to_string()), ghost: s.ghost, costume_index: s.costume_index, size: s.size });
+            (*sound_queue).stamp_requests.push(StampRequest { target_id: Arc::<str>::from(frame.target_id.clone().clone().to_string()), x: pos.x, y: pos.y, direction: pos.direction, rotation_style: Arc::<str>::from(style.clone().to_string()), ghost: s.ghost, costume_index: s.costume_index, size: s.size, fx_color: (*sound_queue).get_effect(frame.target_id.clone().clone(), Arc::<str>::from("color")), fx_fisheye: (*sound_queue).get_effect(frame.target_id.clone().clone(), Arc::<str>::from("fisheye")), fx_whirl: (*sound_queue).get_effect(frame.target_id.clone().clone(), Arc::<str>::from("whirl")), fx_pixelate: (*sound_queue).get_effect(frame.target_id.clone().clone(), Arc::<str>::from("pixelate")), fx_mosaic: (*sound_queue).get_effect(frame.target_id.clone().clone(), Arc::<str>::from("mosaic")), fx_brightness: (*sound_queue).get_effect(frame.target_id.clone().clone(), Arc::<str>::from("brightness")) });
         }
         BlockKind::ResetTimer => {
             (*sound_queue).reset_timer_requested = true;
@@ -7348,25 +7432,31 @@ fn exec_simple(b: &Block, mut vars: &mut Vars, frame: &Frame, procs: &ProcTable,
         }
         BlockKind::SetGraphicEffectTo(effect, value_expr) => {
             let value_expr = *value_expr;
+            let v = eval(&value_expr, vars, frame, procs, lists, broadcasts, positions, keyboard, mouse, timer, rng, looks, target_costumes, costume_dims, sound_queue).to_num().to_f32();
             if (effect == Arc::<str>::from("ghost")) {
-                let v = eval(&value_expr, vars, frame, procs, lists, broadcasts, positions, keyboard, mouse, timer, rng, looks, target_costumes, costume_dims, sound_queue).to_num().to_f32();
                 let clamped = clamp_ghost(v.clone());
                 let s = (*looks).get(frame.target_id.clone().clone());
                 (*looks).set(frame.target_id.clone().clone(), LooksState { visible: s.visible, size: s.size, costume_index: s.costume_index, ghost: clamped });
+            } else if is_other_graphic_effect(Arc::<str>::from(effect.clone().to_string())) {
+                (*sound_queue).set_effect(frame.target_id.clone().clone(), effect.clone(), clamp_graphic_effect(Arc::<str>::from(effect.clone().to_string()), v.clone()));
             }
         }
         BlockKind::ChangeGraphicEffectBy(effect, value_expr) => {
             let value_expr = *value_expr;
+            let v = eval(&value_expr, vars, frame, procs, lists, broadcasts, positions, keyboard, mouse, timer, rng, looks, target_costumes, costume_dims, sound_queue).to_num().to_f32();
             if (effect == Arc::<str>::from("ghost")) {
-                let v = eval(&value_expr, vars, frame, procs, lists, broadcasts, positions, keyboard, mouse, timer, rng, looks, target_costumes, costume_dims, sound_queue).to_num().to_f32();
                 let s = (*looks).get(frame.target_id.clone().clone());
                 let clamped = clamp_ghost((s.ghost + v));
                 (*looks).set(frame.target_id.clone().clone(), LooksState { visible: s.visible, size: s.size, costume_index: s.costume_index, ghost: clamped });
+            } else if is_other_graphic_effect(Arc::<str>::from(effect.clone().to_string())) {
+                let cur = (*sound_queue).get_effect(frame.target_id.clone().clone(), effect.clone());
+                (*sound_queue).set_effect(frame.target_id.clone().clone(), effect.clone(), clamp_graphic_effect(Arc::<str>::from(effect.clone().to_string()), (cur + v)));
             }
         }
         BlockKind::ClearGraphicEffects => {
             let s = (*looks).get(frame.target_id.clone().clone());
             (*looks).set(frame.target_id.clone().clone(), LooksState { visible: s.visible, size: s.size, costume_index: s.costume_index, ghost: 0.0 });
+            (*sound_queue).clear_effects(frame.target_id.clone().clone());
         }
         BlockKind::GoToFrontBack(which) => {
             if (which == Arc::<str>::from("front")) {
@@ -7408,7 +7498,7 @@ fn exec_simple(b: &Block, mut vars: &mut Vars, frame: &Frame, procs: &ProcTable,
                 (*sound_queue).set_volume(new_id.clone(), (*sound_queue).get_volume(source_id.clone()));
                 (*sound_queue).set_pitch(new_id.clone(), (*sound_queue).get_pitch(source_id.clone()));
                 (*sound_queue).set_pan(new_id.clone(), (*sound_queue).get_pan(source_id.clone()));
-                (*sound_queue).set_pen_state(new_id.clone(), (*sound_queue).get_pen_state(source_id.clone()));
+                (*sound_queue).set_pen_state(new_id.clone(), &(*sound_queue).get_pen_state(source_id.clone()));
                 (*sound_queue).set_rotation_style(new_id.clone(), (*sound_queue).get_rotation_style(source_id.clone()));
                 (*sound_queue).set_draggable(new_id.clone(), (*sound_queue).get_draggable(source_id.clone()));
                 (*sound_queue).set_instance_type(new_id.clone(), origin_name.clone());
@@ -7445,6 +7535,24 @@ fn rand_int_excluding(mut rng: &mut Rng, lower: isize, upper: isize, excluded: i
         (rand_int + 1)
     } else {
         rand_int
+    }
+}
+
+fn is_other_graphic_effect(name: Arc<str>) -> bool {
+    ((((((name == Arc::<str>::from("color")) || (name == Arc::<str>::from("fisheye"))) || (name == Arc::<str>::from("whirl"))) || (name == Arc::<str>::from("pixelate"))) || (name == Arc::<str>::from("mosaic"))) || (name == Arc::<str>::from("brightness")))
+}
+
+fn clamp_graphic_effect(name: Arc<str>, v: f32) -> f32 {
+    if (name == Arc::<str>::from("brightness")) {
+        if (v < (-100.0)) {
+            (-100.0)
+        } else if (v > 100.0) {
+            100.0
+        } else {
+            v.clone()
+        }
+    } else {
+        v.clone()
     }
 }
 
@@ -7989,7 +8097,7 @@ fn run_and_build_headless_result(project: &Sb3Project, path: Arc<str>) -> Headle
     let target_costumes = build_target_costumes(&project);
     let mut layer_orders = build_layer_orders(&project);
     let costume_dims = build_target_costume_dims(Arc::<str>::from(path.clone().to_string()), &project);
-    let mut sound_queue: SoundQueue = SoundQueue { play_queue: vec![], stop_all_requested: false, volumes: build_sound_volume_table(&project), pitches: HashMap::new(), pans: HashMap::new(), rotation_styles: build_target_rotation_styles(&project), sound_durations: build_target_sound_durations(&project), instance_types: build_instance_types_table(&project), next_clone_id: 0, clone_requests: vec![], despawn_requests: vec![], live_clone_count: 0, reset_timer_requested: false, backdrop_switch_hats: build_backdrop_switch_hats(&project), draggable: build_target_draggable(&project), pen_states: HashMap::new(), pen_line_requests: vec![], pen_clear_requested: false, stamp_requests: vec![], scene_composite: blank_scene_composite_data() };
+    let mut sound_queue: SoundQueue = SoundQueue { play_queue: vec![], stop_all_requested: false, volumes: build_sound_volume_table(&project), pitches: HashMap::new(), pans: HashMap::new(), effects: HashMap::new(), rotation_styles: build_target_rotation_styles(&project), sound_durations: build_target_sound_durations(&project), instance_types: build_instance_types_table(&project), next_clone_id: 0, clone_requests: vec![], despawn_requests: vec![], live_clone_count: 0, reset_timer_requested: false, backdrop_switch_hats: build_backdrop_switch_hats(&project), draggable: build_target_draggable(&project), pen_states: HashMap::new(), pen_line_requests: vec![], pen_clear_requested: false, stamp_requests: vec![], scene_composite: blank_scene_composite_data() };
     let mut speech_bubbles: SpeechBubbles = SpeechBubbles { table: HashMap::new() };
     for script in scripts.iter() {
         run_script(&mut vars, &script, &procs, &mut lists, &broadcasts, &mut positions, &keyboard, &mouse, &timer, &mut rng, &mut looks, &mut layer_orders, &target_costumes, &costume_dims, &mut sound_queue, &mut speech_bubbles);
@@ -8168,7 +8276,7 @@ fn list_contents_string(lists: &Lists, list_id: Arc<str>) -> Arc<str> {
 }
 
 pub fn run_report_touching_color_test(scene_pixels: &Vec<u8>, self_x: f32, self_y: f32, self_hw: f32, self_hh: f32, target_hex: Arc<str>) -> bool {
-    let sound_queue: SoundQueue = SoundQueue { play_queue: vec![], stop_all_requested: false, volumes: HashMap::new(), pitches: HashMap::new(), pans: HashMap::new(), rotation_styles: HashMap::new(), sound_durations: HashMap::new(), instance_types: HashMap::new(), next_clone_id: 0, clone_requests: vec![], despawn_requests: vec![], live_clone_count: 0, reset_timer_requested: false, backdrop_switch_hats: vec![], draggable: HashMap::new(), pen_states: HashMap::new(), pen_line_requests: vec![], pen_clear_requested: false, stamp_requests: vec![], scene_composite: scene_pixels.clone() };
+    let sound_queue: SoundQueue = SoundQueue { play_queue: vec![], stop_all_requested: false, volumes: HashMap::new(), pitches: HashMap::new(), pans: HashMap::new(), effects: HashMap::new(), rotation_styles: HashMap::new(), sound_durations: HashMap::new(), instance_types: HashMap::new(), next_clone_id: 0, clone_requests: vec![], despawn_requests: vec![], live_clone_count: 0, reset_timer_requested: false, backdrop_switch_hats: vec![], draggable: HashMap::new(), pen_states: HashMap::new(), pen_line_requests: vec![], pen_clear_requested: false, stamp_requests: vec![], scene_composite: scene_pixels.clone() };
     let target = hex_to_pen_color(target_hex.clone().clone());
     let min_x = ((canvas_px((self_x - self_hw)) as f32).floor() as isize);
     let max_x = ((canvas_px((self_x + self_hw)) as f32).floor() as isize);
@@ -8801,7 +8909,11 @@ pub fn draw_stamps(mut sound_queue: ResMut<SoundQueue>, costume_dims: Res<Target
                     let dim = costume_dims.get(origin.clone(), idx.clone());
                     let scale = (stamp_req.size / 100.0);
                     let alpha_mult = (1.0 - (stamp_req.ghost / 100.0));
-                    sources.push(StampSource { pixels: src_pixels, src_width: (src_image.width() as f32), src_height: (src_image.height() as f32), dest_width: (dim.width * scale), dest_height: (dim.height * scale), x: stamp_req.x, y: stamp_req.y, direction: stamp_req.direction, rotation_style: Arc::<str>::from(stamp_req.rotation_style.clone().clone().to_string()), alpha_mult: alpha_mult });
+                    let mut stamp_pixels = src_pixels.clone();
+                    if (!effects_are_identity(stamp_req.fx_color.clone(), stamp_req.fx_fisheye.clone(), stamp_req.fx_whirl.clone(), stamp_req.fx_pixelate.clone(), stamp_req.fx_mosaic.clone(), stamp_req.fx_brightness.clone())) {
+                        stamp_pixels = apply_graphic_effects(&src_pixels, (src_image.width() as f32), (src_image.height() as f32), dim.width.clone(), dim.height.clone(), stamp_req.fx_color.clone(), stamp_req.fx_fisheye.clone(), stamp_req.fx_whirl.clone(), stamp_req.fx_pixelate.clone(), stamp_req.fx_mosaic.clone(), stamp_req.fx_brightness.clone());
+                    }
+                    sources.push(StampSource { pixels: stamp_pixels, src_width: (src_image.width() as f32), src_height: (src_image.height() as f32), dest_width: (dim.width * scale), dest_height: (dim.height * scale), x: stamp_req.x, y: stamp_req.y, direction: stamp_req.direction, rotation_style: Arc::<str>::from(stamp_req.rotation_style.clone().clone().to_string()), alpha_mult: alpha_mult });
                     resolved = true;
                 }
             }
@@ -8909,6 +9021,197 @@ pub fn compose_scene_for_touching(positions: Res<Positions>, looks: Res<LooksSta
 }
 
 
+// ─── module: effects ───
+fn shift_hue(r: f32, g: f32, b: f32, amount: f32) -> Vec<f32> {
+    let mut mx = r;
+    if (g > mx) {
+        mx = g.clone();
+    }
+    if (b > mx) {
+        mx = b.clone();
+    }
+    let mut mn = r;
+    if (g < mn) {
+        mn = g.clone();
+    }
+    if (b < mn) {
+        mn = b.clone();
+    }
+    let delta = (mx - mn);
+    let mut h: f32 = 0.0;
+    if (delta > 0.0) {
+        if (mx == r) {
+            h = (((g - b) / delta) / 6.0);
+        } else if (mx == g) {
+            h = ((((b - r) / delta) + 2.0) / 6.0);
+        } else {
+            h = ((((r - g) / delta) + 4.0) / 6.0);
+        }
+    }
+    let mut s: f32 = 0.0;
+    if (mx > 0.0) {
+        s = (delta / mx);
+    }
+    let mut v: f32 = mx;
+    if (v < 0.055) {
+        h = 0.0;
+        s = 1.0;
+        v = 0.055;
+    } else if (s < 0.09) {
+        h = 0.0;
+        s = 0.09;
+    }
+    h += amount.clone();
+    h -= (h as f32).floor();
+    let hh: f32 = (h * 6.0);
+    let sector = (hh as f32).floor();
+    let f = (hh - sector);
+    let p = (v * (1.0 - s));
+    let q = (v * (1.0 - (s * f)));
+    let t = (v * (1.0 - (s * (1.0 - f))));
+    let k = ((sector as isize) % 6);
+    if (k == 0) {
+        vec![v, t, p]
+    } else if (k == 1) {
+        vec![q, v, p]
+    } else if (k == 2) {
+        vec![p, v, t]
+    } else if (k == 3) {
+        vec![p, q, v]
+    } else if (k == 4) {
+        vec![t, p, v]
+    } else {
+        vec![v, p, q]
+    }
+}
+
+pub fn effects_are_identity(color: f32, fisheye: f32, whirl: f32, pixelate: f32, mosaic: f32, brightness: f32) -> bool {
+    ((((((color == 0.0) && (fisheye == 0.0)) && (whirl == 0.0)) && (pixelate == 0.0)) && (mosaic == 0.0)) && (brightness == 0.0))
+}
+
+pub fn apply_graphic_effects(src: &Vec<u8>, w: f32, h: f32, dest_w: f32, dest_h: f32, color: f32, fisheye: f32, whirl: f32, pixelate: f32, mosaic: f32, brightness: f32) -> Vec<u8> {
+    let wi = (w as isize);
+    let hi = (h as isize);
+    let mut out = vec![];
+    let hue_amount = (color / 200.0);
+    let bright = (brightness / 100.0);
+    let mut fish = ((fisheye + 100.0) / 100.0);
+    if (fish < 0.0) {
+        fish = 0.0;
+    }
+    let whirl_rad = ((whirl * 0.017453292) * (-1.0));
+    let mut mosaic_n = (((((mosaic as f32).abs() + 10.0) / 10.0) + 0.5) as f32).floor();
+    if (mosaic_n < 1.0) {
+        mosaic_n = 1.0;
+    }
+    if (mosaic_n > 512.0) {
+        mosaic_n = 512.0;
+    }
+    let pix = ((pixelate as f32).abs() / 10.0);
+    let mut pix_cx = 1.0;
+    let mut pix_cy = 1.0;
+    if (pix > 1.0) {
+        pix_cx = (dest_w / pix);
+        pix_cy = (dest_h / pix);
+        if (pix_cx < 1.0) {
+            pix_cx = 1.0;
+        }
+        if (pix_cy < 1.0) {
+            pix_cy = 1.0;
+        }
+    }
+    let mut y = 0;
+    while (y < hi) {
+        let mut x = 0;
+        while (x < wi) {
+            let mut u = (((x as f32) + 0.5) / w);
+            let mut v = (((y as f32) + 0.5) / h);
+            if (mosaic_n > 1.0) {
+                let mu = (u * mosaic_n);
+                let mv = (v * mosaic_n);
+                u = (mu - (mu as f32).floor());
+                v = (mv - (mv as f32).floor());
+            }
+            if (pix > 1.0) {
+                u = ((((u * pix_cx) as f32).floor() + 0.5) / pix_cx);
+                v = ((((v * pix_cy) as f32).floor() + 0.5) / pix_cy);
+            }
+            if (whirl != 0.0) {
+                let ox = (u - 0.5);
+                let oy = (v - 0.5);
+                let mag = (((ox * ox) + (oy * oy)) as f32).sqrt();
+                let mut factor = (1.0 - (mag / 0.5));
+                if (factor < 0.0) {
+                    factor = 0.0;
+                }
+                let ang = ((whirl_rad * factor) * factor);
+                let sn = (ang as f32).sin();
+                let cs = (ang as f32).cos();
+                u = (((cs * ox) + (sn * oy)) + 0.5);
+                v = (((0.0 - (sn * ox)) + (cs * oy)) + 0.5);
+            }
+            if (fisheye != 0.0) {
+                let vx = ((u - 0.5) * 2.0);
+                let vy = ((v - 0.5) * 2.0);
+                let len = (((vx * vx) + (vy * vy)) as f32).sqrt();
+                if (len > 0.0) {
+                    let mut m = len;
+                    if (m > 1.0) {
+                        m = 1.0;
+                    }
+                    let mut scale = len;
+                    if (scale < 1.0) {
+                        scale = 1.0;
+                    }
+                    let r = ((m as f32).powf((fish as f32)) * scale);
+                    u = (0.5 + (((vx / len) * r) * 0.5));
+                    v = (0.5 + (((vy / len) * r) * 0.5));
+                }
+            }
+            let mut rr = 0.0;
+            let mut gg = 0.0;
+            let mut bb = 0.0;
+            let mut aa = 0;
+            if ((((u >= 0.0) && (u < 1.0)) && (v >= 0.0)) && (v < 1.0)) {
+                let mut sx = ((u * w) as isize);
+                let mut sy = ((v * h) as isize);
+                if (sx >= wi) {
+                    sx = (wi - 1);
+                }
+                if (sy >= hi) {
+                    sy = (hi - 1);
+                }
+                let idx = (((sy * wi) + sx) * 4);
+                rr = ((src[(idx) as usize].clone() as f32) / 255.0);
+                gg = ((src[((idx + 1)) as usize].clone() as f32) / 255.0);
+                bb = ((src[((idx + 2)) as usize].clone() as f32) / 255.0);
+                aa = (src[((idx + 3)) as usize].clone() as isize);
+            }
+            if (aa > 0) {
+                if (color != 0.0) {
+                    let hsv = shift_hue(rr, gg, bb, hue_amount);
+                    rr = hsv[(0) as usize].clone();
+                    gg = hsv[(1) as usize].clone();
+                    bb = hsv[(2) as usize].clone();
+                }
+                if (brightness != 0.0) {
+                    rr = clamp01((rr + bright));
+                    gg = clamp01((gg + bright));
+                    bb = clamp01((bb + bright));
+                }
+            }
+            out.push(((rr * 255.0) as u8));
+            out.push(((gg * 255.0) as u8));
+            out.push(((bb * 255.0) as u8));
+            out.push((aa as u8));
+            x += 1;
+        }
+        y += 1;
+    }
+    out
+}
+
+
 // ─── module: big_num ───
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 enum BigUintError {
@@ -8938,7 +9241,7 @@ fn parse_int_str(s: Arc<str>) -> Option<isize> {
     }
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 struct BigUint {
     limbs: /* var */ Vec<u32>,
 }
@@ -8964,7 +9267,7 @@ impl BigUint {
         true
     }
 
-    fn compare(&self, other: BigUint) -> isize {
+    fn compare(&self, other: &BigUint) -> isize {
         if (len32(&self.limbs) != (other.limbs.len() as isize)) {
             if (len32(&self.limbs) < (other.limbs.len() as isize)) {
                 return (-1);
@@ -9019,7 +9322,7 @@ impl BigUint {
     }
 
     fn sub_checked(&self, other: &BigUint) -> Result<BigUint, Box<dyn std::error::Error + Send + Sync>> {
-        if !((self.compare(other.clone()) >= 0)) {
+        if !((self.compare(other) >= 0)) {
             return Err(Box::new(BoringError::Other(std::any::TypeId::of::<BigUintError>(), Box::new(BigUintError::Underflow) as Box<dyn BoringVal + Send + Sync>)));
         }
         let two32 = (4294967296i64 as u64);
@@ -9084,7 +9387,7 @@ impl BigUint {
         result
     }
 
-    fn mul(&self, other: BigUint) -> BigUint {
+    fn mul(&self, other: &BigUint) -> BigUint {
         if (self.is_zero() || other.is_zero()) {
             return BigUint::from_u64(0);
         }
@@ -9151,16 +9454,16 @@ impl BigUint {
         (quotient, (rem as u32))
     }
 
-    fn divmod(&self, other: BigUint) -> Result<(BigUint, BigUint), Box<dyn std::error::Error + Send + Sync>> {
+    fn divmod(&self, other: &BigUint) -> Result<(BigUint, BigUint), Box<dyn std::error::Error + Send + Sync>> {
         if !((!other.is_zero())) {
             return Err(Box::new(BoringError::Other(std::any::TypeId::of::<BigUintError>(), Box::new(BigUintError::DivisionByZero) as Box<dyn BoringVal + Send + Sync>)));
         }
-        if (self.compare(other.clone()) < 0) {
+        if (self.compare(other) < 0) {
             Ok((BigUint::from_u64(0), self.clone()))
         } else {
             let mut shifted: Vec<BigUint> = vec![other.clone()];
             let mut next = other.mul_small(2);
-            while (next.compare(self.clone()) <= 0) {
+            while (next.compare(&self.clone()) <= 0) {
                 shifted.push(next.clone());
                 next = next.mul_small(2);
             }
@@ -9171,7 +9474,7 @@ impl BigUint {
                 i -= 1;
                 quotient = quotient.mul_small(2);
                 let divisor = shifted[(i) as usize].clone();
-                if (divisor.compare(remainder.clone()) <= 0) {
+                if (divisor.compare(&remainder.clone()) <= 0) {
                     remainder = remainder.sub_checked(&divisor)?;
                     quotient = quotient.add(BigUint::from_u64(1));
                 }
@@ -9186,7 +9489,7 @@ impl BigUint {
         while (!bcur.is_zero()) {
             let (_, r) = {
 match (|| -> Result<_, Box<dyn std::error::Error + Send + Sync>> {
-            Ok(acur.divmod(bcur.clone())?)
+            Ok(acur.divmod(&bcur.clone())?)
 })() {
 Ok(__boring_v) => __boring_v,
 Err(__boring_e) => {
@@ -9286,7 +9589,7 @@ impl std::fmt::Display for BigUint {
     }
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 struct BigInt {
     negative: /* var */ bool,
     magnitude: /* var */ BigUint,
@@ -9309,7 +9612,7 @@ impl BigInt {
         }
     }
 
-    fn compare(&self, other: BigInt) -> isize {
+    fn compare(&self, other: &BigInt) -> isize {
         if (self.negative != other.negative) {
             if self.negative {
                 (-1)
@@ -9317,7 +9620,7 @@ impl BigInt {
                 1
             }
         } else {
-            let mag_cmp = self.magnitude.compare(other.magnitude.clone());
+            let mag_cmp = self.magnitude.compare(&other.magnitude);
             if self.negative {
                 (0 as isize).wrapping_sub(mag_cmp)
             } else {
@@ -9331,7 +9634,7 @@ impl BigInt {
             let mag = self.magnitude.add(other.magnitude.clone());
             BigInt { negative: (self.negative && (!mag.is_zero())), magnitude: mag.clone() }
         } else {
-            if (self.magnitude.compare(other.magnitude.clone()) >= 0) {
+            if (self.magnitude.compare(&other.magnitude.clone()) >= 0) {
                 let mag = {
 match (|| -> Result<_, Box<dyn std::error::Error + Send + Sync>> {
                 Ok(self.magnitude.sub_checked(&other.magnitude)?)
@@ -9365,14 +9668,14 @@ let error = __boring_e;
         self.add(other.negate())
     }
 
-    fn mul(&self, other: BigInt) -> BigInt {
-        let mag = self.magnitude.mul(other.magnitude.clone());
+    fn mul(&self, other: &BigInt) -> BigInt {
+        let mag = self.magnitude.mul(&other.magnitude);
         let neg = ((self.negative != other.negative) && (!mag.is_zero()));
         BigInt { negative: neg, magnitude: mag.clone() }
     }
 
-    fn divmod(&self, other: BigInt) -> Result<(BigInt, BigInt), Box<dyn std::error::Error + Send + Sync>> {
-        let (q_mag, r_mag) = self.magnitude.divmod(other.magnitude.clone())?;
+    fn divmod(&self, other: &BigInt) -> Result<(BigInt, BigInt), Box<dyn std::error::Error + Send + Sync>> {
+        let (q_mag, r_mag) = self.magnitude.divmod(&other.magnitude)?;
         let q_neg = ((self.negative != other.negative) && (!q_mag.is_zero()));
         let r_neg = (self.negative && (!r_mag.is_zero()));
         Ok((BigInt { negative: q_neg, magnitude: q_mag }, BigInt { negative: r_neg, magnitude: r_mag }))
@@ -9473,7 +9776,7 @@ impl std::fmt::Display for BigFractionError {
 impl std::error::Error for BigFractionError {}
 
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 struct BigFraction {
     numerator: /* var */ BigInt,
     denominator: /* var */ BigInt,
@@ -9488,27 +9791,27 @@ impl BigFraction {
         self.numerator.is_negative()
     }
 
-    fn compare(&self, other: BigFraction) -> isize {
-        let lhs = self.numerator.mul(other.denominator.clone());
-        let rhs = other.numerator.mul(self.denominator.clone());
-        lhs.compare(rhs.clone())
+    fn compare(&self, other: &BigFraction) -> isize {
+        let lhs = self.numerator.mul(&other.denominator);
+        let rhs = other.numerator.mul(&self.denominator.clone());
+        lhs.compare(&rhs)
     }
 
     fn add_frac(&self, other: &BigFraction) -> Result<BigFraction, Box<dyn std::error::Error + Send + Sync>> {
-        let num = self.numerator.mul(other.denominator.clone()).add(other.numerator.mul(self.denominator.clone()));
-        let den = self.denominator.mul(other.denominator.clone());
+        let num = self.numerator.mul(&other.denominator.clone()).add(other.numerator.mul(&self.denominator.clone()));
+        let den = self.denominator.mul(&other.denominator);
         Ok(BigFraction::from_bigints(num.clone(), den.clone())?)
     }
 
     fn sub_frac(&self, other: &BigFraction) -> Result<BigFraction, Box<dyn std::error::Error + Send + Sync>> {
-        let num = self.numerator.mul(other.denominator.clone()).sub(&other.numerator.mul(self.denominator.clone()));
-        let den = self.denominator.mul(other.denominator.clone());
+        let num = self.numerator.mul(&other.denominator.clone()).sub(&other.numerator.mul(&self.denominator.clone()));
+        let den = self.denominator.mul(&other.denominator);
         Ok(BigFraction::from_bigints(num.clone(), den.clone())?)
     }
 
     fn mul_frac(&self, other: &BigFraction) -> Result<BigFraction, Box<dyn std::error::Error + Send + Sync>> {
-        let num = self.numerator.mul(other.numerator.clone());
-        let den = self.denominator.mul(other.denominator.clone());
+        let num = self.numerator.mul(&other.numerator);
+        let den = self.denominator.mul(&other.denominator);
         Ok(BigFraction::from_bigints(num.clone(), den.clone())?)
     }
 
@@ -9516,8 +9819,8 @@ impl BigFraction {
         if !((!other.numerator.is_zero())) {
             return Err(Box::new(BoringError::Other(std::any::TypeId::of::<BigFractionError>(), Box::new(BigFractionError::DivisionByZero) as Box<dyn BoringVal + Send + Sync>)));
         }
-        let num = self.numerator.mul(other.denominator.clone());
-        let den = self.denominator.mul(other.numerator.clone());
+        let num = self.numerator.mul(&other.denominator);
+        let den = self.denominator.mul(&other.numerator);
         Ok(BigFraction::from_bigints(num.clone(), den.clone())?)
     }
 
@@ -9538,7 +9841,7 @@ impl BigFraction {
         let g = n.magnitude.gcd(&d.magnitude.clone());
         let (n_mag, _) = {
 match (|| -> Result<_, Box<dyn std::error::Error + Send + Sync>> {
-        Ok(n.magnitude.divmod(g.clone())?)
+        Ok(n.magnitude.divmod(&g.clone())?)
 })() {
 Ok(__boring_v) => __boring_v,
 Err(__boring_e) => {
@@ -9549,7 +9852,7 @@ let error = __boring_e;
 };
         let (d_mag, _) = {
 match (|| -> Result<_, Box<dyn std::error::Error + Send + Sync>> {
-        Ok(d.magnitude.divmod(g.clone())?)
+        Ok(d.magnitude.divmod(&g)?)
 })() {
 Ok(__boring_v) => __boring_v,
 Err(__boring_e) => {
@@ -9566,7 +9869,7 @@ let error = __boring_e;
 impl std::fmt::Display for BigFraction {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let __disp_val = {
-            if (self.denominator.compare(BigInt::from_i64(1)) == 0) {
+            if (self.denominator.compare(&BigInt::from_i64(1)) == 0) {
                 Arc::<str>::from(Arc::<str>::from(format!("{}", self.numerator).as_str()))
             } else {
                 Arc::<str>::from(Arc::<str>::from(format!("{}/{}", self.numerator, self.denominator).as_str()))

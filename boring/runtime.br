@@ -2176,6 +2176,15 @@ struct StampRequest:
     float32 ghost
     int costume_index
     float32 size
+    # The six non-ghost graphic effects, snapshotted for the same reason
+    # as `ghost` (see this struct's doc comment): a stamp must show the
+    # sprite as it looked when `pen_stamp` ran, effects included.
+    float32 fx_color
+    float32 fx_fisheye
+    float32 fx_whirl
+    float32 fx_pixelate
+    float32 fx_mosaic
+    float32 fx_brightness
 
 # The blank starting buffer for `SoundQueue.scene_composite` (below) --
 # opaque white (real Scratch's own stage background wherever nothing
@@ -2214,6 +2223,12 @@ pub struct SoundQueue as Resource, Debug, Clone:
     # guessed approximation of a true stereo pan law, `bevy_audio` having
     # no direct pan primitive of its own).
     var mut {string=float32} pans
+    # Every target's non-ghost graphic effect values (`color`/`fisheye`/
+    # `whirl`/`pixelate`/`mosaic`/`brightness`), keyed `"<target>|<effect>"`
+    # -- same "fold into `SoundQueue`" reasoning as `pans` (the 16-
+    # `SystemParam` ceiling). Absent key = default 0. Rendered by
+    # `sync_graphic_effects` (`scratch.br`) via `effects.br`.
+    var mut {string=float32} effects
     # Every target's *current* rotation style ("all around"/"left-right"/
     # "don't rotate", real Scratch's own three exact strings). Same "fold
     # into `SoundQueue`, not its own resource" reasoning as `volumes`/
@@ -2494,6 +2509,20 @@ pub struct SoundQueue as Resource, Debug, Clone:
     # See `Positions.remove`'s own doc comment -- same reason, same shape.
     def remove_pan(string target_id):
         pans.remove(target_id)
+
+    req float32 get_effect(string target_id, string name):
+        effects[target_id + "|" + name] else 0.0
+
+    def set_effect(string target_id, string name, float32 v):
+        effects[target_id + "|" + name] = v
+
+    def clear_effects(string target_id):
+        effects.remove(target_id + "|color")
+        effects.remove(target_id + "|fisheye")
+        effects.remove(target_id + "|whirl")
+        effects.remove(target_id + "|pixelate")
+        effects.remove(target_id + "|mosaic")
+        effects.remove(target_id + "|brightness")
 
     # Which origin sprite `instance_id` belongs to -- itself as a safe
     # fallback if it has no entry at all (not expected in practice, since

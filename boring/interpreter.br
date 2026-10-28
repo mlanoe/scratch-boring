@@ -41,7 +41,7 @@ use chrono.Timelike
 # stick across the whole script. Confirmed against a live `boring` bug
 # (dict `[key]` indexing + a `var` struct param cloning instead of
 # referencing, both fixed upstream) before relying on this.
-def ScratchValue eval(Block b, var Vars vars, Frame frame, ProcTable procs, var Lists lists, Broadcasts broadcasts, var Positions positions, KeyboardState keyboard, MouseState mouse, ScratchTimer timer, var Rng rng, var LooksStates looks, TargetCostumes target_costumes, TargetCostumeDims costume_dims, SoundQueue sound_queue):
+def ScratchValue eval(Block b, var mut Vars vars, Frame frame, ProcTable procs, var mut Lists lists, Broadcasts broadcasts, var mut Positions positions, KeyboardState keyboard, MouseState mouse, ScratchTimer timer, var mut Rng rng, var mut LooksStates looks, TargetCostumes target_costumes, TargetCostumeDims costume_dims, SoundQueue sound_queue):
     match b.kind:
         Literal(v): v
         VarGet(id): vars.get(id, frame.target_id.clone())
@@ -465,7 +465,7 @@ def ScratchValue eval(Block b, var Vars vars, Frame frame, ProcTable procs, var 
 # call it's reached from (none of them can span a tick boundary), exactly
 # like the whole of the old, pre-scheduler `exec` did -- only `step_thread`
 # itself (below) needs to know about pausing.
-def exec_simple(Block b, var Vars vars, Frame frame, ProcTable procs, var Lists lists, Broadcasts broadcasts, var Positions positions, KeyboardState keyboard, MouseState mouse, ScratchTimer timer, var Rng rng, var LooksStates looks, var LayerOrders layer_orders, TargetCostumes target_costumes, TargetCostumeDims costume_dims, var SoundQueue sound_queue, var SpeechBubbles speech_bubbles, mut [ReceiverScript] spawned):
+def exec_simple(Block b, var mut Vars vars, Frame frame, ProcTable procs, var mut Lists lists, Broadcasts broadcasts, var mut Positions positions, KeyboardState keyboard, MouseState mouse, ScratchTimer timer, var mut Rng rng, var mut LooksStates looks, var mut LayerOrders layer_orders, TargetCostumes target_costumes, TargetCostumeDims costume_dims, var mut SoundQueue sound_queue, var mut SpeechBubbles speech_bubbles, mut [ReceiverScript] spawned):
     match b.kind:
         SetVar(id, expr):
             # Compute the value into a local *before* calling `vars.set` --
@@ -824,7 +824,7 @@ def exec_simple(Block b, var Vars vars, Frame frame, ProcTable procs, var Lists 
             let pos = positions.get(frame.target_id.clone())
             let style = sound_queue.get_rotation_style(frame.target_id.clone())
             let s = looks.get(frame.target_id.clone())
-            sound_queue.stamp_requests.push(StampRequest(target_id = frame.target_id.clone(), x = pos.x, y = pos.y, direction = pos.direction, rotation_style = style, ghost = s.ghost, costume_index = s.costume_index, size = s.size))
+            sound_queue.stamp_requests.push(StampRequest(target_id = frame.target_id.clone(), x = pos.x, y = pos.y, direction = pos.direction, rotation_style = style, ghost = s.ghost, costume_index = s.costume_index, size = s.size, fx_color = sound_queue.get_effect(frame.target_id.clone(), "color"), fx_fisheye = sound_queue.get_effect(frame.target_id.clone(), "fisheye"), fx_whirl = sound_queue.get_effect(frame.target_id.clone(), "whirl"), fx_pixelate = sound_queue.get_effect(frame.target_id.clone(), "pixelate"), fx_mosaic = sound_queue.get_effect(frame.target_id.clone(), "mosaic"), fx_brightness = sound_queue.get_effect(frame.target_id.clone(), "brightness")))
         ResetTimer:
             # Ported from real scratch-vm's own `resetProjectTimer` --
             # sets the timer straight back to `0.0`. `exec_simple` has no
@@ -1059,30 +1059,31 @@ def exec_simple(Block b, var Vars vars, Frame frame, ProcTable procs, var Lists 
                 let new_idx = wrap_costume_index(s.costume_index + 1, count)
                 looks.set("Stage", LooksState(visible = s.visible, size = s.size, costume_index = new_idx, ghost = s.ghost))
         SetGraphicEffectTo(effect, value_expr):
-            # Only `ghost` is rendered (see `LooksState.ghost`'s own doc
-            # comment) -- every other effect name is a real, silent no-op:
-            # not a shortcut around missing state, there genuinely is none
-            # to update (no reporter block can ever observe the
-            # difference either way).
+            # `ghost` lives in `LooksState` (alpha); the other six live in
+            # `SoundQueue.effects` (see its doc comment) and are rendered
+            # by `sync_graphic_effects` via `effects.br`. Any other name
+            # is a real no-op, same as real scratch-vm.
+            let v = eval(value_expr, vars, frame, procs, lists, broadcasts, positions, keyboard, mouse, timer, rng, looks, target_costumes, costume_dims, sound_queue).to_num().to_f32()
             if effect == "ghost":
-                let v = eval(value_expr, vars, frame, procs, lists, broadcasts, positions, keyboard, mouse, timer, rng, looks, target_costumes, costume_dims, sound_queue).to_num().to_f32()
                 let clamped = clamp_ghost(v)
                 let s = looks.get(frame.target_id.clone())
                 looks.set(frame.target_id.clone(), LooksState(visible = s.visible, size = s.size, costume_index = s.costume_index, ghost = clamped))
+            elif is_other_graphic_effect(effect):
+                sound_queue.set_effect(frame.target_id.clone(), effect.clone(), clamp_graphic_effect(effect.clone(), v))
         ChangeGraphicEffectBy(effect, value_expr):
+            let v = eval(value_expr, vars, frame, procs, lists, broadcasts, positions, keyboard, mouse, timer, rng, looks, target_costumes, costume_dims, sound_queue).to_num().to_f32()
             if effect == "ghost":
-                let v = eval(value_expr, vars, frame, procs, lists, broadcasts, positions, keyboard, mouse, timer, rng, looks, target_costumes, costume_dims, sound_queue).to_num().to_f32()
                 let s = looks.get(frame.target_id.clone())
                 let clamped = clamp_ghost(s.ghost + v)
                 looks.set(frame.target_id.clone(), LooksState(visible = s.visible, size = s.size, costume_index = s.costume_index, ghost = clamped))
+            elif is_other_graphic_effect(effect):
+                let cur = sound_queue.get_effect(frame.target_id.clone(), effect.clone())
+                sound_queue.set_effect(frame.target_id.clone(), effect.clone(), clamp_graphic_effect(effect.clone(), cur + v))
         ClearGraphicEffects:
-            # Real Scratch's own semantics: resets *every* effect, not
-            # just `ghost` -- correct here too even though the other six
-            # were never tracked in the first place, since resetting
-            # nothing is exactly the right behavior for state that was
-            # already always at its default.
+            # Real Scratch's own semantics: resets *every* effect.
             let s = looks.get(frame.target_id.clone())
             looks.set(frame.target_id.clone(), LooksState(visible = s.visible, size = s.size, costume_index = s.costume_index, ghost = 0.0))
+            sound_queue.clear_effects(frame.target_id.clone())
         GoToFrontBack(which):
             if which == "front":
                 layer_orders.go_to_front(frame.target_id.clone())
@@ -1191,7 +1192,7 @@ def int wrap_costume_index(int idx, int count):
 # `excluded` while keeping every other value in `[lower, upper]` equally
 # likely. Caller's responsibility to only call this when `upper > lower`
 # (i.e. at least two distinct values exist to pick from).
-def int rand_int_excluding(var Rng rng, int lower, int upper, int excluded):
+def int rand_int_excluding(var mut Rng rng, int lower, int upper, int excluded):
     let possible = (upper - lower) as float64
     let rand_int = lower + (rng.next_f64_01() * possible) as isize
     if rand_int >= excluded:
@@ -1202,6 +1203,22 @@ def int rand_int_excluding(var Rng rng, int lower, int upper, int excluded):
 # Clamps a ghost-effect value into real Scratch's own `[0, 100]` range --
 # ported from `Scratch3LooksBlocks`'s own effect clamp (a plain min/max,
 # not a wraparound the way costume indices are).
+def bool is_other_graphic_effect(string name):
+    name == "color" or name == "fisheye" or name == "whirl" or name == "pixelate" or name == "mosaic" or name == "brightness"
+
+# Real scratch-vm only bounds `brightness` (-100..100) besides `ghost`;
+# the rest are unbounded (the shader's own remaps handle any magnitude).
+def float32 clamp_graphic_effect(string name, float32 v):
+    if name == "brightness":
+        if v < -100.0:
+            -100.0
+        elif v > 100.0:
+            100.0
+        else:
+            v
+    else:
+        v
+
 def float32 clamp_ghost(float32 v):
     if v < 0.0:
         0.0
@@ -1393,7 +1410,7 @@ def PenState change_pen_shade_by(PenState s, float32 shade_change):
 # attendues" bug this function fixes. `PenCanvas.last_position` and its
 # whole diff loop are gone now (`pen.br`) -- this per-mutation queue is a
 # strict superset, so there is nothing left for that diff to correctly add.
-def move_position(var Positions positions, var SoundQueue sound_queue, string target_id, Position new_pos):
+def move_position(var mut Positions positions, var mut SoundQueue sound_queue, string target_id, Position new_pos):
     let old = positions.get(target_id.clone())
     positions.set(target_id.clone(), new_pos)
     if old.x != new_pos.x or old.y != new_pos.y:
@@ -1436,7 +1453,7 @@ def bool thread_in_warp([ExecFrame] stack):
 # hit. See `Thread`/`FrameKind`'s own doc comments for the state shape
 # this walks; see README.md's "Scheduler" design section for why this
 # replaces `exec`'s old native-recursion approach at all.
-def bool step_thread(var Thread thread, var Vars vars, ProcTable procs, var Lists lists, Broadcasts broadcasts, var Positions positions, KeyboardState keyboard, MouseState mouse, ScratchTimer timer, var Rng rng, var LooksStates looks, var LayerOrders layer_orders, TargetCostumes target_costumes, TargetCostumeDims costume_dims, var SoundQueue sound_queue, var SpeechBubbles speech_bubbles):
+def bool step_thread(var mut Thread thread, var mut Vars vars, ProcTable procs, var mut Lists lists, Broadcasts broadcasts, var mut Positions positions, KeyboardState keyboard, MouseState mouse, ScratchTimer timer, var mut Rng rng, var mut LooksStates looks, var mut LayerOrders layer_orders, TargetCostumes target_costumes, TargetCostumeDims costume_dims, var mut SoundQueue sound_queue, var mut SpeechBubbles speech_bubbles):
     # Every read/mutation below works against this local copy, never
     # `thread.stack` directly -- indexed *assignment* into an array field
     # reached through a `var` parameter (`thread.stack[i] = ...`) hits the
@@ -1629,7 +1646,7 @@ def bool step_thread(var Thread thread, var Vars vars, ProcTable procs, var List
                     # `PlaySound`'s own `exec_simple` case does (same
                     # volume/pitch snapshot, same instance->origin
                     # resolution for the zip lookup) -- `step_thread`
-                    # already has `var SoundQueue sound_queue` for the
+                    # already has `var mut SoundQueue sound_queue` for the
                     # same reason `exec_simple` does. The wait duration
                     # comes from `SoundQueue.sound_durations`, precomputed
                     # once at link time from the sound's own saved sb3
@@ -1865,7 +1882,7 @@ def bool step_thread(var Thread thread, var Vars vars, ProcTable procs, var List
 # `outer_spawned` so whoever ultimately owns the real thread pool
 # (`run_pending_threads`, or `run_script`'s own drive loop) picks them up
 # afterward, exactly like a top-level thread's own `spawned` field would.
-def drive_thread_to_completion(var Thread thread, var Vars vars, ProcTable procs, var Lists lists, Broadcasts broadcasts, var Positions positions, KeyboardState keyboard, MouseState mouse, ScratchTimer timer, var Rng rng, var LooksStates looks, var LayerOrders layer_orders, TargetCostumes target_costumes, TargetCostumeDims costume_dims, var SoundQueue sound_queue, var SpeechBubbles speech_bubbles, mut [ReceiverScript] outer_spawned):
+def drive_thread_to_completion(var mut Thread thread, var mut Vars vars, ProcTable procs, var mut Lists lists, Broadcasts broadcasts, var mut Positions positions, KeyboardState keyboard, MouseState mouse, ScratchTimer timer, var mut Rng rng, var mut LooksStates looks, var mut LayerOrders layer_orders, TargetCostumes target_costumes, TargetCostumeDims costume_dims, var mut SoundQueue sound_queue, var mut SpeechBubbles speech_bubbles, mut [ReceiverScript] outer_spawned):
     var done = false
     var iterations = 0
     let iteration_cap = 100000

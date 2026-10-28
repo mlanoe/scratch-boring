@@ -86,11 +86,10 @@ uses) and its `costume #`/`costume name` reporters; backdrop switching (adds
 to completion first) and its `backdrop #`/`backdrop name` reporters;
 `go to front/back` and `go forward/backward N layers` (a real splice-based
 reorder of every target's current front-to-back rank, not a raw order-value
-bump); the `ghost` graphic effect (mapped onto real sprite alpha). The other six
-graphic effects (`color`/`fisheye`/`whirl`/`pixelate`/`mosaic`/`brightness`) are
-parsed but not rendered — real Scratch has no reporter for any of them either, so
-there's nothing a project could observe as wrong, but the visual effect itself is
-a known, undone gap. On-stage variable/list/reporter watchers are supported,
+bump); all seven graphic effects: `ghost` (mapped onto real sprite alpha) and
+`color`/`fisheye`/`whirl`/`pixelate`/`mosaic`/`brightness` (a CPU pass over the
+costume's pixels, `boring/effects.br`, ported from scratch-render's shader and
+cached per sprite). On-stage variable/list/reporter watchers are supported,
 including `show variable`/`hide variable`/`show list`/`hide list` toggling a
 monitor's visibility live, not just its initial saved state.
 
@@ -348,11 +347,10 @@ doesn't have, or a deliberate scope decision — not a sequence of planned work.
   real Scratch's own defined "no audio engine" values (`-1`/`false`); actual
   microphone capture would need a new OS-level audio-input dependency (e.g.
   `cpal`) this project has never taken on.
-- **Six of seven graphic effects don't render** — only `ghost` is mapped onto a
-  real Bevy primitive (sprite alpha). `color`/`fisheye`/`whirl`/`pixelate`/
-  `mosaic`/`brightness` are parsed but have no visual effect; real Scratch also
-  has no reporter for any of them, so a project can't observe the difference,
-  but the rendering itself is undone.
+- **Graphic effects are approximations** — `color`/`fisheye`/`whirl`/`pixelate`/
+  `mosaic`/`brightness` are rendered by a CPU pass (`boring/effects.br`) with
+  nearest-neighbor sampling rather than scratch-render's GPU shader.
+  `pen_stamp` does apply them (snapshotted into `StampRequest` at stamp time).
 - **AABB-only collision**, not pixel-perfect, and not rotation-aware — a
   consistent approximation across Motion's edge-bounce, Sensing's touching
   tests, and click hit-testing, not real Scratch's per-pixel alpha test.

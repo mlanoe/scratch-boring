@@ -27,7 +27,7 @@
 # majority a headless test cares about testing), with a documented,
 # bounded give-up for one that genuinely never does (see that function's
 # own doc comment on its iteration cap).
-def run_script(var Vars vars, ReceiverScript script, ProcTable procs, var Lists lists, Broadcasts broadcasts, var Positions positions, KeyboardState keyboard, MouseState mouse, ScratchTimer timer, var Rng rng, var LooksStates looks, var LayerOrders layer_orders, TargetCostumes target_costumes, TargetCostumeDims costume_dims, var SoundQueue sound_queue, var SpeechBubbles speech_bubbles):
+def run_script(var mut Vars vars, ReceiverScript script, ProcTable procs, var mut Lists lists, Broadcasts broadcasts, var mut Positions positions, KeyboardState keyboard, MouseState mouse, ScratchTimer timer, var mut Rng rng, var mut LooksStates looks, var mut LayerOrders layer_orders, TargetCostumes target_costumes, TargetCostumeDims costume_dims, var mut SoundQueue sound_queue, var mut SpeechBubbles speech_bubbles):
     var thread = spawn_thread(script)
     mut round = []
     drive_thread_to_completion(thread, vars, procs, lists, broadcasts, positions, keyboard, mouse, timer, rng, looks, layer_orders, target_costumes, costume_dims, sound_queue, speech_bubbles, round)
@@ -111,7 +111,7 @@ def HeadlessResult run_and_build_headless_result(Sb3Project project, string path
     let target_costumes = build_target_costumes(project.clone())
     var layer_orders = build_layer_orders(project.clone())
     let costume_dims = build_target_costume_dims(path.clone(), project.clone())
-    var sound_queue = SoundQueue(play_queue = [], stop_all_requested = false, volumes = build_sound_volume_table(project.clone()), pitches = {=}, pans = {=}, rotation_styles = build_target_rotation_styles(project.clone()), sound_durations = build_target_sound_durations(project.clone()), instance_types = build_instance_types_table(project.clone()), next_clone_id = 0, clone_requests = [], despawn_requests = [], live_clone_count = 0, reset_timer_requested = false, backdrop_switch_hats = build_backdrop_switch_hats(project.clone()), draggable = build_target_draggable(project.clone()), pen_states = {=}, pen_line_requests = [], pen_clear_requested = false, stamp_requests = [], scene_composite = blank_scene_composite_data())
+    var sound_queue = SoundQueue(play_queue = [], stop_all_requested = false, volumes = build_sound_volume_table(project.clone()), pitches = {=}, pans = {=}, effects = {=}, rotation_styles = build_target_rotation_styles(project.clone()), sound_durations = build_target_sound_durations(project.clone()), instance_types = build_instance_types_table(project.clone()), next_clone_id = 0, clone_requests = [], despawn_requests = [], live_clone_count = 0, reset_timer_requested = false, backdrop_switch_hats = build_backdrop_switch_hats(project.clone()), draggable = build_target_draggable(project.clone()), pen_states = {=}, pen_line_requests = [], pen_clear_requested = false, stamp_requests = [], scene_composite = blank_scene_composite_data())
     var speech_bubbles = SpeechBubbles(table = {=})
     for script in scripts:
         run_script(vars, script, procs, lists, broadcasts, positions, keyboard, mouse, timer, rng, looks, layer_orders, target_costumes, costume_dims, sound_queue, speech_bubbles)
@@ -325,7 +325,7 @@ def string list_contents_string(Lists lists, string list_id):
 # `SoundQueue` field is irrelevant to this scan, so they're all given
 # harmless empty defaults.
 pub def bool run_report_touching_color_test([uint8] scene_pixels, float32 self_x, float32 self_y, float32 self_hw, float32 self_hh, string target_hex):
-    let sound_queue = SoundQueue(play_queue = [], stop_all_requested = false, volumes = {=}, pitches = {=}, pans = {=}, rotation_styles = {=}, sound_durations = {=}, instance_types = {=}, next_clone_id = 0, clone_requests = [], despawn_requests = [], live_clone_count = 0, reset_timer_requested = false, backdrop_switch_hats = [], draggable = {=}, pen_states = {=}, pen_line_requests = [], pen_clear_requested = false, stamp_requests = [], scene_composite = scene_pixels)
+    let sound_queue = SoundQueue(play_queue = [], stop_all_requested = false, volumes = {=}, pitches = {=}, pans = {=}, effects = {=}, rotation_styles = {=}, sound_durations = {=}, instance_types = {=}, next_clone_id = 0, clone_requests = [], despawn_requests = [], live_clone_count = 0, reset_timer_requested = false, backdrop_switch_hats = [], draggable = {=}, pen_states = {=}, pen_line_requests = [], pen_clear_requested = false, stamp_requests = [], scene_composite = scene_pixels)
     let target = hex_to_pen_color(target_hex)
     let min_x = floor(canvas_px(self_x - self_hw)) as isize
     let max_x = floor(canvas_px(self_x + self_hw)) as isize

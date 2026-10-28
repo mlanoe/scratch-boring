@@ -37,6 +37,7 @@ use interpreter
 use scheduler
 use assets
 use pen
+use effects
 
 use bevy.prelude.*
 # `Volume` (for `sound_setvolumeto`/`changevolumeby`'s own `PlaybackSettings.
@@ -133,6 +134,15 @@ pub struct ScratchSprite as Component, Debug:
 # even have costumes" branch to worry about.
 pub struct TargetCostumeHandles as Component, Debug, Clone:
     [Handle<Image>] handles
+
+# Per-target cache of the one processed (effect-applied) costume image
+# `sync_graphic_effects` last built, keyed by a string of costume index +
+# every effect value -- rebuilt only when that key changes, and the
+# previous `Handle<Image>` is dropped on replacement (freeing it), so an
+# animated `change color effect by` loop never accumulates images.
+pub struct EffectCache as Resource, Debug, Clone:
+    var mut {string=string} keys
+    var mut {string=Handle<Image>} handles
 
 # Rotation style ("all around"/"left-right"/"don't rotate") used to live
 # here as its own read-only Component, baked in once at spawn time --
@@ -322,7 +332,8 @@ pub def setup_scratch_project(mut Commands commands, Res<ProjectPath> project_pa
         # for why (a real, documented simplification, not real per-run
         # entropy).
         commands.insert_resource(Rng(state = 88172645463325252 as uint64))
-        commands.insert_resource(SoundQueue(play_queue = [], stop_all_requested = false, volumes = build_sound_volume_table(project.clone()), pitches = {=}, pans = {=}, rotation_styles = build_target_rotation_styles(project.clone()), sound_durations = build_target_sound_durations(project.clone()), instance_types = build_instance_types_table(project.clone()), next_clone_id = 0, clone_requests = [], despawn_requests = [], live_clone_count = 0, reset_timer_requested = false, backdrop_switch_hats = backdrop_switch_hats.clone(), draggable = build_target_draggable(project.clone()), pen_states = {=}, pen_line_requests = [], pen_clear_requested = false, stamp_requests = [], scene_composite = blank_scene_composite_data()))
+        commands.insert_resource(SoundQueue(play_queue = [], stop_all_requested = false, volumes = build_sound_volume_table(project.clone()), pitches = {=}, pans = {=}, effects = {=}, rotation_styles = build_target_rotation_styles(project.clone()), sound_durations = build_target_sound_durations(project.clone()), instance_types = build_instance_types_table(project.clone()), next_clone_id = 0, clone_requests = [], despawn_requests = [], live_clone_count = 0, reset_timer_requested = false, backdrop_switch_hats = backdrop_switch_hats.clone(), draggable = build_target_draggable(project.clone()), pen_states = {=}, pen_line_requests = [], pen_clear_requested = false, stamp_requests = [], scene_composite = blank_scene_composite_data()))
+        commands.insert_resource(EffectCache(keys = {=}, handles = {=}))
         commands.insert_resource(SpeechBubbles(table = {=}))
         # Every green-flag hat starts its own thread, project-wide -- real
         # Scratch runs them all simultaneously, and now that the real
@@ -675,6 +686,7 @@ pub def despawn_pending_clones(mut Commands commands, mut ResMut<SoundQueue> sou
         sound_queue.remove_volume(instance_id.clone())
         sound_queue.remove_pitch(instance_id.clone())
         sound_queue.remove_pan(instance_id.clone())
+        sound_queue.clear_effects(instance_id.clone())
         sound_queue.remove_rotation_style(instance_id.clone())
         sound_queue.remove_draggable(instance_id.clone())
         sound_queue.remove_pen_state(instance_id.clone())
@@ -1504,6 +1516,48 @@ pub def sync_ghost_effect_from_looks_states(Query<(mut Sprite&, ScratchSprite&)>
         let alpha = 1.0 - (s.ghost / 100.0)
         sprite.color = sprite.color.with_alpha(alpha)
 
+# Renders the six non-`ghost` graphic effects (`color`/`fisheye`/`whirl`/
+# `pixelate`/`mosaic`/`brightness`, `SoundQueue.effects`) by swapping the
+# sprite's image for a CPU-processed copy of its current costume
+# (`effects.br`'s `apply_graphic_effects`), cached per target in
+# `EffectCache`. Runs right after `sync_costume_from_looks_states` (which
+# resets `sprite.image` to the plain costume every tick), so a target with
+# every effect at default simply keeps that plain image -- zero cost.
+pub def sync_graphic_effects(Query<(mut Sprite&, TargetCostumeHandles&, ScratchSprite&)> query, Res<LooksStates> looks, Res<SoundQueue> sound_queue, Res<TargetCostumeDims> costume_dims, mut ResMut<Assets<Image>> images, mut ResMut<EffectCache> cache):
+    for sprite, costumes, tag in query:
+        let tid = tag.target_id.clone()
+        let c = sound_queue.get_effect(tid.clone(), "color")
+        let f = sound_queue.get_effect(tid.clone(), "fisheye")
+        let w = sound_queue.get_effect(tid.clone(), "whirl")
+        let p = sound_queue.get_effect(tid.clone(), "pixelate")
+        let m = sound_queue.get_effect(tid.clone(), "mosaic")
+        let b = sound_queue.get_effect(tid.clone(), "brightness")
+        if effects_are_identity(c, f, w, p, m, b) or costumes.handles.length == 0:
+            cache.keys.remove(tid.clone())
+            cache.handles.remove(tid.clone())
+        else:
+            let idx = wrap_costume_index(looks.get(tid.clone()).costume_index, costumes.handles.length)
+            let key = idx.toString() + "|" + c.toString() + "|" + f.toString() + "|" + w.toString() + "|" + p.toString() + "|" + m.toString() + "|" + b.toString()
+            let cached_key = cache.keys[tid.clone()] else ""
+            if cached_key == key:
+                if let h = cache.handles[tid.clone()]:
+                    sprite.image = h.clone()
+            else:
+                if let base = Assets.get(images, costumes.handles[idx].clone()):
+                    if let base_pixels = base.data.clone():
+                        let origin = sound_queue.instance_type_of(tid.clone())
+                        let dim = costume_dims.get(origin, idx)
+                        let bw = base.width() as float32
+                        let bh = base.height() as float32
+                        let processed = apply_graphic_effects(base_pixels, bw, bh, dim.width, dim.height, c, f, w, p, m, b)
+                        var mut img = base.clone()
+                        let [uint8]? wrapped = processed
+                        img.data = wrapped
+                        let handle = images.add(img)
+                        cache.keys[tid.clone()] = key
+                        cache.handles[tid.clone()] = handle.clone()
+                        sprite.image = handle
+
 # `LayerOrders`' own per-target rank onto `Transform.translation.z` --
 # no conversion needed (`LayerOrders`' own doc comment: higher already
 # means "draws in front" on both sides, real Scratch's own convention
@@ -1542,7 +1596,7 @@ pub def App build_app(string project_path):
     # `sync_*` system, after `run_pending_threads` has run.
     app.add_systems(Update, (
         (sync_keyboard_state, sync_mouse_state, sync_scratch_timer, check_key_press_hats, check_greater_than_hats, check_touching_object_hats, check_click_hats, check_backdrop_switch_hats, handle_ask_text_input, run_pending_threads, handle_sprite_dragging, draw_pen_marks, draw_stamps, play_queued_sounds, spawn_pending_clones, despawn_pending_clones).chain(),
-        (sync_transforms_from_positions, sync_visibility_and_size_from_looks_states, sync_costume_from_looks_states, sync_ghost_effect_from_looks_states, sync_z_from_layer_orders, sync_speech_bubbles, sync_variable_watchers, sync_reporter_watchers, sync_list_watchers, sync_ask_ui).chain(),
+        (sync_transforms_from_positions, sync_visibility_and_size_from_looks_states, sync_costume_from_looks_states, sync_graphic_effects, sync_ghost_effect_from_looks_states, sync_z_from_layer_orders, sync_speech_bubbles, sync_variable_watchers, sync_reporter_watchers, sync_list_watchers, sync_ask_ui).chain(),
         # Rebuilds `SceneComposite` (`sensing_touchingcolor`'s own real
         # data source) last, once every position/costume mutation for
         # this tick has already settled -- see that resource's own doc
@@ -1617,7 +1671,7 @@ pub def string position_value(Positions positions, string target_name, string ax
 # a target's position directly across ticks (rather than through a scripted
 # Motion block, the way `tests/touching_object_hat.rs` needs for its own
 # edge-triggered-hat check) has no other way to build one.
-pub def set_position_value(var Positions positions, string target_name, float32 x, float32 y):
+pub def set_position_value(var mut Positions positions, string target_name, float32 x, float32 y):
     let current = positions.get(target_name)
     positions.set(target_name, Position(x = x, y = y, direction = current.direction))
 
