@@ -57,9 +57,9 @@ def ScratchValue eval(Block b, var mut Vars vars, Frame frame, ProcTable procs, 
             # `loosely_equals`'s own doc comment for how that surfaced).
             ScratchValue.Bool(eval(l, vars, frame, procs, lists, broadcasts, positions, keyboard, mouse, timer, rng, looks, target_costumes, costume_dims, sound_queue).loosely_equals(eval(r, vars, frame, procs, lists, broadcasts, positions, keyboard, mouse, timer, rng, looks, target_costumes, costume_dims, sound_queue)))
         Gt(l, r):
-            ScratchValue.Bool(eval(l, vars, frame, procs, lists, broadcasts, positions, keyboard, mouse, timer, rng, looks, target_costumes, costume_dims, sound_queue).to_num().gt_owned(eval(r, vars, frame, procs, lists, broadcasts, positions, keyboard, mouse, timer, rng, looks, target_costumes, costume_dims, sound_queue).to_num()))
+            ScratchValue.Bool(eval(l, vars, frame, procs, lists, broadcasts, positions, keyboard, mouse, timer, rng, looks, target_costumes, costume_dims, sound_queue).loosely_gt(eval(r, vars, frame, procs, lists, broadcasts, positions, keyboard, mouse, timer, rng, looks, target_costumes, costume_dims, sound_queue)))
         Lt(l, r):
-            ScratchValue.Bool(eval(l, vars, frame, procs, lists, broadcasts, positions, keyboard, mouse, timer, rng, looks, target_costumes, costume_dims, sound_queue).to_num().lt_owned(eval(r, vars, frame, procs, lists, broadcasts, positions, keyboard, mouse, timer, rng, looks, target_costumes, costume_dims, sound_queue).to_num()))
+            ScratchValue.Bool(eval(l, vars, frame, procs, lists, broadcasts, positions, keyboard, mouse, timer, rng, looks, target_costumes, costume_dims, sound_queue).loosely_lt(eval(r, vars, frame, procs, lists, broadcasts, positions, keyboard, mouse, timer, rng, looks, target_costumes, costume_dims, sound_queue)))
         Mul(l, r):
             ScratchValue.Num(eval(l, vars, frame, procs, lists, broadcasts, positions, keyboard, mouse, timer, rng, looks, target_costumes, costume_dims, sound_queue).to_num().mul_owned(eval(r, vars, frame, procs, lists, broadcasts, positions, keyboard, mouse, timer, rng, looks, target_costumes, costume_dims, sound_queue).to_num()))
         Div(l, r):
@@ -81,13 +81,13 @@ def ScratchValue eval(Block b, var mut Vars vars, Frame frame, ProcTable procs, 
             ScratchValue.Str("{eval(l, vars, frame, procs, lists, broadcasts, positions, keyboard, mouse, timer, rng, looks, target_costumes, costume_dims, sound_queue)}{eval(r, vars, frame, procs, lists, broadcasts, positions, keyboard, mouse, timer, rng, looks, target_costumes, costume_dims, sound_queue)}")
         LetterOf(idx_expr, str_expr):
             let s = "{eval(str_expr, vars, frame, procs, lists, broadcasts, positions, keyboard, mouse, timer, rng, looks, target_costumes, costume_dims, sound_queue)}"
-            let idx = eval(idx_expr, vars, frame, procs, lists, broadcasts, positions, keyboard, mouse, timer, rng, looks, target_costumes, costume_dims, sound_queue).to_num().to_isize_checked() else 0
-            # 1-based; real Scratch reports an empty string for any
-            # out-of-range index rather than erroring or wrapping/clamping
-            # (matching `Lists.item_at`'s own out-of-range convention).
-            if idx >= 1 and idx <= s.length:
-                let idx0 = idx - 1
-                ScratchValue.Str(s[idx0..<idx])
+            # `Cast.toNumber(index) - 1`, then `str.charAt(index)`: out of range
+            # (index < 0 or > length - 1) -> "", otherwise the fractional index is
+            # truncated (`letter 1.5 of "abc"` is "a").
+            let fidx = eval(idx_expr, vars, frame, procs, lists, broadcasts, positions, keyboard, mouse, timer, rng, looks, target_costumes, costume_dims, sound_queue).to_num().to_f64() - 1.0
+            if fidx >= 0.0 and fidx <= ((s.length as float64) - 1.0):
+                let idx0 = floor(fidx) as isize
+                ScratchValue.Str(s[idx0..<(idx0 + 1)])
             else:
                 ScratchValue.Str("")
         StringLength(str_expr):
@@ -121,12 +121,16 @@ def ScratchValue eval(Block b, var mut Vars vars, Frame frame, ProcTable procs, 
                 # formula, not an approximation of it.
                 "round": floor(n + 0.5)
                 "sqrt": sqrt(n)
-                "sin": sin(n * 0.017453292)
-                "cos": cos(n * 0.017453292)
-                "tan": tan(n * 0.017453292)
-                "asin": asin(n) * 57.29577951
-                "acos": acos(n) * 57.29577951
-                "atan": atan(n) * 57.29577951
+                # Real scratch-vm: `Math.round(Math.sin(PI * n / 180) * 1e10) / 1e10`
+                # (so `sin of 30 = 0.5` and `cos of 90 = 0` hold exactly), `tan`
+                # via `MathUtil.tan` (Infinity at +/-90, 270; 0 at multiples of
+                # 180), and asin/acos/atan scaled by `180 / PI`.
+                "sin": floor((sin(n * 0.017453292519943295) * 1.0e10) + 0.5) / 1.0e10
+                "cos": floor((cos(n * 0.017453292519943295) * 1.0e10) + 0.5) / 1.0e10
+                "tan": scratch_tan_degrees(n)
+                "asin": asin(n) * 57.29577951308232
+                "acos": acos(n) * 57.29577951308232
+                "atan": atan(n) * 57.29577951308232
                 "ln": log(n)
                 "log": log10(n)
                 "e ^": exp(n)
@@ -161,7 +165,7 @@ def ScratchValue eval(Block b, var mut Vars vars, Frame frame, ProcTable procs, 
         ListItemAt(list_id, idx_expr):
             let idx_val = eval(idx_expr, vars, frame, procs, lists, broadcasts, positions, keyboard, mouse, timer, rng, looks, target_costumes, costume_dims, sound_queue)
             let len = lists.length(list_id.clone(), frame.target_id.clone())
-            let idx0 = resolve_list_index(idx_val, len, false)
+            let idx0 = resolve_list_index_rnd(idx_val, len, false, rng)
             lists.item_at(list_id, frame.target_id.clone(), idx0)
         ListItemNum(list_id, item_expr):
             let item = eval(item_expr, vars, frame, procs, lists, broadcasts, positions, keyboard, mouse, timer, rng, looks, target_costumes, costume_dims, sound_queue)
@@ -192,7 +196,7 @@ def ScratchValue eval(Block b, var mut Vars vars, Frame frame, ProcTable procs, 
         IsLoud:
             ScratchValue.Bool(current_loudness() > 10.0)
         Timer:
-            ScratchValue.Num(ScratchNumber.from_f32(timer.elapsed))
+            ScratchValue.Num(ScratchNumber.from_f32(timer.elapsed - timer.reset_base))
         Answer:
             ScratchValue.Str(vars.get_answer())
         CurrentDateTime(which):
@@ -289,19 +293,24 @@ def ScratchValue eval(Block b, var mut Vars vars, Frame frame, ProcTable procs, 
             elif what == "_edge_":
                 ScratchValue.Bool(touching_stage_edge(self_pos.x, self_pos.y, self_hw, self_hh))
             else:
-                # Real scratch-vm's own `isTouchingSprite`: a hidden
-                # sprite (either side) never touches, or is touched by,
-                # anything -- checked before ever looking at position/size.
-                let other_looks = looks.get(what.clone())
-                if !self_looks.visible or !other_looks.visible:
-                    ScratchValue.Bool(false)
-                else:
-                    let other_pos = positions.get(what.clone())
-                    let other_dim = costume_dims.get(what.clone(), other_looks.costume_index)
-                    let other_scale = other_looks.size / 100.0
-                    let other_hw = (other_dim.width * other_scale) / 2.0
-                    let other_hh = (other_dim.height * other_scale) / 2.0
-                    ScratchValue.Bool(aabb_overlap(self_pos.x, self_pos.y, self_hw, self_hh, other_pos.x, other_pos.y, other_hw, other_hh))
+                # Real scratch-vm's own `isTouchingSprite`: tests every clone of the
+                # named sprite (the origin included) except the asking target
+                # itself; a hidden target (either side) never touches anything --
+                # checked before ever looking at position/size.
+                var hit = false
+                if self_looks.visible:
+                    for other_id in instances_of(sound_queue.instance_types.clone(), what.clone()):
+                        if !hit and other_id != self_id:
+                            let other_looks = looks.get(other_id.clone())
+                            if other_looks.visible:
+                                let other_pos = positions.get(other_id.clone())
+                                let other_dim = costume_dims.get(what.clone(), other_looks.costume_index)
+                                let other_scale = other_looks.size / 100.0
+                                let other_hw = (other_dim.width * other_scale) / 2.0
+                                let other_hh = (other_dim.height * other_scale) / 2.0
+                                if aabb_overlap(self_pos.x, self_pos.y, self_hw, self_hh, other_pos.x, other_pos.y, other_hw, other_hh):
+                                    hit = true
+                ScratchValue.Bool(hit)
         TouchingColor(color_expr):
             # Ported from real scratch-vm's own `touchingColor`
             # (confirmed against source) -- scans this instance's own
@@ -537,22 +546,28 @@ def exec_simple(Block b, var mut Vars vars, Frame frame, ProcTable procs, var mu
             lists.add(list_id, frame.target_id.clone(), item)
         ListDeleteAt(list_id, idx_expr):
             let idx_val = eval(idx_expr, vars, frame, procs, lists, broadcasts, positions, keyboard, mouse, timer, rng, looks, target_costumes, costume_dims, sound_queue)
-            let len = lists.length(list_id.clone(), frame.target_id.clone())
-            let idx0 = resolve_list_index(idx_val, len, false)
-            lists.delete_at(list_id, frame.target_id.clone(), idx0)
+            let delete_all = match idx_val.clone():
+                Str(s): s == "all"
+                _: false
+            if delete_all:
+                lists.delete_all(list_id, frame.target_id.clone())
+            else:
+                let len = lists.length(list_id.clone(), frame.target_id.clone())
+                let idx0 = resolve_list_index_rnd(idx_val, len, false, rng)
+                lists.delete_at(list_id, frame.target_id.clone(), idx0)
         ListDeleteAll(list_id):
             lists.delete_all(list_id, frame.target_id.clone())
         ListInsertAt(list_id, idx_expr, item_expr):
             let idx_val = eval(idx_expr, vars, frame, procs, lists, broadcasts, positions, keyboard, mouse, timer, rng, looks, target_costumes, costume_dims, sound_queue)
             let item = eval(item_expr, vars, frame, procs, lists, broadcasts, positions, keyboard, mouse, timer, rng, looks, target_costumes, costume_dims, sound_queue)
             let len = lists.length(list_id.clone(), frame.target_id.clone())
-            let idx0 = resolve_list_index(idx_val, len, true)
+            let idx0 = resolve_list_index_rnd(idx_val, len, true, rng)
             lists.insert_at(list_id, frame.target_id.clone(), idx0, item)
         ListReplaceAt(list_id, idx_expr, item_expr):
             let idx_val = eval(idx_expr, vars, frame, procs, lists, broadcasts, positions, keyboard, mouse, timer, rng, looks, target_costumes, costume_dims, sound_queue)
             let item = eval(item_expr, vars, frame, procs, lists, broadcasts, positions, keyboard, mouse, timer, rng, looks, target_costumes, costume_dims, sound_queue)
             let len = lists.length(list_id.clone(), frame.target_id.clone())
-            let idx0 = resolve_list_index(idx_val, len, false)
+            let idx0 = resolve_list_index_rnd(idx_val, len, false, rng)
             lists.replace_at(list_id, frame.target_id.clone(), idx0, item)
         MoveSteps(steps_expr):
             let steps = eval(steps_expr, vars, frame, procs, lists, broadcasts, positions, keyboard, mouse, timer, rng, looks, target_costumes, costume_dims, sound_queue).to_num().to_f32()
@@ -1158,18 +1173,55 @@ def exec_simple(Block b, var mut Vars vars, Frame frame, ProcTable procs, var mu
             # linker-bug argument as eval()'s `else` arm above.
             throw Error.InvalidInput
 
+# Index of the topmost `ProcCallFrame` in a thread's frame stack, or -1.
+def int topmost_proc_frame_index([ExecFrame] stack):
+    var idx = stack.length - 1
+    var found = -1
+    while idx >= 0 and found < 0:
+        match stack[idx].kind.clone():
+            ProcCallFrame(w):
+                found = idx
+            _:
+                pass
+        idx -= 1
+    found
+
+# `MathUtil.tan`: the angle is first reduced mod 360; +/-90 and +/-270 are
+# Infinity (JS `Math.tan` would give a huge finite number), +/-180 and 0 are
+# exactly 0, anything else is rounded to 10 decimals like sin/cos.
+def float64 scratch_tan_degrees(float64 n):
+    let q = n / 360.0
+    let whole = if q >= 0.0: floor(q) else: ceil(q)
+    let a = n - (360.0 * whole)
+    if a == 90.0 or a == -270.0:
+        1.0e308 * 10.0
+    elif a == 270.0 or a == -90.0:
+        -1.0e308 * 10.0
+    elif a == 0.0 or a == 180.0 or a == -180.0:
+        0.0
+    else:
+        floor((tan(a * 0.017453292519943295) * 1.0e10) + 0.5) / 1.0e10
+
 # Keeps a direction in real Scratch's own `(-180, 180]` display range after
 # `turn_right`/`turn_left`/`point_in_direction` -- ported directly from
 # real Scratch's `MathUtil.wrapClamp(direction, -180, 180)` behavior (not
 # guessed): repeatedly folding by 360 rather than a single `%` because a
 # large `turn_right`/`turn_left` delta can overshoot the range by more than
 # one full turn.
+#
+# Closed form, not a `while` fold: in float32 `x - 360 == x` once |x| >= ~8.6e9
+# (and for +/-Infinity), so a fold loop never terminated on `turn right 1e10` or
+# `point in direction (1/0)`. A non-finite input (NaN/Infinity) is mapped to the
+# default direction 90 -- real Scratch's `setDirection` ignores non-finite
+# values (keeps the old direction); this function has no access to the old one.
 def float32 normalize_direction(float32 d):
-    var result = d
-    while result > 180.0:
-        result -= 360.0
-    while result <= -180.0:
-        result += 360.0
+    if d != d or d > 3.0e38 or d < -3.0e38:
+        return 90.0
+    var result = d - (360.0 * floor((d + 180.0) / 360.0))
+    if result <= -180.0:
+        result = 180.0
+    if result > 180.0:
+        result = result - 360.0
     result
 
 # Wraps a costume index into `[0, count)` -- ported from real Scratch's
@@ -1464,7 +1516,6 @@ def bool step_thread(var mut Thread thread, var mut Vars vars, ProcTable procs, 
     # stack`, a genuine local variable, doesn't have that problem, so
     # every mutation happens here instead and `thread.stack = stack`
     # writes the whole field back in one shot at every `return` below.
-    mut stack = thread.stack.clone()
     # A `warp`-flagged custom block's own loops (`RepeatN`/`RepeatUntilCond`/
     # `Forever` below, guarded by `thread_in_warp`) skip their ordinary
     # per-iteration yield entirely, matching real Scratch's "Run without
@@ -1502,73 +1553,83 @@ def bool step_thread(var mut Thread thread, var mut Vars vars, ProcTable procs, 
     var proc_call_depth = 0
     let proc_call_depth_cap = 10000
     while true:
-        if stack.length == 0:
-            thread.stack = stack
+        if thread.stack.length == 0:
+            
             return true
-        let top = stack.length - 1
-        let frame = stack[top]
-        if frame.index >= frame.body.length:
+        let top = thread.stack.length - 1
+        # Probe the top frame in place: `let frame = stack[top]` deep-clones the
+        # whole frame (its entire block-tree body) and was done on every executed
+        # statement, plus a second clone when the frame was rewritten. Now that
+        # clone happens only when a body is finished (once per loop iteration).
+        # (Reading `stack[top].index` directly would clone the whole element too, so
+        # the frame is moved out and straight back instead -- a pointer move.)
+        let probe = thread.stack.remove(top)
+        let frame_index = probe.index
+        let body_len = probe.body.length
+        thread.stack.push(probe)
+        if frame_index >= body_len:
+            let frame = thread.stack[top]
             # Fell off the end of this frame's own body -- what happens
             # next depends entirely on what *kind* of frame this is (see
             # `FrameKind`'s own doc comment).
             match frame.kind:
                 TopLevel:
-                    stack.remove(top)
+                    thread.stack.remove(top)
                 ProcCallFrame(_):
                     proc_call_depth -= 1
-                    stack.remove(top)
+                    thread.stack.remove(top)
                 RepeatN(remaining):
                     if remaining <= 0:
-                        stack.remove(top)
+                        thread.stack.remove(top)
                     else:
-                        stack[top] = ExecFrame(body = frame.body, index = 0, kind = FrameKind.RepeatN(remaining - 1), scope = frame.scope)
-                        if thread_in_warp(stack) and warp_guard < warp_guard_cap:
+                        thread.stack[top] = ExecFrame(body = frame.body, index = 0, kind = FrameKind.RepeatN(remaining - 1), scope = frame.scope)
+                        if thread_in_warp(thread.stack) and warp_guard < warp_guard_cap:
                             warp_guard += 1
                         else:
-                            thread.stack = stack
+                            
                             return false
                 RepeatUntilCond(cond):
                     if eval(cond, vars, frame.scope, procs, lists, broadcasts, positions, keyboard, mouse, timer, rng, looks, target_costumes, costume_dims, sound_queue).truthy():
-                        stack.remove(top)
+                        thread.stack.remove(top)
                     else:
-                        stack[top] = ExecFrame(body = frame.body, index = 0, kind = FrameKind.RepeatUntilCond(cond), scope = frame.scope)
-                        if thread_in_warp(stack) and warp_guard < warp_guard_cap:
+                        thread.stack[top] = ExecFrame(body = frame.body, index = 0, kind = FrameKind.RepeatUntilCond(cond), scope = frame.scope)
+                        if thread_in_warp(thread.stack) and warp_guard < warp_guard_cap:
                             warp_guard += 1
                         else:
-                            thread.stack = stack
+                            
                             return false
                 Forever:
-                    stack[top] = ExecFrame(body = frame.body, index = 0, kind = FrameKind.Forever, scope = frame.scope)
-                    if thread_in_warp(stack) and warp_guard < warp_guard_cap:
+                    thread.stack[top] = ExecFrame(body = frame.body, index = 0, kind = FrameKind.Forever, scope = frame.scope)
+                    if thread_in_warp(thread.stack) and warp_guard < warp_guard_cap:
                         warp_guard += 1
                     else:
-                        thread.stack = stack
+                        
                         return false
                 WaitingUntil(target):
                     if timer.elapsed >= target:
-                        stack.remove(top)
+                        thread.stack.remove(top)
                     else:
-                        thread.stack = stack
+                        
                         return false
                 WaitingUntilCond(cond):
                     if eval(cond, vars, frame.scope, procs, lists, broadcasts, positions, keyboard, mouse, timer, rng, looks, target_costumes, costume_dims, sound_queue).truthy():
-                        stack.remove(top)
+                        thread.stack.remove(top)
                     else:
-                        thread.stack = stack
+                        
                         return false
                 WaitingUntilThenClearBubble(target):
                     if timer.elapsed >= target:
                         speech_bubbles.set(frame.scope.target_id.clone(), SpeechBubble(text = "", is_thought = false))
-                        stack.remove(top)
+                        thread.stack.remove(top)
                     else:
-                        thread.stack = stack
+                        
                         return false
                 Gliding(start_time, duration, start_x, start_y, end_x, end_y):
                     let elapsed = timer.elapsed - start_time
                     let cur_dir = positions.get(frame.scope.target_id.clone()).direction
                     if elapsed >= duration:
                         move_position(positions, sound_queue, frame.scope.target_id.clone(), Position(x = end_x, y = end_y, direction = cur_dir))
-                        stack.remove(top)
+                        thread.stack.remove(top)
                     else:
                         # Linear interpolation, ported straight from real
                         # scratch-vm's own `glide` -- `frac` in `[0, 1)`
@@ -1578,7 +1639,7 @@ def bool step_thread(var mut Thread thread, var mut Vars vars, ProcTable procs, 
                         # be a hair off from floating-point rounding).
                         let frac = elapsed / duration
                         move_position(positions, sound_queue, frame.scope.target_id.clone(), Position(x = start_x + frac * (end_x - start_x), y = start_y + frac * (end_y - start_y), direction = cur_dir))
-                        thread.stack = stack
+                        
                         return false
                 WaitingForAnswer(ask_id):
                     # Resolved entirely by a real Bevy system
@@ -1591,25 +1652,29 @@ def bool step_thread(var mut Thread thread, var mut Vars vars, ProcTable procs, 
                     # anything already available here the way `WaitingUntil`
                     # (Cond)` can).
                     if ask_id <= vars.last_answered_id:
-                        stack.remove(top)
+                        thread.stack.remove(top)
                     else:
-                        thread.stack = stack
+                        
                         return false
         else:
-            let stmt = frame.body[frame.index]
-            let scope = frame.scope
-            stack[top] = ExecFrame(body = frame.body, index = frame.index + 1, kind = frame.kind, scope = frame.scope)
+            # Move the frame out of the stack, bump its index, move it back: no copy
+            # of the body (only the one statement being run is cloned).
+            var mut cur = thread.stack.remove(top)
+            let stmt = cur.body[frame_index]
+            let scope = cur.scope.clone()
+            cur.index = frame_index + 1
+            thread.stack.push(cur)
             match stmt.kind:
                 If(cond, body):
                     if eval(cond, vars, scope.clone(), procs, lists, broadcasts, positions, keyboard, mouse, timer, rng, looks, target_costumes, costume_dims, sound_queue).truthy():
-                        stack.push(ExecFrame(body = body, index = 0, kind = FrameKind.TopLevel, scope = scope))
+                        thread.stack.push(ExecFrame(body = body, index = 0, kind = FrameKind.TopLevel, scope = scope))
                 IfElse(cond, then_body, else_body):
                     if eval(cond, vars, scope.clone(), procs, lists, broadcasts, positions, keyboard, mouse, timer, rng, looks, target_costumes, costume_dims, sound_queue).truthy():
-                        stack.push(ExecFrame(body = then_body, index = 0, kind = FrameKind.TopLevel, scope = scope))
+                        thread.stack.push(ExecFrame(body = then_body, index = 0, kind = FrameKind.TopLevel, scope = scope))
                     else:
-                        stack.push(ExecFrame(body = else_body, index = 0, kind = FrameKind.TopLevel, scope = scope))
+                        thread.stack.push(ExecFrame(body = else_body, index = 0, kind = FrameKind.TopLevel, scope = scope))
                 Seq(stmts):
-                    stack.push(ExecFrame(body = stmts, index = 0, kind = FrameKind.TopLevel, scope = scope))
+                    thread.stack.push(ExecFrame(body = stmts, index = 0, kind = FrameKind.TopLevel, scope = scope))
                 Repeat(count_expr, body):
                     # Same "non-integral/huge count -> 0 iterations" clamp
                     # the old recursive `exec` used -- a malformed repeat
@@ -1619,18 +1684,27 @@ def bool step_thread(var mut Thread thread, var mut Vars vars, ProcTable procs, 
                     # field -- every other loop-count-shaped value in this
                     # codebase (list lengths, index resolution) is `int`
                     # for the same reason.
-                    let times = eval(count_expr, vars, scope.clone(), procs, lists, broadcasts, positions, keyboard, mouse, timer, rng, looks, target_costumes, costume_dims, sound_queue).to_num().to_isize_checked() else 0
+                    # `Math.round(Cast.toNumber(times))`: a non-integer count (e.g.
+                    # `repeat (5/2)`) is rounded, not truncated to 0 iterations.
+                    let times_num = eval(count_expr, vars, scope.clone(), procs, lists, broadcasts, positions, keyboard, mouse, timer, rng, looks, target_costumes, costume_dims, sound_queue).to_num()
+                    var times = times_num.to_isize_checked() else -1
+                    if times == -1:
+                        let tf = times_num.to_f64()
+                        if tf >= 0.5 and tf < 9.0e15:
+                            times = floor(tf + 0.5) as isize
+                        else:
+                            times = 0
                     if times > 0:
-                        stack.push(ExecFrame(body = body, index = 0, kind = FrameKind.RepeatN(times - 1), scope = scope))
+                        thread.stack.push(ExecFrame(body = body, index = 0, kind = FrameKind.RepeatN(times - 1), scope = scope))
                 RepeatUntil(cond, body):
                     # Real Scratch checks the condition *before* the first
                     # iteration too -- an already-true condition skips the
                     # loop entirely rather than running the body once
                     # unconditionally.
                     if !eval(cond.clone(), vars, scope.clone(), procs, lists, broadcasts, positions, keyboard, mouse, timer, rng, looks, target_costumes, costume_dims, sound_queue).truthy():
-                        stack.push(ExecFrame(body = body, index = 0, kind = FrameKind.RepeatUntilCond(cond), scope = scope))
+                        thread.stack.push(ExecFrame(body = body, index = 0, kind = FrameKind.RepeatUntilCond(cond), scope = scope))
                 Forever(body):
-                    stack.push(ExecFrame(body = body, index = 0, kind = FrameKind.Forever, scope = scope))
+                    thread.stack.push(ExecFrame(body = body, index = 0, kind = FrameKind.Forever, scope = scope))
                 Wait(seconds_expr):
                     let secs = eval(seconds_expr, vars, scope.clone(), procs, lists, broadcasts, positions, keyboard, mouse, timer, rng, looks, target_costumes, costume_dims, sound_queue).to_num().to_f32()
                     let target = timer.elapsed + secs
@@ -1638,8 +1712,8 @@ def bool step_thread(var mut Thread thread, var mut Vars vars, ProcTable procs, 
                     # negative/malformed duration -- real Scratch's own
                     # `wait` always yields at least one frame no matter the
                     # duration, it never inlines into a same-tick no-op.
-                    stack.push(ExecFrame(body = [], index = 0, kind = FrameKind.WaitingUntil(target), scope = scope))
-                    thread.stack = stack
+                    thread.stack.push(ExecFrame(body = [], index = 0, kind = FrameKind.WaitingUntil(target), scope = scope))
+                    
                     return false
                 PlayUntilDone(sound_expr):
                     # Queues the actual playback exactly like plain
@@ -1674,13 +1748,13 @@ def bool step_thread(var mut Thread thread, var mut Vars vars, ProcTable procs, 
                     # already established for a different opcode.
                     if duration > 0.0:
                         let target = timer.elapsed + duration
-                        stack.push(ExecFrame(body = [], index = 0, kind = FrameKind.WaitingUntil(target), scope = scope))
-                        thread.stack = stack
+                        thread.stack.push(ExecFrame(body = [], index = 0, kind = FrameKind.WaitingUntil(target), scope = scope))
+                        
                         return false
                 WaitUntil(cond):
                     if !eval(cond.clone(), vars, scope.clone(), procs, lists, broadcasts, positions, keyboard, mouse, timer, rng, looks, target_costumes, costume_dims, sound_queue).truthy():
-                        stack.push(ExecFrame(body = [], index = 0, kind = FrameKind.WaitingUntilCond(cond), scope = scope))
-                        thread.stack = stack
+                        thread.stack.push(ExecFrame(body = [], index = 0, kind = FrameKind.WaitingUntilCond(cond), scope = scope))
+                        
                         return false
                 AskAndWait(question_expr):
                     # Pushed unconditionally, same "always yields at least
@@ -1694,8 +1768,8 @@ def bool step_thread(var mut Thread thread, var mut Vars vars, ProcTable procs, 
                     let my_id = vars.next_ask_id
                     vars.next_ask_id += 1
                     vars.ask_queue.push(PendingAsk(ask_id = my_id, target_id = scope.target_id.clone(), question = question))
-                    stack.push(ExecFrame(body = [], index = 0, kind = FrameKind.WaitingForAnswer(my_id), scope = scope))
-                    thread.stack = stack
+                    thread.stack.push(ExecFrame(body = [], index = 0, kind = FrameKind.WaitingForAnswer(my_id), scope = scope))
+                    
                     return false
                 SayForSecs(msg_expr, secs_expr):
                     # Set the bubble immediately (same leaf side effect as
@@ -1708,16 +1782,16 @@ def bool step_thread(var mut Thread thread, var mut Vars vars, ProcTable procs, 
                     speech_bubbles.set(scope.target_id.clone(), SpeechBubble(text = msg, is_thought = false))
                     let secs = eval(secs_expr, vars, scope.clone(), procs, lists, broadcasts, positions, keyboard, mouse, timer, rng, looks, target_costumes, costume_dims, sound_queue).to_num().to_f32()
                     let target = timer.elapsed + secs
-                    stack.push(ExecFrame(body = [], index = 0, kind = FrameKind.WaitingUntilThenClearBubble(target), scope = scope))
-                    thread.stack = stack
+                    thread.stack.push(ExecFrame(body = [], index = 0, kind = FrameKind.WaitingUntilThenClearBubble(target), scope = scope))
+                    
                     return false
                 ThinkForSecs(msg_expr, secs_expr):
                     let msg = "{eval(msg_expr, vars, scope.clone(), procs, lists, broadcasts, positions, keyboard, mouse, timer, rng, looks, target_costumes, costume_dims, sound_queue)}"
                     speech_bubbles.set(scope.target_id.clone(), SpeechBubble(text = msg, is_thought = true))
                     let secs = eval(secs_expr, vars, scope.clone(), procs, lists, broadcasts, positions, keyboard, mouse, timer, rng, looks, target_costumes, costume_dims, sound_queue).to_num().to_f32()
                     let target = timer.elapsed + secs
-                    stack.push(ExecFrame(body = [], index = 0, kind = FrameKind.WaitingUntilThenClearBubble(target), scope = scope))
-                    thread.stack = stack
+                    thread.stack.push(ExecFrame(body = [], index = 0, kind = FrameKind.WaitingUntilThenClearBubble(target), scope = scope))
+                    
                     return false
                 GlideSecsToXY(secs_expr, x_expr, y_expr):
                     # Ported from real scratch-vm's own `glide`: a
@@ -1735,8 +1809,8 @@ def bool step_thread(var mut Thread thread, var mut Vars vars, ProcTable procs, 
                     if secs <= 0.0:
                         move_position(positions, sound_queue, scope.target_id.clone(), Position(x = target_x, y = target_y, direction = cur.direction))
                     else:
-                        stack.push(ExecFrame(body = [], index = 0, kind = FrameKind.Gliding(timer.elapsed, secs, cur.x, cur.y, target_x, target_y), scope = scope))
-                        thread.stack = stack
+                        thread.stack.push(ExecFrame(body = [], index = 0, kind = FrameKind.Gliding(timer.elapsed, secs, cur.x, cur.y, target_x, target_y), scope = scope))
+                        
                         return false
                 GlideTo(secs_expr, to_expr):
                     # Same real tween as `GlideSecsToXY` just above -- the
@@ -1768,8 +1842,8 @@ def bool step_thread(var mut Thread thread, var mut Vars vars, ProcTable procs, 
                     if secs <= 0.0:
                         move_position(positions, sound_queue, scope.target_id.clone(), Position(x = target_x, y = target_y, direction = cur.direction))
                     else:
-                        stack.push(ExecFrame(body = [], index = 0, kind = FrameKind.Gliding(timer.elapsed, secs, cur.x, cur.y, target_x, target_y), scope = scope))
-                        thread.stack = stack
+                        thread.stack.push(ExecFrame(body = [], index = 0, kind = FrameKind.Gliding(timer.elapsed, secs, cur.x, cur.y, target_x, target_y), scope = scope))
+                        
                         return false
                 Stop(option):
                     # "other scripts in sprite" is a documented no-op for
@@ -1781,8 +1855,25 @@ def bool step_thread(var mut Thread thread, var mut Vars vars, ProcTable procs, 
                     # StopSignal`/`catch` approach: a thread's frame stack
                     # *is* the thing that decides whether it's still
                     # running, so emptying it IS "stop").
-                    if option != "other scripts in sprite":
-                        stack = []
+                    if option == "all":
+                        # Stops every thread and deletes every clone -- applied by
+                        # `run_pending_threads` right after this thread's step.
+                        sound_queue.stop_all_threads_requested = true
+                        thread.stack = []
+                    elif option == "other scripts in sprite":
+                        sound_queue.stop_other_requests.push(scope.target_id.clone())
+                    elif option == "this script":
+                        # Inside a custom block, `stop this script` only returns from
+                        # that call (`Thread.stopThisScript` pops back to the
+                        # `procedures_call`); at top level it ends the thread.
+                        let call_idx = topmost_proc_frame_index(thread.stack)
+                        if call_idx >= 0:
+                            while thread.stack.length > call_idx:
+                                thread.stack.pop()
+                        else:
+                            thread.stack = []
+                    else:
+                        thread.stack = []
                 DeleteThisClone:
                     # Same "clear the stack directly, no exception
                     # machinery" shape as `Stop`, handled here rather than
@@ -1804,7 +1895,7 @@ def bool step_thread(var mut Thread thread, var mut Vars vars, ProcTable procs, 
                     if sound_queue.instance_type_of(scope.target_id.clone()) != scope.target_id:
                         sound_queue.despawn_requests.push(scope.target_id.clone())
                         sound_queue.live_clone_count -= 1
-                        stack = []
+                        thread.stack = []
                 ProcCall(proc_name, arg_exprs):
                     # Evaluate every argument expression using the
                     # *caller's* scope -- an argument expression can itself
@@ -1844,7 +1935,7 @@ def bool step_thread(var mut Thread thread, var mut Vars vars, ProcTable procs, 
                     # immediately.
                     if proc_call_depth < proc_call_depth_cap:
                         proc_call_depth += 1
-                        stack.push(ExecFrame(body = proc.body, index = 0, kind = FrameKind.ProcCallFrame(proc.warp), scope = new_scope))
+                        thread.stack.push(ExecFrame(body = proc.body, index = 0, kind = FrameKind.ProcCallFrame(proc.warp), scope = new_scope))
                 _:
                     exec_simple(stmt, vars, scope, procs, lists, broadcasts, positions, keyboard, mouse, timer, rng, looks, layer_orders, target_costumes, costume_dims, sound_queue, speech_bubbles, thread.spawned)
     # Unreachable in practice (every path through the loop above returns
@@ -1857,6 +1948,9 @@ def bool step_thread(var mut Thread thread, var mut Vars vars, ProcTable procs, 
     # true:` with every real path returning from inside the loop).
     false
 
+
+# Max nesting of `broadcast and wait` drives (see `drive_thread_to_completion`).
+let int MAX_DRIVE_DEPTH = 8
 
 # Drives one `Thread` all the way to completion via repeated `step_thread`
 # calls, right here, synchronously -- used by `BroadcastAndWait` (a
@@ -1883,6 +1977,11 @@ def bool step_thread(var mut Thread thread, var mut Vars vars, ProcTable procs, 
 # (`run_pending_threads`, or `run_script`'s own drive loop) picks them up
 # afterward, exactly like a top-level thread's own `spawned` field would.
 def drive_thread_to_completion(var mut Thread thread, var mut Vars vars, ProcTable procs, var mut Lists lists, Broadcasts broadcasts, var mut Positions positions, KeyboardState keyboard, MouseState mouse, ScratchTimer timer, var mut Rng rng, var mut LooksStates looks, var mut LayerOrders layer_orders, TargetCostumes target_costumes, TargetCostumeDims costume_dims, var mut SoundQueue sound_queue, var mut SpeechBubbles speech_bubbles, mut [ReceiverScript] outer_spawned):
+    # Native-recursion guard: past `MAX_DRIVE_DEPTH` nested drives the receiver is
+    # abandoned (same graceful-degradation as the iteration cap below).
+    if sound_queue.drive_depth >= MAX_DRIVE_DEPTH:
+        return
+    sound_queue.drive_depth += 1
     var done = false
     var iterations = 0
     let iteration_cap = 100000
@@ -1892,3 +1991,4 @@ def drive_thread_to_completion(var mut Thread thread, var mut Vars vars, ProcTab
             outer_spawned.push(script)
         thread.spawned = []
         iterations += 1
+    sound_queue.drive_depth -= 1

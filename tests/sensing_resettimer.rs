@@ -45,5 +45,6 @@ fn reset_timer_sets_elapsed_back_to_zero_the_following_tick() {
     // (queued back in tick 1, never applied yet) and resets `elapsed`
     // straight to 0.0, overriding the 42.0 just set above.
     app.update();
-    assert_eq!(app.world().resource::<ScratchTimer>().elapsed, 0.0, "the timer should read back exactly 0.0 the tick after reset timer ran");
+    let t = app.world().resource::<ScratchTimer>();
+    assert_eq!(t.elapsed - t.reset_base, 0.0, "the timer reading (elapsed - reset_base) should be exactly 0.0 the tick after reset timer ran");
 }

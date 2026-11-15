@@ -1,0 +1,324 @@
+{
+ "targets": [
+  {
+   "isStage": true,
+   "name": "Stage",
+   "variables": {
+    "v_i": [
+     "i",
+     0
+    ],
+    "v_sum": [
+     "sum",
+     0
+    ]
+   },
+   "lists": {
+    "lid": [
+     "L",
+     []
+    ]
+   },
+   "broadcasts": {},
+   "blocks": {},
+   "comments": {},
+   "currentCostume": 0,
+   "costumes": [],
+   "sounds": [],
+   "volume": 100,
+   "layerOrder": 0
+  },
+  {
+   "isStage": false,
+   "name": "Sprite1",
+   "variables": {},
+   "lists": {},
+   "broadcasts": {},
+   "blocks": {
+    "hat": {
+     "opcode": "event_whenflagclicked",
+     "next": "s1",
+     "parent": null,
+     "inputs": {},
+     "fields": {},
+     "shadow": false,
+     "topLevel": true,
+     "x": 0,
+     "y": 0
+    },
+    "s1": {
+     "opcode": "data_setvariableto",
+     "next": "r1",
+     "parent": "hat",
+     "inputs": {
+      "VALUE": [
+       1,
+       [
+        4,
+        "0"
+       ]
+      ]
+     },
+     "fields": {
+      "VARIABLE": [
+       "i",
+       "v_i"
+      ]
+     },
+     "shadow": false,
+     "topLevel": false
+    },
+    "r1": {
+     "opcode": "control_repeat",
+     "next": "s2",
+     "parent": "s1",
+     "inputs": {
+      "TIMES": [
+       1,
+       [
+        4,
+        "3000"
+       ]
+      ],
+      "SUBSTACK": [
+       2,
+       "a1"
+      ]
+     },
+     "fields": {},
+     "shadow": false,
+     "topLevel": false
+    },
+    "a1": {
+     "opcode": "data_addtolist",
+     "next": "c1",
+     "parent": "r1",
+     "inputs": {
+      "ITEM": [
+       3,
+       [
+        12,
+        "i",
+        "v_i"
+       ],
+       [
+        4,
+        "0"
+       ]
+      ]
+     },
+     "fields": {
+      "LIST": [
+       "L",
+       "lid"
+      ]
+     },
+     "shadow": false,
+     "topLevel": false
+    },
+    "c1": {
+     "opcode": "data_changevariableby",
+     "next": null,
+     "parent": "a1",
+     "inputs": {
+      "VALUE": [
+       1,
+       [
+        4,
+        "1"
+       ]
+      ]
+     },
+     "fields": {
+      "VARIABLE": [
+       "i",
+       "v_i"
+      ]
+     },
+     "shadow": false,
+     "topLevel": false
+    },
+    "s2": {
+     "opcode": "data_setvariableto",
+     "next": "s3",
+     "parent": "r1",
+     "inputs": {
+      "VALUE": [
+       1,
+       [
+        4,
+        "1"
+       ]
+      ]
+     },
+     "fields": {
+      "VARIABLE": [
+       "i",
+       "v_i"
+      ]
+     },
+     "shadow": false,
+     "topLevel": false
+    },
+    "s3": {
+     "opcode": "data_setvariableto",
+     "next": "r2",
+     "parent": "s2",
+     "inputs": {
+      "VALUE": [
+       1,
+       [
+        4,
+        "0"
+       ]
+      ]
+     },
+     "fields": {
+      "VARIABLE": [
+       "sum",
+       "v_sum"
+      ]
+     },
+     "shadow": false,
+     "topLevel": false
+    },
+    "r2": {
+     "opcode": "control_repeat",
+     "next": null,
+     "parent": "s3",
+     "inputs": {
+      "TIMES": [
+       1,
+       [
+        4,
+        "3000"
+       ]
+      ],
+      "SUBSTACK": [
+       2,
+       "s4"
+      ]
+     },
+     "fields": {},
+     "shadow": false,
+     "topLevel": false
+    },
+    "s4": {
+     "opcode": "data_setvariableto",
+     "next": "c2",
+     "parent": "r2",
+     "inputs": {
+      "VALUE": [
+       3,
+       "add1",
+       [
+        1,
+        [
+         4,
+         "0"
+        ]
+       ]
+      ]
+     },
+     "fields": {
+      "VARIABLE": [
+       "sum",
+       "v_sum"
+      ]
+     },
+     "shadow": false,
+     "topLevel": false
+    },
+    "add1": {
+     "opcode": "operator_add",
+     "next": null,
+     "parent": "s4",
+     "inputs": {
+      "NUM1": [
+       3,
+       [
+        12,
+        "sum",
+        "v_sum"
+       ],
+       [
+        4,
+        "0"
+       ]
+      ],
+      "NUM2": [
+       3,
+       "it1",
+       [
+        1,
+        [
+         4,
+         "0"
+        ]
+       ]
+      ]
+     },
+     "fields": {},
+     "shadow": false,
+     "topLevel": false
+    },
+    "it1": {
+     "opcode": "data_itemoflist",
+     "next": null,
+     "parent": "add1",
+     "inputs": {
+      "INDEX": [
+       3,
+       [
+        12,
+        "i",
+        "v_i"
+       ],
+       [
+        4,
+        "0"
+       ]
+      ]
+     },
+     "fields": {
+      "LIST": [
+       "L",
+       "lid"
+      ]
+     },
+     "shadow": false,
+     "topLevel": false
+    },
+    "c2": {
+     "opcode": "data_changevariableby",
+     "next": null,
+     "parent": "s4",
+     "inputs": {
+      "VALUE": [
+       1,
+       [
+        4,
+        "1"
+       ]
+      ]
+     },
+     "fields": {
+      "VARIABLE": [
+       "i",
+       "v_i"
+      ]
+     },
+     "shadow": false,
+     "topLevel": false
+    }
+   },
+   "comments": {},
+   "currentCostume": 0,
+   "costumes": [],
+   "sounds": [],
+   "volume": 100,
+   "layerOrder": 1
+  }
+ ],
+ "monitors": []
+}

@@ -576,7 +576,9 @@ enum ScratchValue:
     req bool truthy():
         match self.clone():
             Bool(b): b
-            Str(s): s == "true"
+            # `Cast.toBoolean`: "", "0" and any-case "false" are false, every
+            # other string (e.g. "1", "hello") is true.
+            Str(s): !(s == "" or s == "0" or s.toLower() == "false")
             Num(n): !n.is_zero()
 
     as string:
@@ -615,6 +617,27 @@ enum ScratchValue:
                     n
                 else:
                     nil
+
+    # Scratch's `Cast.compare` > : numeric when BOTH sides are unambiguously
+    # numeric, otherwise a case-insensitive string comparison (so
+    # `"banana" > "apple"` is true, not 0 > 0 = false).
+    req bool loosely_gt(ScratchValue other):
+        if let a = self.try_num():
+            if let b = other.try_num():
+                a.gt_owned(b)
+            else:
+                "{self}".toLower() > "{other}".toLower()
+        else:
+            "{self}".toLower() > "{other}".toLower()
+
+    req bool loosely_lt(ScratchValue other):
+        if let a = self.try_num():
+            if let b = other.try_num():
+                a.lt_owned(b)
+            else:
+                "{self}".toLower() < "{other}".toLower()
+        else:
+            "{self}".toLower() < "{other}".toLower()
 
     # Scratch's "loose" value equality: numeric comparison when BOTH sides
     # are unambiguously numeric (matching real Scratch's own `operator_equals`

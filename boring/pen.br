@@ -106,6 +106,19 @@ def blend_pixel(mut [uint8] data, isize i, PenColor color):
             data[i + 2] = (out_b * 255.0) as uint8
             data[i + 3] = (out_a * 255.0) as uint8
 
+# Converts a (possibly huge / infinite / NaN) canvas-space float to a pixel
+# bound, clamped to a small window around the 480x360 canvas. Without this a
+# crafted `go to x:1e9` (pen down) or `set size to 1e9` + `stamp` makes the
+# rasterization loops below iterate ~1e9 times (or overflow `isize` on `+ 1`).
+# NaN falls through both comparisons and casts to 0.
+def isize clamp_px_bound(float32 v):
+    var c = v
+    if c < -1000.0:
+        c = -1000.0
+    if c > 1000.0:
+        c = 1000.0
+    c as isize
+
 # Rasterizes one thick line segment (`request`, already in canvas pixel
 # space) directly into `data` (the canvas's own raw RGBA8 byte buffer,
 # row-major, 480px-wide rows) -- a plain per-pixel "distance to the
@@ -123,10 +136,18 @@ def draw_pen_line(mut [uint8] data, float32 x1, float32 y1, float32 x2, float32 
     let max_x_f = if x1 > x2: x1 else: x2
     let min_y_f = if y1 < y2: y1 else: y2
     let max_y_f = if y1 > y2: y1 else: y2
-    let min_x = (floor(min_x_f - radius) as isize) - 1
-    let max_x = (floor(max_x_f + radius) as isize) + 1
-    let min_y = (floor(min_y_f - radius) as isize) - 1
-    let max_y = (floor(max_y_f + radius) as isize) + 1
+    var min_x = clamp_px_bound(floor(min_x_f - radius)) - 1
+    var max_x = clamp_px_bound(floor(max_x_f + radius)) + 1
+    var min_y = clamp_px_bound(floor(min_y_f - radius)) - 1
+    var max_y = clamp_px_bound(floor(max_y_f + radius)) + 1
+    if min_x < 0:
+        min_x = 0
+    if min_y < 0:
+        min_y = 0
+    if max_x > 479:
+        max_x = 479
+    if max_y > 359:
+        max_y = 359
     let dx = x2 - x1
     let dy = y2 - y1
     let seg_len_sq = (dx * dx) + (dy * dy)
@@ -169,6 +190,9 @@ def draw_pen_line(mut [uint8] data, float32 x1, float32 y1, float32 x2, float32 
 # frame renders, not because draining order relative to `Positions`
 # matters any more -- this function no longer reads `Positions` at all.
 pub def draw_pen_marks(mut ResMut<SoundQueue> sound_queue, mut ResMut<PenCanvas> pen_canvas, mut ResMut<Assets<Image>> images):
+    # Idle frame: nothing queued, so don't touch (and thereby re-upload) the 691 KB canvas.
+    if !sound_queue.pen_clear_requested and sound_queue.pen_line_requests.length == 0:
+        return
     guard let imageFixed = Assets.get_mut(images, pen_canvas.handle) else return
     var mut image = imageFixed
     guard let dataFixed = image.data.clone() else return
@@ -284,10 +308,18 @@ def draw_stamp(mut [uint8] data, StampSource src):
             if wy > max_wy:
                 max_wy = wy
         i = i + 1
-    let min_x = (floor(canvas_px(min_wx)) as isize) - 1
-    let max_x = (floor(canvas_px(max_wx)) as isize) + 1
-    let min_y = (floor(canvas_py(max_wy)) as isize) - 1
-    let max_y = (floor(canvas_py(min_wy)) as isize) + 1
+    var min_x = clamp_px_bound(floor(canvas_px(min_wx))) - 1
+    var max_x = clamp_px_bound(floor(canvas_px(max_wx))) + 1
+    var min_y = clamp_px_bound(floor(canvas_py(max_wy))) - 1
+    var max_y = clamp_px_bound(floor(canvas_py(min_wy))) + 1
+    if min_x < 0:
+        min_x = 0
+    if min_y < 0:
+        min_y = 0
+    if max_x > 479:
+        max_x = 479
+    if max_y > 359:
+        max_y = 359
     var mut py = min_y
     while py <= max_y:
         if py >= 0 and py < 360:
@@ -461,6 +493,9 @@ pub def [uint8] render_stamp_for_test(float32 px, float32 py, float32 direction,
 # the backdrop), then every *other*, visible target, back-to-front
 # (`LayerOrders.sorted_target_ids`).
 pub def compose_scene_for_touching(Res<Positions> positions, Res<LooksStates> looks, Res<TargetCostumeDims> costume_dims, mut ResMut<SoundQueue> sound_queue, Res<LayerOrders> layer_orders, Res<PenCanvas> pen_canvas, Res<Assets<Image>> images, Query<(ScratchSprite&, TargetCostumeHandles&)> sprites):
+    # Nothing reads the composite unless the project has a `touching color` block.
+    if !sound_queue.touching_color_used:
+        return
     mut handle_by_target = {=}
     for tag, costumes in sprites:
         handle_by_target[tag.target_id.clone()] = costumes.handles.clone()

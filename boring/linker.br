@@ -651,6 +651,18 @@ def {string=string} build_target_rotation_styles(Sb3Project project):
 # convention for a sprite that's never had the checkbox touched (and the
 # Stage itself, which has no `draggable` field at all -- `target.draggable
 # else false` covers both cases identically).
+# True iff any block in the project is `sensing_touchingcolor` /
+# `sensing_coloristouchingcolor`. Only then does `compose_scene_for_touching`
+# need to rebuild its 480x360 software-composited scene each tick (otherwise
+# that is ~1M pixel operations per frame for nothing).
+def bool build_uses_touching_color(Sb3Project project):
+    var used = false
+    for target in project.targets:
+        for blk in target.all_blocks():
+            if block_opcode_is(blk.clone(), "sensing_touchingcolor") or block_opcode_is(blk.clone(), "sensing_coloristouchingcolor"):
+                used = true
+    used
+
 def {string=bool} build_target_draggable(Sb3Project project):
     mut table = {=}
     for target in project.targets:
@@ -750,8 +762,12 @@ def Block resolve_primitive(Sb3Primitive prim):
         # never a real block in practice), evaluated at runtime just like
         # any other expression to get the message name.
         Block(kind = BlockKind.Literal(ScratchValue.Str("{name}")))
+    elif let hex = prim.as_color_hex():
+        # Same plain `"#rrggbb"` string literal the `colour_picker` shadow block
+        # resolves to (consumed by `pen_setPenColorToColor` / `touching color`).
+        Block(kind = BlockKind.Literal(ScratchValue.Str("{hex}")))
     else:
-        # List-contents primitives and the unimplemented color-picker aren't
+        # List-contents primitives aren't
         # reachable from any reporter slot Fibonacci uses -- see README.md's
         # roadmap for when Lists/Sensing need this filled in.
         Block(kind = BlockKind.Literal(ScratchValue.Num(ScratchNumber.from_i64(0))))
@@ -1118,13 +1134,13 @@ def Block dispatch_reporter(Sb3Target target, Sb3Block blk, int depth):
 
 # Resolves a C-block's substack (`SUBSTACK` input -- always a real block
 # chain, never an inline primitive) into a `[Block]` body.
-def [Block] resolve_substack(Sb3Target target, Sb3Block blk, string input_name):
+def [Block] resolve_substack(Sb3Target target, Sb3Block blk, string input_name, mut {string=bool} seen, int depth):
     if let sub_id = blk.input_block_id(input_name):
-        resolve_stack(target, "{sub_id}")
+        resolve_stack_in(target, "{sub_id}", seen, depth + 1)
     else:
         []
 
-def Block resolve_stack_block(Sb3Target target, Sb3Block blk):
+def Block resolve_stack_block(Sb3Target target, Sb3Block blk, mut {string=bool} seen, int depth):
     if block_opcode_is(blk, "data_setvariableto"):
         if let var_id = block_field_id(blk, "VARIABLE"):
             Block(kind = BlockKind.SetVar("{var_id}", resolve_input(target, blk, "VALUE", 0)))
@@ -1185,13 +1201,13 @@ def Block resolve_stack_block(Sb3Target target, Sb3Block blk):
     elif block_opcode_is(blk, "event_broadcastandwait"):
         Block(kind = BlockKind.BroadcastAndWait(resolve_input(target, blk, "BROADCAST_INPUT", 0)))
     elif block_opcode_is(blk, "control_repeat"):
-        Block(kind = BlockKind.Repeat(resolve_input(target, blk, "TIMES", 0), resolve_substack(target, blk, "SUBSTACK")))
+        Block(kind = BlockKind.Repeat(resolve_input(target, blk, "TIMES", 0), resolve_substack(target, blk, "SUBSTACK", seen, depth)))
     elif block_opcode_is(blk, "control_repeat_until"):
-        Block(kind = BlockKind.RepeatUntil(resolve_input(target, blk, "CONDITION", 0), resolve_substack(target, blk, "SUBSTACK")))
+        Block(kind = BlockKind.RepeatUntil(resolve_input(target, blk, "CONDITION", 0), resolve_substack(target, blk, "SUBSTACK", seen, depth)))
     elif block_opcode_is(blk, "control_if"):
-        Block(kind = BlockKind.If(resolve_input(target, blk, "CONDITION", 0), resolve_substack(target, blk, "SUBSTACK")))
+        Block(kind = BlockKind.If(resolve_input(target, blk, "CONDITION", 0), resolve_substack(target, blk, "SUBSTACK", seen, depth)))
     elif block_opcode_is(blk, "control_if_else"):
-        Block(kind = BlockKind.IfElse(resolve_input(target, blk, "CONDITION", 0), resolve_substack(target, blk, "SUBSTACK"), resolve_substack(target, blk, "SUBSTACK2")))
+        Block(kind = BlockKind.IfElse(resolve_input(target, blk, "CONDITION", 0), resolve_substack(target, blk, "SUBSTACK", seen, depth), resolve_substack(target, blk, "SUBSTACK2", seen, depth)))
     elif block_opcode_is(blk, "control_stop"):
         if let option = block_field_value(blk, "STOP_OPTION"):
             Block(kind = BlockKind.Stop(option))
@@ -1200,7 +1216,7 @@ def Block resolve_stack_block(Sb3Target target, Sb3Block blk):
     elif block_opcode_is(blk, "control_wait"):
         Block(kind = BlockKind.Wait(resolve_input(target, blk, "DURATION", 0)))
     elif block_opcode_is(blk, "control_forever"):
-        Block(kind = BlockKind.Forever(resolve_substack(target, blk, "SUBSTACK")))
+        Block(kind = BlockKind.Forever(resolve_substack(target, blk, "SUBSTACK", seen, depth)))
     elif block_opcode_is(blk, "control_wait_until"):
         Block(kind = BlockKind.WaitUntil(resolve_input(target, blk, "CONDITION", 0)))
     elif block_opcode_is(blk, "control_create_clone_of"):
@@ -1446,36 +1462,47 @@ def Block resolve_stack_block(Sb3Target target, Sb3Block blk):
         # own doc comment.
         Block(kind = BlockKind.Seq([]))
 
+# Nesting limit for `resolve_stack_in`'s mutual recursion (`resolve_stack_in`
+# -> `resolve_stack_block` -> `resolve_substack` -> `resolve_stack_in`).
+# Same reasoning as `MAX_REPORTER_DEPTH` above: `resolve_stack_block`'s frame
+# is huge (a ~150-arm opcode chain), so a hand-forged `SUBSTACK` that points
+# at itself or an ancestor -- or tens of thousands of acyclic nested `if`s --
+# overflowed the stack at load time. Real scripts nest C-blocks a handful of
+# levels deep; past the limit the substack degrades to empty (this file's
+# usual graceful-degradation convention).
+let int MAX_SUBSTACK_DEPTH = 16
+
+# Entry point for every script/procedure body. `seen` (block ids already
+# linked into *this* script) is created fresh here: each real block has exactly
+# one parent, so a legitimate script never links a block twice; a forged
+# project whose `SUBSTACK`/`SUBSTACK2`/`next` fan out onto the same blocks
+# (a DAG -- `if/else` with both branches pointing at the same next block,
+# chained n deep, costs 2^n resolutions otherwise) is cut off after the first
+# visit, keeping the work linear in the number of blocks.
+def [Block] resolve_stack(Sb3Target target, string start_id):
+    mut seen = {=}
+    resolve_stack_in(target, start_id, seen, 0)
+
 # Walks a block chain by `next` pointers starting at `start_id`, converting
 # each into our Block AST -- the whole point of the lazy id-based linking
 # pattern ported from jscratch (`BlockReference`/`SequenceReference`): the
 # raw JSON only has an opaque id graph, this turns it into a real tree once,
 # up front, rather than re-resolving ids on every execution step.
 #
-# `visited` guards against a hand-forged `project.json` whose `next` chain
-# cycles back on itself (a block's `next` -- directly or transitively --
-# points back at a block already walked in this very call). Every real
-# script's block chain is linear and acyclic (that's what real Scratch's
-# own editor can ever produce), but nothing here was otherwise checking
-# that assumption: with no guard, a cyclic chain makes this `while let`
-# loop run forever, `result` growing without bound (OOM) or the whole
-# load hanging permanently -- reachable at every script entry point this
-# project has (green-flag hats, broadcasts, clones, procedure bodies,
-# every `if`/loop substack), just by loading the malicious project.
-# Breaking out (keeping whatever was already resolved) matches this file's
-# existing convention of degrading gracefully on malformed input rather
-# than crashing -- same as `resolve_expr_block`'s own depth cutoff just
-# above.
-def [Block] resolve_stack(Sb3Target target, string start_id):
+# `seen` also guards against a hand-forged `next` chain that cycles back on
+# itself (an infinite loop / OOM otherwise). Breaking out keeps whatever was
+# already resolved.
+def [Block] resolve_stack_in(Sb3Target target, string start_id, mut {string=bool} seen, int depth):
     mut result = []
+    if depth > MAX_SUBSTACK_DEPTH:
+        return result
     var current = start_id
-    mut visited = {=}
     while let blk = target.get_block(current):
-        let already_visited = visited[current.clone()] else false
-        if already_visited:
+        let already_seen = seen[current.clone()] else false
+        if already_seen:
             break
-        visited[current.clone()] = true
-        result.push(resolve_stack_block(target, blk.clone()))
+        seen[current.clone()] = true
+        result.push(resolve_stack_block(target, blk.clone(), seen, depth))
         if let nxt = blk.next_id():
             current = "{nxt}"
         else:

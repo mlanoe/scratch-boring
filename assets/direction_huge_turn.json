@@ -1,0 +1,123 @@
+{
+ "targets": [
+  {
+   "isStage": true,
+   "name": "Stage",
+   "variables": {
+    "v_done": [
+     "done",
+     0
+    ]
+   },
+   "lists": {},
+   "broadcasts": {},
+   "blocks": {},
+   "comments": {},
+   "currentCostume": 0,
+   "costumes": [],
+   "sounds": [],
+   "volume": 100,
+   "layerOrder": 0
+  },
+  {
+   "isStage": false,
+   "name": "Sprite1",
+   "variables": {},
+   "lists": {},
+   "broadcasts": {},
+   "blocks": {
+    "hat": {
+     "opcode": "event_whenflagclicked",
+     "next": "t1",
+     "parent": null,
+     "inputs": {},
+     "fields": {},
+     "shadow": false,
+     "topLevel": true,
+     "x": 0,
+     "y": 0
+    },
+    "t1": {
+     "opcode": "motion_turnright",
+     "next": "t2",
+     "parent": "hat",
+     "inputs": {
+      "DEGREES": [
+       1,
+       [
+        4,
+        "10000000000"
+       ]
+      ]
+     },
+     "fields": {},
+     "shadow": false,
+     "topLevel": false
+    },
+    "t2": {
+     "opcode": "motion_turnleft",
+     "next": "t3",
+     "parent": "t1",
+     "inputs": {
+      "DEGREES": [
+       1,
+       [
+        4,
+        "1e30"
+       ]
+      ]
+     },
+     "fields": {},
+     "shadow": false,
+     "topLevel": false
+    },
+    "t3": {
+     "opcode": "motion_pointindirection",
+     "next": "set",
+     "parent": "t2",
+     "inputs": {
+      "DIRECTION": [
+       1,
+       [
+        4,
+        "1e38"
+       ]
+      ]
+     },
+     "fields": {},
+     "shadow": false,
+     "topLevel": false
+    },
+    "set": {
+     "opcode": "data_setvariableto",
+     "next": null,
+     "parent": "t3",
+     "inputs": {
+      "VALUE": [
+       1,
+       [
+        4,
+        "1"
+       ]
+      ]
+     },
+     "fields": {
+      "VARIABLE": [
+       "done",
+       "v_done"
+      ]
+     },
+     "shadow": false,
+     "topLevel": false
+    }
+   },
+   "comments": {},
+   "currentCostume": 0,
+   "costumes": [],
+   "sounds": [],
+   "volume": 100,
+   "layerOrder": 1
+  }
+ ],
+ "monitors": []
+}

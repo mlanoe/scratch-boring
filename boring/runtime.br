@@ -625,6 +625,7 @@ enum FrameKind:
 # `advance_threads` drains this field into real new `Thread`s once every
 # thread this tick has finished its own step, avoiding a mutate-while-
 # iterating conflict entirely rather than working around one.
+@derive(Debug, Clone, Default)
 struct Thread:
     string target_id
     var mut [ExecFrame] stack
@@ -799,10 +800,9 @@ pub struct Vars as Resource, Debug, Clone:
             # durations`'s own `by_name[s.name] = dur`), so this copies
             # into a freshly-`{=}`-bound local instead of mutating the
             # dict-index-derived one directly.
-            let {string=ScratchValue} existing = local_table[calling_instance_id] else {=}
-            mut by_var = {=}
-            for k, val in existing:
-                by_var[k] = val
+            # Move the instance's dict out and back in (no copy) rather than
+            # rebuilding it entry by entry on every write.
+            mut {string=ScratchValue} by_var = local_table.remove(calling_instance_id) else {=}
             by_var[id] = v
             local_table[calling_instance_id] = by_var
 
@@ -987,23 +987,6 @@ pub struct Lists as Resource, Debug, Clone:
             let {string=[ScratchValue]} by_list = local_table[calling_instance_id] else {=}
             by_list[id] else []
 
-    def set_items(string id, string calling_instance_id, [ScratchValue] items):
-        let owner = list_owner[id] else ""
-        if owner == "":
-            table[id] = items
-        else:
-            # Copies into a freshly-`{=}`-bound local rather than index-
-            # assigning into one derived from `local_table[...] else {=}`
-            # -- see `Vars.set`'s own doc comment for the real `boring`
-            # transpiler quirk this works around (confirmed to apply
-            # identically here, same nested-dict-of-non-scalar shape).
-            let {string=[ScratchValue]} existing = local_table[calling_instance_id] else {=}
-            mut by_list = {=}
-            for k, val in existing:
-                by_list[k] = val
-            by_list[id] = items
-            local_table[calling_instance_id] = by_list
-
     req bool watcher_shown(string id):
         watcher_visible[id] else false
 
@@ -1027,83 +1010,161 @@ pub struct Lists as Resource, Debug, Clone:
     def remove_local(string instance_id):
         local_table.remove(instance_id)
 
-    req int length(string id, string calling_instance_id):
-        let items = self.get(id, calling_instance_id)
-        items.length
+    # Every mutating/reading op below MOVES the list's items out of its table
+    # (`table.remove`), works on the local `items`, and moves them back
+    # (`table[id] = items`, a last use so no copy). Reading through `table[id]`
+    # clones the whole list on every access (O(N) per `item N of`/`length of`,
+    # O(N^2) for a loop over the list). The global and sprite-local branches are
+    # spelled out per op because a shared put/take helper taking `items` as a
+    # parameter would borrow it and clone on the way back in.
+    # Every mutating/reading op below MOVES the list's items out of its table
+    # (`table.remove`), works on the local `items`, and moves them back
+    # (`table[id] = items`, a last use so no copy). Reading through `table[id]`
+    # clones the whole list on every access (O(N) per `item N of`/`length of`,
+    # O(N^2) for a loop over the list). The global and sprite-local branches are
+    # spelled out per op because a shared put/take helper taking `items` as a
+    # parameter would borrow it and clone on the way back in.
+    def int length(string id, string calling_instance_id):
+        var n = 0
+        let owner = list_owner[id] else ""
+        if owner == "":
+            mut items = table.remove(id) else []
+            n = items.length
+            table[id] = items
+        else:
+            mut {string=[ScratchValue]} by_list = local_table.remove(calling_instance_id) else {=}
+            mut items = by_list.remove(id) else []
+            n = items.length
+            by_list[id] = items
+            local_table[calling_instance_id] = by_list
+        n
 
     def add(string id, string calling_instance_id, ScratchValue item):
-        mut items = self.get(id, calling_instance_id)
-        items.push(item)
-        self.set_items(id, calling_instance_id, items)
+        let owner = list_owner[id] else ""
+        if owner == "":
+            mut items = table.remove(id) else []
+            items.push(item.clone())
+            table[id] = items
+        else:
+            mut {string=[ScratchValue]} by_list = local_table.remove(calling_instance_id) else {=}
+            mut items = by_list.remove(id) else []
+            items.push(item.clone())
+            by_list[id] = items
+            local_table[calling_instance_id] = by_list
 
     def delete_at(string id, string calling_instance_id, int index0):
-        mut items = self.get(id, calling_instance_id)
-        if index0 >= 0 and index0 < items.length:
-            items.remove(index0)
-        self.set_items(id, calling_instance_id, items)
+        let owner = list_owner[id] else ""
+        if owner == "":
+            mut items = table.remove(id) else []
+            if index0 >= 0 and index0 < items.length:
+                items.remove(index0)
+            table[id] = items
+        else:
+            mut {string=[ScratchValue]} by_list = local_table.remove(calling_instance_id) else {=}
+            mut items = by_list.remove(id) else []
+            if index0 >= 0 and index0 < items.length:
+                items.remove(index0)
+            by_list[id] = items
+            local_table[calling_instance_id] = by_list
 
     def delete_all(string id, string calling_instance_id):
-        self.set_items(id, calling_instance_id, [])
+        let owner = list_owner[id] else ""
+        if owner == "":
+            table[id] = []
+        else:
+            mut {string=[ScratchValue]} by_list = local_table.remove(calling_instance_id) else {=}
+            by_list[id] = []
+            local_table[calling_instance_id] = by_list
 
     def insert_at(string id, string calling_instance_id, int index0, ScratchValue item):
-        mut items = self.get(id, calling_instance_id)
-        # `<=` (not `<`): inserting exactly at position `length` is a valid
-        # "append at the end", the same as real Scratch's own "insert at
-        # last + 1" behavior.
-        if index0 >= 0 and index0 <= items.length:
-            items.insert(index0, item)
-        self.set_items(id, calling_instance_id, items)
+        let owner = list_owner[id] else ""
+        if owner == "":
+            mut items = table.remove(id) else []
+            if index0 >= 0 and index0 <= items.length:
+                items.insert(index0, item.clone())
+            table[id] = items
+        else:
+            mut {string=[ScratchValue]} by_list = local_table.remove(calling_instance_id) else {=}
+            mut items = by_list.remove(id) else []
+            if index0 >= 0 and index0 <= items.length:
+                items.insert(index0, item.clone())
+            by_list[id] = items
+            local_table[calling_instance_id] = by_list
 
     def replace_at(string id, string calling_instance_id, int index0, ScratchValue item):
-        mut items = self.get(id, calling_instance_id)
-        if index0 >= 0 and index0 < items.length:
-            items[index0] = item
-        self.set_items(id, calling_instance_id, items)
-
-    req ScratchValue item_at(string id, string calling_instance_id, int index0):
-        let items = self.get(id, calling_instance_id)
-        if index0 >= 0 and index0 < items.length:
-            items[index0]
+        let owner = list_owner[id] else ""
+        if owner == "":
+            mut items = table.remove(id) else []
+            if index0 >= 0 and index0 < items.length:
+                items[index0] = item.clone()
+            table[id] = items
         else:
-            # Real Scratch's `item # of list` reports an empty string for
-            # an out-of-range index rather than erroring.
-            ScratchValue.Str("")
+            mut {string=[ScratchValue]} by_list = local_table.remove(calling_instance_id) else {=}
+            mut items = by_list.remove(id) else []
+            if index0 >= 0 and index0 < items.length:
+                items[index0] = item.clone()
+            by_list[id] = items
+            local_table[calling_instance_id] = by_list
 
-    # Named `has_item`, not `contains` (which is what `data_listcontainsitem`
-    # actually means) -- the transpiler special-cases any `.contains(x)` call
-    # as the builtin `Vec`/`HashSet`/`str` method (which takes `x` *by
-    # reference*), the same name-based false-positive class already fixed
-    # once for `.position()`/`.count` in breakout-boring's history but not
-    # for `.contains()`: calling a user-declared `contains(&self, item:
-    # ScratchValue)` here got emitted as `.contains(&list_id, &item)`, which
-    # doesn't type-check against an owned-`ScratchValue` parameter. Renaming
-    # sidesteps it entirely.
-    req bool has_item(string id, string calling_instance_id, ScratchValue item):
-        let items = self.get(id, calling_instance_id)
-        var found = false
-        for existing in items:
-            if existing.loosely_equals(item.clone()):
-                found = true
-        found
-
-    # 1-based, matching real Scratch's `item # of thing in list` -- `0` if
-    # not found (also matching real Scratch, not a sentinel invented here).
-    req int index_of(string id, string calling_instance_id, ScratchValue item):
-        let items = self.get(id, calling_instance_id)
-        var i = 0
-        var result = 0
-        for existing in items:
-            if result == 0 and existing.loosely_equals(item.clone()):
-                result = i + 1
-            i += 1
+    def ScratchValue item_at(string id, string calling_instance_id, int index0):
+        var result = ScratchValue.Str("")
+        let owner = list_owner[id] else ""
+        if owner == "":
+            mut items = table.remove(id) else []
+            if index0 >= 0 and index0 < items.length:
+                result = items[index0]
+            table[id] = items
+        else:
+            mut {string=[ScratchValue]} by_list = local_table.remove(calling_instance_id) else {=}
+            mut items = by_list.remove(id) else []
+            if index0 >= 0 and index0 < items.length:
+                result = items[index0]
+            by_list[id] = items
+            local_table[calling_instance_id] = by_list
         result
 
-# One target's Motion state: stage position + facing direction. Real
-# Scratch's direction convention: 0 = up, 90 = right, 180/-180 = down, -90 =
-# left, clockwise-increasing (matches `motion_movesteps`' own
-# `sin`/`cos`-based math below) -- NOT the standard math convention
-# (0 = right, counterclockwise). Default direction 90 (facing right) is
-# real Scratch's own default for a newly-created sprite.
+    def bool has_item(string id, string calling_instance_id, ScratchValue item):
+        var found = false
+        let owner = list_owner[id] else ""
+        if owner == "":
+            mut items = table.remove(id) else []
+            for existing in items:
+                if !found and existing.loosely_equals(item.clone()):
+                    found = true
+            table[id] = items
+        else:
+            mut {string=[ScratchValue]} by_list = local_table.remove(calling_instance_id) else {=}
+            mut items = by_list.remove(id) else []
+            for existing in items:
+                if !found and existing.loosely_equals(item.clone()):
+                    found = true
+            by_list[id] = items
+            local_table[calling_instance_id] = by_list
+        found
+
+    def int index_of(string id, string calling_instance_id, ScratchValue item):
+        var result = 0
+        let owner = list_owner[id] else ""
+        if owner == "":
+            mut items = table.remove(id) else []
+            var i = 0
+            for existing in items:
+                if result == 0 and existing.loosely_equals(item.clone()):
+                    result = i + 1
+                i += 1
+            table[id] = items
+        else:
+            mut {string=[ScratchValue]} by_list = local_table.remove(calling_instance_id) else {=}
+            mut items = by_list.remove(id) else []
+            var i = 0
+            for existing in items:
+                if result == 0 and existing.loosely_equals(item.clone()):
+                    result = i + 1
+                i += 1
+            by_list[id] = items
+            local_table[calling_instance_id] = by_list
+        result
+
 struct Position:
     float32 x
     float32 y
@@ -1613,6 +1674,10 @@ pub struct DragState as Resource, Debug, Clone:
 # `KeyboardState`/`MouseState`'s own headless defaults.
 pub struct ScratchTimer as Resource, Debug, Clone:
     float32 elapsed
+    # `elapsed` at the last `reset timer`. `wait`/`glide` use raw `elapsed`, so a
+    # reset no longer shifts their absolute deadlines; the `timer` reporter and
+    # `when timer > n` read `elapsed - reset_base`.
+    float32 reset_base
 
 # `operator_random`'s source of randomness -- Marsaglia's plain xorshift64
 # (shift/XOR only, deliberately *not* the higher-quality xorshift64*
@@ -2285,6 +2350,19 @@ pub struct SoundQueue as Resource, Debug, Clone:
     # 300) -- a plain counter, cheaper to check on every `create clone of`
     # than scanning `instance_types` for a live count each time.
     var int live_clone_count
+    # `stop all` (applied by `run_pending_threads`: every thread ends, every clone is
+    # deleted) and `stop other scripts in sprite` (target ids whose *other* threads
+    # must end).
+    var bool stop_all_threads_requested
+    # Whether the project has any `touching color` block (see `build_uses_touching_color`);
+    # gates the per-tick scene compositor.
+    var bool touching_color_used
+    var [string] stop_other_requests
+    # Nesting depth of `drive_thread_to_completion` (a `broadcast and wait` whose
+    # receiver itself does `broadcast and wait`, ...). Bounded so a forged or
+    # self-recursive `when I receive A: broadcast A and wait` cannot overflow the
+    # native stack.
+    var int drive_depth
     # `sound_playuntildone`'s own duration lookup -- target id -> sound
     # name -> length in real seconds, precomputed once at link time
     # (`build_target_sound_durations`, `linker.br`) straight from each
@@ -2666,17 +2744,46 @@ struct ReporterWatcher:
 # crashing or guessing. `allow_end` widens the valid range by one (`<=
 # len`, not `< len`) for `insert_at`, which alone accepts "one past the end"
 # as a real position (append).
+# Same as `resolve_list_index` plus real Scratch's "random"/"any" dropdown
+# values (`Cast.toListIndex`: a random position in `1..length`, or
+# `1..length+1` when inserting).
+def int resolve_list_index_rnd(ScratchValue idx_val, int len, bool allow_end, var mut Rng rng):
+    let is_random = match idx_val.clone():
+        Str(s): s == "random" or s == "any"
+        _: false
+    if is_random:
+        let span = if allow_end: len + 1 else: len
+        if span > 0:
+            let pick = floor(rng.next_f64_01() * (span as float64)) as isize
+            if pick >= span:
+                span - 1
+            else:
+                pick
+        else:
+            -1
+    else:
+        resolve_list_index(idx_val, len, allow_end)
+
 def int resolve_list_index(ScratchValue idx_val, int len, bool allow_end):
     let is_last = match idx_val.clone():
         Str(s): s == "last"
         _: false
     if is_last:
-        if len > 0:
+        # `Cast.toListIndex("last", length)`; `insert at last` passes length + 1,
+        # so "last" appends there instead of inserting before the last item.
+        if allow_end:
+            len
+        elif len > 0:
             len - 1
         else:
             -1
     else:
-        let n = idx_val.to_num().to_isize_checked() else -999
+        var n = idx_val.to_num().to_isize_checked() else -999
+        if n == -999:
+            # Fractional index: `Math.floor(Cast.toNumber(index))`.
+            let nf = idx_val.to_num().to_f64()
+            if nf >= 1.0 and nf < 9.0e15:
+                n = floor(nf) as isize
         # `n - 1` below would underflow for `n == int::MIN` (a literal
         # `-9223372036854775808` is a valid Scratch number and survives
         # `to_isize_checked` unchanged -- it fits `int64` exactly, so it's

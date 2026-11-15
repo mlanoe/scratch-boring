@@ -232,6 +232,10 @@ pub struct ProjectPath as Resource, Debug, Clone:
 pub struct PendingThreads as Resource, Debug, Clone:
     var mut [Thread] queue
 
+    # Number of threads still running (for tests).
+    pub req int count():
+        queue.length
+
 pub def spawn_camera(mut Commands commands):
     commands.spawn(Camera2d)
     # A single, fixed `SpatialListener` for `sound_seteffectto`'s own PAN
@@ -327,12 +331,12 @@ pub def setup_scratch_project(mut Commands commands, Res<ProjectPath> project_pa
         commands.insert_resource(KeyboardState(pressed_keys = [], any_key_pressed = false))
         commands.insert_resource(MouseState(x = 0.0, y = 0.0, down = false))
         commands.insert_resource(DragState(dragging_id = "", offset_x = 0.0, offset_y = 0.0))
-        commands.insert_resource(ScratchTimer(elapsed = 0.0))
+        commands.insert_resource(ScratchTimer(elapsed = 0.0, reset_base = 0.0))
         # Same fixed nonzero seed every run -- see `Rng`'s own doc comment
         # for why (a real, documented simplification, not real per-run
         # entropy).
         commands.insert_resource(Rng(state = 88172645463325252 as uint64))
-        commands.insert_resource(SoundQueue(play_queue = [], stop_all_requested = false, volumes = build_sound_volume_table(project.clone()), pitches = {=}, pans = {=}, effects = {=}, rotation_styles = build_target_rotation_styles(project.clone()), sound_durations = build_target_sound_durations(project.clone()), instance_types = build_instance_types_table(project.clone()), next_clone_id = 0, clone_requests = [], despawn_requests = [], live_clone_count = 0, reset_timer_requested = false, backdrop_switch_hats = backdrop_switch_hats.clone(), draggable = build_target_draggable(project.clone()), pen_states = {=}, pen_line_requests = [], pen_clear_requested = false, stamp_requests = [], scene_composite = blank_scene_composite_data()))
+        commands.insert_resource(SoundQueue(play_queue = [], stop_all_requested = false, volumes = build_sound_volume_table(project.clone()), pitches = {=}, pans = {=}, effects = {=}, rotation_styles = build_target_rotation_styles(project.clone()), sound_durations = build_target_sound_durations(project.clone()), instance_types = build_instance_types_table(project.clone()), next_clone_id = 0, clone_requests = [], despawn_requests = [], live_clone_count = 0, stop_all_threads_requested = false, stop_other_requests = [], touching_color_used = build_uses_touching_color(project.clone()), drive_depth = 0, reset_timer_requested = false, backdrop_switch_hats = backdrop_switch_hats.clone(), draggable = build_target_draggable(project.clone()), pen_states = {=}, pen_line_requests = [], pen_clear_requested = false, stamp_requests = [], scene_composite = blank_scene_composite_data()))
         commands.insert_resource(EffectCache(keys = {=}, handles = {=}))
         commands.insert_resource(SpeechBubbles(table = {=}))
         # Every green-flag hat starts its own thread, project-wide -- real
@@ -383,7 +387,7 @@ pub def setup_scratch_project(mut Commands commands, Res<ProjectPath> project_pa
                 # `handles.length == costumes.length` for every target.
                 mut costume_handles = []
                 for i in 0..<target.costumes.length:
-                    if let p = extract_costume_at_index_to_temp_file(project_path.path.clone(), target_name.clone(), i):
+                    if let p = extract_costume_at_index_for_project(project_path.path.clone(), project, target_name.clone(), i):
                         costume_handles.push(asset_server.load(p.toString()))
                     else:
                         costume_handles.push(asset_server.load(costume_path.toString()))
@@ -481,16 +485,43 @@ pub def setup_scratch_project(mut Commands commands, Res<ProjectPath> project_pa
 # running across many ticks must never re-spawn the same broadcast twice
 # just because its own `spawned` list was never cleared.
 pub def run_pending_threads(mut ResMut<Vars> vars, mut ResMut<Lists> lists, Res<ProcTable> procs, Res<Broadcasts> broadcasts, mut ResMut<Positions> positions, Res<KeyboardState> keyboard, Res<MouseState> mouse, Res<ScratchTimer> timer, mut ResMut<Rng> rng, mut ResMut<LooksStates> looks, mut ResMut<LayerOrders> layer_orders, Res<TargetCostumes> target_costumes, Res<TargetCostumeDims> costume_dims, mut ResMut<SoundQueue> sound_queue, mut ResMut<SpeechBubbles> speech_bubbles, mut ResMut<PendingThreads> pending):
-    let threads = pending.queue.clone()
-    mut still_running = []
-    for thread in threads:
-        var t = thread
-        let done = step_thread(t, vars.pointee, procs.clone(), lists.pointee, broadcasts.clone(), positions.pointee, keyboard.clone(), mouse.clone(), timer.clone(), rng.pointee, looks.pointee, layer_orders.pointee, target_costumes.clone(), costume_dims.clone(), sound_queue.pointee, speech_bubbles.pointee)
-        for script in t.spawned.clone():
-            still_running.push(spawn_thread(script))
-        t.spawned = []
-        if !done:
-            still_running.push(t)
+    # Threads are moved out of the queue one by one (no deep clone of every
+    # thread's frame stack per tick, plus another per thread).
+    var mut still_running = []
+    # Targets whose remaining threads were ended by `stop other scripts in sprite`
+    # earlier in this same tick, and the `stop all` latch.
+    mut skip_targets = {=}
+    var stopped_all = false
+    pending.queue.reverse()
+    while pending.queue.length > 0:
+        var mut t = pending.queue.pop()
+        let skipped = skip_targets[t.target_id.clone()] else false
+        if !skipped and !stopped_all:
+            let done = step_thread(t, vars.pointee, procs.clone(), lists.pointee, broadcasts.clone(), positions.pointee, keyboard.clone(), mouse.clone(), timer.clone(), rng.pointee, looks.pointee, layer_orders.pointee, target_costumes.clone(), costume_dims.clone(), sound_queue.pointee, speech_bubbles.pointee)
+            for script in t.spawned.clone():
+                still_running.push(spawn_thread(script))
+            t.spawned = []
+            if sound_queue.stop_all_threads_requested:
+                # `stop all`: end every thread and delete every clone.
+                sound_queue.stop_all_threads_requested = false
+                stopped_all = true
+                still_running = []
+                let instance_types_now = sound_queue.instance_types.clone()
+                for clone_id, origin in instance_types_now:
+                    if clone_id != origin:
+                        sound_queue.despawn_requests.push(clone_id.clone())
+                        sound_queue.live_clone_count -= 1
+            elif sound_queue.stop_other_requests.length > 0:
+                for stop_target in sound_queue.stop_other_requests.clone():
+                    skip_targets[stop_target.clone()] = true
+                    mut kept = []
+                    for running in still_running:
+                        if running.target_id != stop_target:
+                            kept.push(running)
+                    still_running = kept
+                sound_queue.stop_other_requests = []
+            if !done and !stopped_all:
+                still_running.push(t)
     pending.queue = still_running
 
 # Marker component for a currently-playing sound entity -- lets
@@ -1125,7 +1156,7 @@ pub def sync_scratch_timer(mut ResMut<ScratchTimer> timer, Res<Time> time, mut R
     # continuous wall-clock time having no tick boundaries to land
     # exactly on) rather than a materially different behavior.
     if sound_queue.reset_timer_requested:
-        timer.elapsed = 0.0
+        timer.reset_base = timer.elapsed
         sound_queue.reset_timer_requested = false
     else:
         timer.elapsed = timer.elapsed + time.delta_secs()
@@ -1307,7 +1338,7 @@ pub def check_greater_than_hats(mut ResMut<Vars> vars, mut ResMut<Lists> lists, 
         let is_true = if hat.menu == "TIMER":
             let top_frame = Frame(params = {=}, target_id = hat.script.target_id.clone())
             let threshold = eval(hat.value_expr.clone(), vars.pointee, top_frame, procs.clone(), lists.pointee, broadcasts.clone(), positions.pointee, keyboard.clone(), mouse.clone(), timer.clone(), rng.pointee, looks.pointee, target_costumes.clone(), costume_dims.clone(), sound_queue.clone()).to_num()
-            ScratchNumber.from_f32(timer.elapsed).gt_owned(threshold)
+            ScratchNumber.from_f32(timer.elapsed - timer.reset_base).gt_owned(threshold)
         elif hat.menu == "LOUDNESS":
             # `current_loudness()`'s own doc comment (`runtime.br`) --
             # always `-1` today (no microphone subsystem), so this is

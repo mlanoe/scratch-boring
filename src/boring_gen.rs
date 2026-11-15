@@ -94,6 +94,16 @@ impl<T: Clone + Eq + std::hash::Hash> BoringSetIndex for HashSet<T> {
     }
 }
 
+// BoringLen — the `len()` an untyped parameter (`def size(x): x.len()`) is bounded by.
+#[allow(dead_code)]
+trait BoringLen { fn len(&self) -> usize; }
+impl<T> BoringLen for Vec<T> { fn len(&self) -> usize { <[T]>::len(self) } }
+impl<K, V, S> BoringLen for std::collections::HashMap<K, V, S> { fn len(&self) -> usize { std::collections::HashMap::len(self) } }
+impl<T, S> BoringLen for std::collections::HashSet<T, S> { fn len(&self) -> usize { std::collections::HashSet::len(self) } }
+// The `Arc` string type is swapped for its single-threaded twin by the textual fixup applied to the whole output; `&str` is a strict-mode literal. (Do not spell the twin out in this prelude: the Metal host reads it as the single-thread marker.)
+impl BoringLen for Arc<str> { fn len(&self) -> usize { self.chars().count() } }
+impl BoringLen for &str { fn len(&self) -> usize { self.chars().count() } }
+
 // BoringFmt — displays Vec<T: Display> as [a, b, c] (no debug quotes on strings).
 struct BoringFmt<'a, T: std::fmt::Display>(pub &'a [T]);
 impl<'a, T: std::fmt::Display> std::fmt::Display for BoringFmt<'a, T> {
@@ -451,7 +461,7 @@ impl std::fmt::Display for ProjectPath {
 impl ProjectPath {
 }
 
-#[derive(Debug, Clone, PartialEq, Resource)]
+#[derive(Debug, Clone, Resource)]
 pub struct PendingThreads {
     queue: /* var */ Vec<Thread>,
 }
@@ -463,6 +473,10 @@ impl std::fmt::Display for PendingThreads {
 }
 
 impl PendingThreads {
+    pub fn count(&self) -> isize {
+        (self.queue.len() as isize)
+    }
+
 }
 
 pub fn spawn_camera(mut commands: Commands) -> () {
@@ -521,9 +535,9 @@ pub fn setup_scratch_project(mut commands: Commands, project_path: Res<ProjectPa
         commands.insert_resource(KeyboardState { pressed_keys: vec![], any_key_pressed: false });
         commands.insert_resource(MouseState { x: 0.0, y: 0.0, down: false });
         commands.insert_resource(DragState { dragging_id: Arc::<str>::from(""), offset_x: 0.0, offset_y: 0.0 });
-        commands.insert_resource(ScratchTimer { elapsed: 0.0 });
+        commands.insert_resource(ScratchTimer { elapsed: 0.0, reset_base: 0.0 });
         commands.insert_resource(Rng { state: (88172645463325252i64 as u64) });
-        commands.insert_resource(SoundQueue { play_queue: vec![], stop_all_requested: false, volumes: build_sound_volume_table(&project), pitches: HashMap::new(), pans: HashMap::new(), effects: HashMap::new(), rotation_styles: build_target_rotation_styles(&project), sound_durations: build_target_sound_durations(&project), instance_types: build_instance_types_table(&project), next_clone_id: 0, clone_requests: vec![], despawn_requests: vec![], live_clone_count: 0, reset_timer_requested: false, backdrop_switch_hats: backdrop_switch_hats.clone(), draggable: build_target_draggable(&project), pen_states: HashMap::new(), pen_line_requests: vec![], pen_clear_requested: false, stamp_requests: vec![], scene_composite: blank_scene_composite_data() });
+        commands.insert_resource(SoundQueue { play_queue: vec![], stop_all_requested: false, volumes: build_sound_volume_table(&project), pitches: HashMap::new(), pans: HashMap::new(), effects: HashMap::new(), rotation_styles: build_target_rotation_styles(&project), sound_durations: build_target_sound_durations(&project), instance_types: build_instance_types_table(&project), next_clone_id: 0, clone_requests: vec![], despawn_requests: vec![], live_clone_count: 0, stop_all_threads_requested: false, stop_other_requests: vec![], touching_color_used: build_uses_touching_color(&project), drive_depth: 0, reset_timer_requested: false, backdrop_switch_hats: backdrop_switch_hats.clone(), draggable: build_target_draggable(&project), pen_states: HashMap::new(), pen_line_requests: vec![], pen_clear_requested: false, stamp_requests: vec![], scene_composite: blank_scene_composite_data() });
         commands.insert_resource(EffectCache { keys: HashMap::new(), handles: HashMap::new() });
         commands.insert_resource(SpeechBubbles { table: HashMap::new() });
         let mut greenflag_threads = vec![];
@@ -537,7 +551,7 @@ pub fn setup_scratch_project(mut commands: Commands, project_path: Res<ProjectPa
             if let Some(costume_path) = extract_current_costume_to_temp_file(Arc::<str>::from(project_path.path.clone().to_string()), Arc::<str>::from(target_name.clone().to_string())) {
                 let mut costume_handles = vec![];
                 for i in (0..(target.costumes.len() as isize)) {
-                    if let Some(p) = extract_costume_at_index_to_temp_file(Arc::<str>::from(project_path.path.clone().to_string()), Arc::<str>::from(target_name.clone().to_string()), i) {
+                    if let Some(p) = extract_costume_at_index_for_project(Arc::<str>::from(project_path.path.clone().to_string()), &project, Arc::<str>::from(target_name.clone().to_string()), i) {
                         costume_handles.push(asset_server.load(p.to_string()));
                     } else {
                         costume_handles.push(asset_server.load(costume_path.to_string()));
@@ -578,17 +592,46 @@ pub fn setup_scratch_project(mut commands: Commands, project_path: Res<ProjectPa
 }
 
 pub fn run_pending_threads(mut vars: ResMut<Vars>, mut lists: ResMut<Lists>, procs: Res<ProcTable>, broadcasts: Res<Broadcasts>, mut positions: ResMut<Positions>, keyboard: Res<KeyboardState>, mouse: Res<MouseState>, timer: Res<ScratchTimer>, mut rng: ResMut<Rng>, mut looks: ResMut<LooksStates>, mut layer_orders: ResMut<LayerOrders>, target_costumes: Res<TargetCostumes>, costume_dims: Res<TargetCostumeDims>, mut sound_queue: ResMut<SoundQueue>, mut speech_bubbles: ResMut<SpeechBubbles>, mut pending: ResMut<PendingThreads>) -> () {
-    let threads = pending.queue.clone();
     let mut still_running = vec![];
-    for thread in threads.iter().cloned() {
-        let mut t = thread.clone();
-        let done = step_thread(&mut t, &mut *vars, &procs, &mut *lists, &broadcasts, &mut *positions, &keyboard, &mouse, &timer, &mut *rng, &mut *looks, &mut *layer_orders, &target_costumes, &costume_dims, &mut *sound_queue, &mut *speech_bubbles);
-        for script in t.spawned.clone().into_iter() {
-            still_running.push(spawn_thread(&script));
-        }
-        t.spawned = vec![];
-        if (!done) {
-            still_running.push(t);
+    let mut skip_targets = HashMap::new();
+    let mut stopped_all = false;
+    pending.queue.reverse();
+    while ((pending.queue.len() as isize) > 0) {
+        let mut t = pending.queue.pop().unwrap_or_default();
+        let skipped = skip_targets.get(&t.target_id.clone()).cloned().unwrap_or_else(|| false);
+        if ((!skipped) && (!stopped_all)) {
+            let done = step_thread(&mut t, &mut *vars, &procs, &mut *lists, &broadcasts, &mut *positions, &keyboard, &mouse, &timer, &mut *rng, &mut *looks, &mut *layer_orders, &target_costumes, &costume_dims, &mut *sound_queue, &mut *speech_bubbles);
+            for script in t.spawned.clone().into_iter() {
+                still_running.push(spawn_thread(&script));
+            }
+            t.spawned = vec![];
+            if sound_queue.stop_all_threads_requested {
+                sound_queue.stop_all_threads_requested = false;
+                stopped_all = true;
+                still_running = vec![];
+                let instance_types_now = sound_queue.instance_types.clone();
+                for (clone_id, origin) in instance_types_now.into_iter() {
+                    if (clone_id != origin) {
+                        sound_queue.despawn_requests.push(clone_id.clone());
+                        sound_queue.live_clone_count -= 1;
+                    }
+                }
+            } else if ((sound_queue.stop_other_requests.len() as isize) > 0) {
+                for stop_target in sound_queue.stop_other_requests.clone().into_iter() {
+                    skip_targets.insert(stop_target.clone(), true);
+                    let mut kept = vec![];
+                    for running in still_running.iter().cloned() {
+                        if (running.target_id != stop_target) {
+                            kept.push(running);
+                        }
+                    }
+                    still_running = kept;
+                }
+                sound_queue.stop_other_requests = vec![];
+            }
+            if ((!done) && (!stopped_all)) {
+                still_running.push(t);
+            }
         }
     }
     pending.queue = still_running;
@@ -762,7 +805,7 @@ pub fn handle_ask_text_input(mut events: MessageReader<KeyboardInput>, mut vars:
                 }
             } else if (event.key_code == KeyCode::Backspace) {
                 let mut chars = vars.ask_buffer.chars().map(|c| Arc::<str>::from(c.to_string())).collect::<Vec<Arc<str>>>();
-                chars.pop().unwrap_or_default();
+                chars.pop();
                 let mut rebuilt: Arc<str> = Arc::<str>::from("");
                 for c in chars.iter().cloned() {
                     rebuilt = Arc::<str>::from(Arc::<str>::from(format!("{}{}", rebuilt, c).as_str()));
@@ -1006,7 +1049,7 @@ pub fn sync_mouse_state(mut state: ResMut<MouseState>, window: Single<&Window>, 
 
 pub fn sync_scratch_timer(mut timer: ResMut<ScratchTimer>, time: Res<Time>, mut sound_queue: ResMut<SoundQueue>) -> () {
     if sound_queue.reset_timer_requested {
-        timer.elapsed = 0.0;
+        timer.reset_base = timer.elapsed;
         sound_queue.reset_timer_requested = false;
     } else {
         timer.elapsed += time.delta_secs();
@@ -1108,7 +1151,7 @@ pub fn check_greater_than_hats(mut vars: ResMut<Vars>, mut lists: ResMut<Lists>,
         if (hat.menu.clone() == Arc::<str>::from("TIMER")) {
             let top_frame: Frame = Frame { params: HashMap::new(), target_id: Arc::<str>::from(hat.script.target_id.clone().to_string()) };
             let threshold = eval(&hat.value_expr, &mut *vars, &top_frame, &procs, &mut *lists, &broadcasts, &mut *positions, &keyboard, &mouse, &timer, &mut *rng, &mut *looks, &target_costumes, &costume_dims, &sound_queue).to_num();
-            ScratchNumber::from_f32(timer.elapsed).gt_owned(&threshold)
+            ScratchNumber::from_f32((timer.elapsed - timer.reset_base)).gt_owned(&threshold)
         } else if (hat.menu.clone() == Arc::<str>::from("LOUDNESS")) {
             let top_frame: Frame = Frame { params: HashMap::new(), target_id: Arc::<str>::from(hat.script.target_id.clone().to_string()) };
             let threshold = eval(&hat.value_expr, &mut *vars, &top_frame, &procs, &mut *lists, &broadcasts, &mut *positions, &keyboard, &mouse, &timer, &mut *rng, &mut *looks, &target_costumes, &costume_dims, &sound_queue).to_num();
@@ -2137,6 +2180,17 @@ impl Sb3Primitive {
         }
     }
 
+    pub fn as_color_hex(&self) -> Option<Arc<str>> {
+        match self.clone() {
+            Sb3Primitive::ColorPicker(hex) => {
+                Some(hex.clone())
+            }
+            _ => {
+                None
+            }
+        }
+    }
+
     fn name(&self) -> Option<Arc<str>> {
         if let Sb3Primitive::Broadcast(__fv, _) = self { return Some(__fv.clone()); }
         if let Sb3Primitive::Variable(__fv, _) = self { return Some(__fv.clone()); }
@@ -2605,10 +2659,14 @@ fn read_project_json_from_zip(sb3Path: Arc<str>) -> Option<Arc<str>> {
         return None;
     }
     let mut buf: Vec<u8> = vec![];
-    let bytesReadOpt = ZipFile::read_to_end(&mut entry, &mut buf).ok();
+    let mut limited = Read::take(&mut entry, (MAX_ZIP_ENTRY_BYTES + (1i64 as u64)));
+    let bytesReadOpt = Read::read_to_end(&mut limited, &mut buf).ok();
     let Some(bytesRead) = (bytesReadOpt) else {
         return None;
     };
+    if (((buf.len() as isize) as u64) > MAX_ZIP_ENTRY_BYTES) {
+        return None;
+    }
     let contentsOpt = String::from_utf8(buf).ok();
     let Some(contents) = (contentsOpt) else {
         return None;
@@ -3362,7 +3420,7 @@ impl ScratchValue {
                 b.clone()
             }
             ScratchValue::Str(s) => {
-                (s == Arc::<str>::from("true"))
+                (!(((s == Arc::<str>::from("")) || (s == Arc::<str>::from("0"))) || (Arc::<str>::from(s.to_lowercase().as_str()) == Arc::<str>::from("false"))))
             }
             ScratchValue::Num(n) => {
                 (!n.is_zero())
@@ -3389,6 +3447,30 @@ impl ScratchValue {
                     None
                 }
             }
+        }
+    }
+
+    fn loosely_gt(&self, other: ScratchValue) -> bool {
+        if let Some(a) = self.try_num() {
+            if let Some(b) = other.try_num() {
+                a.gt_owned(&b)
+            } else {
+                (Arc::<str>::from(Arc::<str>::from(format!("{}", self).as_str()).to_lowercase().as_str()) > Arc::<str>::from(Arc::<str>::from(format!("{}", other).as_str()).to_lowercase().as_str()))
+            }
+        } else {
+            (Arc::<str>::from(Arc::<str>::from(format!("{}", self).as_str()).to_lowercase().as_str()) > Arc::<str>::from(Arc::<str>::from(format!("{}", other).as_str()).to_lowercase().as_str()))
+        }
+    }
+
+    fn loosely_lt(&self, other: ScratchValue) -> bool {
+        if let Some(a) = self.try_num() {
+            if let Some(b) = other.try_num() {
+                a.lt_owned(&b)
+            } else {
+                (Arc::<str>::from(Arc::<str>::from(format!("{}", self).as_str()).to_lowercase().as_str()) < Arc::<str>::from(Arc::<str>::from(format!("{}", other).as_str()).to_lowercase().as_str()))
+            }
+        } else {
+            (Arc::<str>::from(Arc::<str>::from(format!("{}", self).as_str()).to_lowercase().as_str()) < Arc::<str>::from(Arc::<str>::from(format!("{}", other).as_str()).to_lowercase().as_str()))
         }
     }
 
@@ -3617,7 +3699,7 @@ impl std::fmt::Display for FrameKind {
 }
 
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, Default)]
 struct Thread {
     pub target_id: Arc<str>,
     stack: /* var */ Vec<ExecFrame>,
@@ -3724,11 +3806,7 @@ impl Vars {
         if (owner == Arc::<str>::from("")) {
             self.table.insert(id.clone(), v.clone());
         } else {
-            let existing: HashMap<Arc<str>, ScratchValue> = self.local_table.get(&*calling_instance_id).cloned().unwrap_or_else(|| HashMap::new());
-            let mut by_var = HashMap::new();
-            for (k, val) in existing.into_iter() {
-                by_var.insert(k.clone(), val.clone());
-            }
+            let mut by_var: HashMap<Arc<str>, ScratchValue> = self.local_table.remove(&*calling_instance_id).unwrap_or_else(|| HashMap::new());
             by_var.insert(id.clone(), v.clone());
             self.local_table.insert(calling_instance_id.clone(), by_var);
         }
@@ -3813,21 +3891,6 @@ impl Lists {
         }
     }
 
-    fn set_items(&mut self, id: Arc<str>, calling_instance_id: Arc<str>, items: &Vec<ScratchValue>) -> () {
-        let owner = self.list_owner.get(&*id).cloned().unwrap_or_else(|| Arc::<str>::from(""));
-        if (owner == Arc::<str>::from("")) {
-            self.table.insert(id.clone(), items.clone());
-        } else {
-            let existing: HashMap<Arc<str>, Vec<ScratchValue>> = self.local_table.get(&*calling_instance_id).cloned().unwrap_or_else(|| HashMap::new());
-            let mut by_list = HashMap::new();
-            for (k, val) in existing.into_iter() {
-                by_list.insert(k.clone(), val);
-            }
-            by_list.insert(id.clone(), items.clone());
-            self.local_table.insert(calling_instance_id.clone(), by_list);
-        }
-    }
-
     fn watcher_shown(&self, id: Arc<str>) -> bool {
         self.watcher_visible.get(&*id).cloned().unwrap_or_else(|| false)
     }
@@ -3849,74 +3912,177 @@ impl Lists {
         self.local_table.remove(&*instance_id);
     }
 
-    fn length(&self, id: Arc<str>, calling_instance_id: Arc<str>) -> isize {
-        let items = self.get(id.clone(), calling_instance_id.clone());
-        (items.len() as isize)
+    fn length(&mut self, id: Arc<str>, calling_instance_id: Arc<str>) -> isize {
+        let mut n = 0;
+        let owner = self.list_owner.get(&*id).cloned().unwrap_or_else(|| Arc::<str>::from(""));
+        if (owner == Arc::<str>::from("")) {
+            let mut items = self.table.remove(&*id).unwrap_or_else(|| vec![]);
+            n = (items.len() as isize);
+            self.table.insert(id.clone(), items);
+        } else {
+            let mut by_list: HashMap<Arc<str>, Vec<ScratchValue>> = self.local_table.remove(&*calling_instance_id).unwrap_or_else(|| HashMap::new());
+            let mut items = by_list.remove(&*id).unwrap_or_else(|| vec![]);
+            n = (items.len() as isize);
+            by_list.insert(id.clone(), items);
+            self.local_table.insert(calling_instance_id.clone(), by_list);
+        }
+        n
     }
 
     fn add(&mut self, id: Arc<str>, calling_instance_id: Arc<str>, item: ScratchValue) -> () {
-        let mut items = self.get(id.clone(), calling_instance_id.clone());
-        items.push(item.clone());
-        self.set_items(id.clone(), calling_instance_id.clone(), &items);
+        let owner = self.list_owner.get(&*id).cloned().unwrap_or_else(|| Arc::<str>::from(""));
+        if (owner == Arc::<str>::from("")) {
+            let mut items = self.table.remove(&*id).unwrap_or_else(|| vec![]);
+            items.push(item.clone());
+            self.table.insert(id.clone(), items);
+        } else {
+            let mut by_list: HashMap<Arc<str>, Vec<ScratchValue>> = self.local_table.remove(&*calling_instance_id).unwrap_or_else(|| HashMap::new());
+            let mut items = by_list.remove(&*id).unwrap_or_else(|| vec![]);
+            items.push(item.clone());
+            by_list.insert(id.clone(), items);
+            self.local_table.insert(calling_instance_id.clone(), by_list);
+        }
     }
 
     fn delete_at(&mut self, id: Arc<str>, calling_instance_id: Arc<str>, index0: isize) -> () {
-        let mut items = self.get(id.clone(), calling_instance_id.clone());
-        if ((index0 >= 0) && (index0 < (items.len() as isize))) {
-            items.remove({ let __boring_idx = index0 as i64; if __boring_idx < 0 { (items.len() as i64 + __boring_idx) as usize } else { __boring_idx as usize } });
+        let owner = self.list_owner.get(&*id).cloned().unwrap_or_else(|| Arc::<str>::from(""));
+        if (owner == Arc::<str>::from("")) {
+            let mut items = self.table.remove(&*id).unwrap_or_else(|| vec![]);
+            if ((index0 >= 0) && (index0 < (items.len() as isize))) {
+                items.remove({ let __boring_idx = index0.clone() as i64; if __boring_idx < 0 { (items.len() as i64 + __boring_idx) as usize } else { __boring_idx as usize } });
+            }
+            self.table.insert(id.clone(), items);
+        } else {
+            let mut by_list: HashMap<Arc<str>, Vec<ScratchValue>> = self.local_table.remove(&*calling_instance_id).unwrap_or_else(|| HashMap::new());
+            let mut items = by_list.remove(&*id).unwrap_or_else(|| vec![]);
+            if ((index0 >= 0) && (index0 < (items.len() as isize))) {
+                items.remove({ let __boring_idx = index0.clone() as i64; if __boring_idx < 0 { (items.len() as i64 + __boring_idx) as usize } else { __boring_idx as usize } });
+            }
+            by_list.insert(id.clone(), items);
+            self.local_table.insert(calling_instance_id.clone(), by_list);
         }
-        self.set_items(id.clone(), calling_instance_id.clone(), &items);
     }
 
     fn delete_all(&mut self, id: Arc<str>, calling_instance_id: Arc<str>) -> () {
-        self.set_items(id.clone(), calling_instance_id.clone(), &vec![]);
+        let owner = self.list_owner.get(&*id).cloned().unwrap_or_else(|| Arc::<str>::from(""));
+        if (owner == Arc::<str>::from("")) {
+            self.table.insert(id.clone(), vec![]);
+        } else {
+            let mut by_list: HashMap<Arc<str>, Vec<ScratchValue>> = self.local_table.remove(&*calling_instance_id).unwrap_or_else(|| HashMap::new());
+            by_list.insert(id.clone(), vec![]);
+            self.local_table.insert(calling_instance_id.clone(), by_list);
+        }
     }
 
     fn insert_at(&mut self, id: Arc<str>, calling_instance_id: Arc<str>, index0: isize, item: ScratchValue) -> () {
-        let mut items = self.get(id.clone(), calling_instance_id.clone());
-        if ((index0 >= 0) && (index0 <= (items.len() as isize))) {
-            items.insert((index0.clone() as usize), item.clone());
+        let owner = self.list_owner.get(&*id).cloned().unwrap_or_else(|| Arc::<str>::from(""));
+        if (owner == Arc::<str>::from("")) {
+            let mut items = self.table.remove(&*id).unwrap_or_else(|| vec![]);
+            if ((index0 >= 0) && (index0 <= (items.len() as isize))) {
+                items.insert((index0 as usize), item.clone());
+            }
+            self.table.insert(id.clone(), items);
+        } else {
+            let mut by_list: HashMap<Arc<str>, Vec<ScratchValue>> = self.local_table.remove(&*calling_instance_id).unwrap_or_else(|| HashMap::new());
+            let mut items = by_list.remove(&*id).unwrap_or_else(|| vec![]);
+            if ((index0 >= 0) && (index0 <= (items.len() as isize))) {
+                items.insert((index0 as usize), item.clone());
+            }
+            by_list.insert(id.clone(), items);
+            self.local_table.insert(calling_instance_id.clone(), by_list);
         }
-        self.set_items(id.clone(), calling_instance_id.clone(), &items);
     }
 
     fn replace_at(&mut self, id: Arc<str>, calling_instance_id: Arc<str>, index0: isize, item: ScratchValue) -> () {
-        let mut items = self.get(id.clone(), calling_instance_id.clone());
-        if ((index0 >= 0) && (index0 < (items.len() as isize))) {
-            items[(index0) as usize] = item.clone();
-        }
-        self.set_items(id.clone(), calling_instance_id.clone(), &items);
-    }
-
-    fn item_at(&self, id: Arc<str>, calling_instance_id: Arc<str>, index0: isize) -> ScratchValue {
-        let items = self.get(id.clone(), calling_instance_id.clone());
-        if ((index0 >= 0) && (index0 < (items.len() as isize))) {
-            items[(index0) as usize].clone()
-        } else {
-            ScratchValue::Str(Arc::<str>::from(""))
-        }
-    }
-
-    fn has_item(&self, id: Arc<str>, calling_instance_id: Arc<str>, item: ScratchValue) -> bool {
-        let items = self.get(id.clone(), calling_instance_id.clone());
-        let mut found = false;
-        for existing in items.iter().cloned() {
-            if existing.loosely_equals(item.clone()) {
-                found = true;
+        let owner = self.list_owner.get(&*id).cloned().unwrap_or_else(|| Arc::<str>::from(""));
+        if (owner == Arc::<str>::from("")) {
+            let mut items = self.table.remove(&*id).unwrap_or_else(|| vec![]);
+            if ((index0 >= 0) && (index0 < (items.len() as isize))) {
+                items[(index0) as usize] = item.clone();
             }
+            self.table.insert(id.clone(), items);
+        } else {
+            let mut by_list: HashMap<Arc<str>, Vec<ScratchValue>> = self.local_table.remove(&*calling_instance_id).unwrap_or_else(|| HashMap::new());
+            let mut items = by_list.remove(&*id).unwrap_or_else(|| vec![]);
+            if ((index0 >= 0) && (index0 < (items.len() as isize))) {
+                items[(index0) as usize] = item.clone();
+            }
+            by_list.insert(id.clone(), items);
+            self.local_table.insert(calling_instance_id.clone(), by_list);
+        }
+    }
+
+    fn item_at(&mut self, id: Arc<str>, calling_instance_id: Arc<str>, index0: isize) -> ScratchValue {
+        let mut result = ScratchValue::Str(Arc::<str>::from(""));
+        let owner = self.list_owner.get(&*id).cloned().unwrap_or_else(|| Arc::<str>::from(""));
+        if (owner == Arc::<str>::from("")) {
+            let mut items = self.table.remove(&*id).unwrap_or_else(|| vec![]);
+            if ((index0 >= 0) && (index0 < (items.len() as isize))) {
+                result = items[(index0) as usize].clone();
+            }
+            self.table.insert(id.clone(), items);
+        } else {
+            let mut by_list: HashMap<Arc<str>, Vec<ScratchValue>> = self.local_table.remove(&*calling_instance_id).unwrap_or_else(|| HashMap::new());
+            let mut items = by_list.remove(&*id).unwrap_or_else(|| vec![]);
+            if ((index0 >= 0) && (index0 < (items.len() as isize))) {
+                result = items[(index0) as usize].clone();
+            }
+            by_list.insert(id.clone(), items);
+            self.local_table.insert(calling_instance_id.clone(), by_list);
+        }
+        result.clone()
+    }
+
+    fn has_item(&mut self, id: Arc<str>, calling_instance_id: Arc<str>, item: ScratchValue) -> bool {
+        let mut found = false;
+        let owner = self.list_owner.get(&*id).cloned().unwrap_or_else(|| Arc::<str>::from(""));
+        if (owner == Arc::<str>::from("")) {
+            let mut items = self.table.remove(&*id).unwrap_or_else(|| vec![]);
+            for existing in items.iter().cloned() {
+                if ((!found) && existing.loosely_equals(item.clone())) {
+                    found = true;
+                }
+            }
+            self.table.insert(id.clone(), items);
+        } else {
+            let mut by_list: HashMap<Arc<str>, Vec<ScratchValue>> = self.local_table.remove(&*calling_instance_id).unwrap_or_else(|| HashMap::new());
+            let mut items = by_list.remove(&*id).unwrap_or_else(|| vec![]);
+            for existing in items.iter().cloned() {
+                if ((!found) && existing.loosely_equals(item.clone())) {
+                    found = true;
+                }
+            }
+            by_list.insert(id.clone(), items);
+            self.local_table.insert(calling_instance_id.clone(), by_list);
         }
         found
     }
 
-    fn index_of(&self, id: Arc<str>, calling_instance_id: Arc<str>, item: ScratchValue) -> isize {
-        let items = self.get(id.clone(), calling_instance_id.clone());
-        let mut i = 0;
+    fn index_of(&mut self, id: Arc<str>, calling_instance_id: Arc<str>, item: ScratchValue) -> isize {
         let mut result = 0;
-        for existing in items.iter().cloned() {
-            if ((result == 0) && existing.loosely_equals(item.clone())) {
-                result = (i + 1);
+        let owner = self.list_owner.get(&*id).cloned().unwrap_or_else(|| Arc::<str>::from(""));
+        if (owner == Arc::<str>::from("")) {
+            let mut items = self.table.remove(&*id).unwrap_or_else(|| vec![]);
+            let mut i = 0;
+            for existing in items.iter().cloned() {
+                if ((result == 0) && existing.loosely_equals(item.clone())) {
+                    result = (i + 1);
+                }
+                i += 1;
             }
-            i += 1;
+            self.table.insert(id.clone(), items);
+        } else {
+            let mut by_list: HashMap<Arc<str>, Vec<ScratchValue>> = self.local_table.remove(&*calling_instance_id).unwrap_or_else(|| HashMap::new());
+            let mut items = by_list.remove(&*id).unwrap_or_else(|| vec![]);
+            let mut i = 0;
+            for existing in items.iter().cloned() {
+                if ((result == 0) && existing.loosely_equals(item.clone())) {
+                    result = (i + 1);
+                }
+                i += 1;
+            }
+            by_list.insert(id.clone(), items);
+            self.local_table.insert(calling_instance_id.clone(), by_list);
         }
         result
     }
@@ -4308,6 +4474,7 @@ impl DragState {
 #[derive(Debug, Clone, PartialEq, Resource)]
 pub struct ScratchTimer {
     pub elapsed: f32,
+    pub reset_base: f32,
 }
 
 impl std::fmt::Display for ScratchTimer {
@@ -4897,6 +5064,10 @@ pub struct SoundQueue {
     clone_requests: /* var */ Vec<CloneRequest>,
     despawn_requests: /* var */ Vec<Arc<str>>,
     live_clone_count: /* var */ isize,
+    stop_all_threads_requested: /* var */ bool,
+    touching_color_used: /* var */ bool,
+    stop_other_requests: /* var */ Vec<Arc<str>>,
+    drive_depth: /* var */ isize,
     pub sound_durations: HashMap<Arc<str>, HashMap<Arc<str>, f32>>,
     pub backdrop_switch_hats: Vec<BackdropSwitchHat>,
     reset_timer_requested: /* var */ bool,
@@ -5153,6 +5324,38 @@ impl std::fmt::Display for ReporterWatcher {
 impl ReporterWatcher {
 }
 
+fn resolve_list_index_rnd(idx_val: ScratchValue, len: isize, allow_end: bool, mut rng: &mut Rng) -> isize {
+    let is_random =     match idx_val.clone() {
+        ScratchValue::Str(s) => {
+            ((s == Arc::<str>::from("random")) || (s == Arc::<str>::from("any")))
+        }
+        _ => {
+            false
+        }
+    };
+    if is_random {
+        let span = {
+        if allow_end {
+            len.wrapping_add((1 as isize))
+        } else {
+            len.clone()
+        }
+};
+        if (span > 0) {
+            let pick = ((((*rng).next_f64_01() * (span as f64)) as f64).floor() as isize);
+            if (pick >= span) {
+                (span - 1)
+            } else {
+                pick
+            }
+        } else {
+            (-1)
+        }
+    } else {
+        resolve_list_index(idx_val.clone(), len.clone(), allow_end.clone())
+    }
+}
+
 fn resolve_list_index(idx_val: ScratchValue, len: isize, allow_end: bool) -> isize {
     let is_last =     match idx_val.clone() {
         ScratchValue::Str(s) => {
@@ -5163,13 +5366,21 @@ fn resolve_list_index(idx_val: ScratchValue, len: isize, allow_end: bool) -> isi
         }
     };
     if is_last {
-        if (len > 0) {
+        if allow_end {
+            len.clone()
+        } else if (len > 0) {
             len.wrapping_sub((1 as isize))
         } else {
             (-1)
         }
     } else {
-        let n = idx_val.to_num().to_isize_checked().unwrap_or_else(|| (-999));
+        let mut n = idx_val.to_num().to_isize_checked().unwrap_or_else(|| (-999));
+        if (n == (-999)) {
+            let nf = idx_val.to_num().to_f64();
+            if ((nf >= 1.0) && (nf < 9000000000000000.0)) {
+                n = ((nf as f64).floor() as isize);
+            }
+        }
         let int_min = ((-9223372036854775807) - 1);
         if (n == int_min) {
             (-1)
@@ -5515,7 +5726,7 @@ fn list_watcher_display_string(lists: &Lists, list_id: Arc<str>) -> Arc<str> {
     let items = lists.get(list_id.clone(), lists.owner_of(list_id.clone()));
     let mut all_single_char = true;
     for item in items.iter().cloned() {
-        match item {
+        match item.clone() {
             ScratchValue::Str(s) => {
                 if ((AsRef::<str>::as_ref(&s).chars().count() as isize) != 1) {
                     all_single_char = false;
@@ -5716,6 +5927,18 @@ fn build_target_rotation_styles(project: &Sb3Project) -> HashMap<Arc<str>, Arc<s
     table
 }
 
+fn build_uses_touching_color(project: &Sb3Project) -> bool {
+    let mut used = false;
+    for target in project.targets.iter() {
+        for blk in target.all_blocks().into_iter() {
+            if (block_opcode_is(&blk, Arc::<str>::from("sensing_touchingcolor")) || block_opcode_is(&blk, Arc::<str>::from("sensing_coloristouchingcolor"))) {
+                used = true;
+            }
+        }
+    }
+    used
+}
+
 fn build_target_draggable(project: &Sb3Project) -> HashMap<Arc<str>, bool> {
     let mut table = HashMap::new();
     for target in project.targets.iter() {
@@ -5784,6 +6007,8 @@ fn resolve_primitive(prim: &Sb3Primitive) -> Block {
         Block { kind: BlockKind::VarGet(Arc::<str>::from(Arc::<str>::from(format!("{}", var_id).as_str()))) }
     } else if let Some(name) = prim.as_broadcast_name() {
         Block { kind: BlockKind::Literal(ScratchValue::Str(Arc::<str>::from(Arc::<str>::from(format!("{}", name).as_str())))) }
+    } else if let Some(hex) = prim.as_color_hex() {
+        Block { kind: BlockKind::Literal(ScratchValue::Str(Arc::<str>::from(Arc::<str>::from(format!("{}", hex).as_str())))) }
     } else {
         Block { kind: BlockKind::Literal(ScratchValue::Num(ScratchNumber::from_i64(0))) }
     }
@@ -6023,15 +6248,15 @@ fn dispatch_reporter(target: &Sb3Target, blk: &Sb3Block, depth: isize) -> Block 
     }
 }
 
-fn resolve_substack(target: &Sb3Target, blk: &Sb3Block, input_name: Arc<str>) -> Vec<Block> {
+fn resolve_substack(target: &Sb3Target, blk: &Sb3Block, input_name: Arc<str>, seen: &mut HashMap<Arc<str>, bool>, depth: isize) -> Vec<Block> {
     if let Some(sub_id) = blk.input_block_id(input_name.clone()) {
-        resolve_stack(target, Arc::<str>::from(Arc::<str>::from(format!("{}", sub_id).as_str())))
+        resolve_stack_in(target, Arc::<str>::from(Arc::<str>::from(format!("{}", sub_id).as_str())), seen, depth.wrapping_add((1 as isize)))
     } else {
         vec![]
     }
 }
 
-fn resolve_stack_block(target: &Sb3Target, blk: &Sb3Block) -> Block {
+fn resolve_stack_block(target: &Sb3Target, blk: &Sb3Block, seen: &mut HashMap<Arc<str>, bool>, depth: isize) -> Block {
     if block_opcode_is(blk, Arc::<str>::from("data_setvariableto")) {
         if let Some(var_id) = block_field_id(blk, Arc::<str>::from("VARIABLE")) {
             Block { kind: BlockKind::SetVar(Arc::<str>::from(Arc::<str>::from(format!("{}", var_id).as_str())), Box::new(resolve_input(target, blk, Arc::<str>::from("VALUE"), 0))) }
@@ -6103,13 +6328,13 @@ fn resolve_stack_block(target: &Sb3Target, blk: &Sb3Block) -> Block {
     } else if block_opcode_is(blk, Arc::<str>::from("event_broadcastandwait")) {
         Block { kind: BlockKind::BroadcastAndWait(Box::new(resolve_input(target, blk, Arc::<str>::from("BROADCAST_INPUT"), 0))) }
     } else if block_opcode_is(blk, Arc::<str>::from("control_repeat")) {
-        Block { kind: BlockKind::Repeat(Box::new(resolve_input(target, blk, Arc::<str>::from("TIMES"), 0)), resolve_substack(target, blk, Arc::<str>::from("SUBSTACK"))) }
+        Block { kind: BlockKind::Repeat(Box::new(resolve_input(target, blk, Arc::<str>::from("TIMES"), 0)), resolve_substack(target, blk, Arc::<str>::from("SUBSTACK"), seen, depth.clone())) }
     } else if block_opcode_is(blk, Arc::<str>::from("control_repeat_until")) {
-        Block { kind: BlockKind::RepeatUntil(Box::new(resolve_input(target, blk, Arc::<str>::from("CONDITION"), 0)), resolve_substack(target, blk, Arc::<str>::from("SUBSTACK"))) }
+        Block { kind: BlockKind::RepeatUntil(Box::new(resolve_input(target, blk, Arc::<str>::from("CONDITION"), 0)), resolve_substack(target, blk, Arc::<str>::from("SUBSTACK"), seen, depth.clone())) }
     } else if block_opcode_is(blk, Arc::<str>::from("control_if")) {
-        Block { kind: BlockKind::If(Box::new(resolve_input(target, blk, Arc::<str>::from("CONDITION"), 0)), resolve_substack(target, blk, Arc::<str>::from("SUBSTACK"))) }
+        Block { kind: BlockKind::If(Box::new(resolve_input(target, blk, Arc::<str>::from("CONDITION"), 0)), resolve_substack(target, blk, Arc::<str>::from("SUBSTACK"), seen, depth.clone())) }
     } else if block_opcode_is(blk, Arc::<str>::from("control_if_else")) {
-        Block { kind: BlockKind::IfElse(Box::new(resolve_input(target, blk, Arc::<str>::from("CONDITION"), 0)), resolve_substack(target, blk, Arc::<str>::from("SUBSTACK")), resolve_substack(target, blk, Arc::<str>::from("SUBSTACK2"))) }
+        Block { kind: BlockKind::IfElse(Box::new(resolve_input(target, blk, Arc::<str>::from("CONDITION"), 0)), resolve_substack(target, blk, Arc::<str>::from("SUBSTACK"), seen, depth.clone()), resolve_substack(target, blk, Arc::<str>::from("SUBSTACK2"), seen, depth.clone())) }
     } else if block_opcode_is(blk, Arc::<str>::from("control_stop")) {
         if let Some(option) = block_field_value(blk, Arc::<str>::from("STOP_OPTION")) {
             Block { kind: BlockKind::Stop(Arc::<str>::from(option.clone().to_string())) }
@@ -6119,7 +6344,7 @@ fn resolve_stack_block(target: &Sb3Target, blk: &Sb3Block) -> Block {
     } else if block_opcode_is(blk, Arc::<str>::from("control_wait")) {
         Block { kind: BlockKind::Wait(Box::new(resolve_input(target, blk, Arc::<str>::from("DURATION"), 0))) }
     } else if block_opcode_is(blk, Arc::<str>::from("control_forever")) {
-        Block { kind: BlockKind::Forever(resolve_substack(target, blk, Arc::<str>::from("SUBSTACK"))) }
+        Block { kind: BlockKind::Forever(resolve_substack(target, blk, Arc::<str>::from("SUBSTACK"), seen, depth.clone())) }
     } else if block_opcode_is(blk, Arc::<str>::from("control_wait_until")) {
         Block { kind: BlockKind::WaitUntil(Box::new(resolve_input(target, blk, Arc::<str>::from("CONDITION"), 0))) }
     } else if block_opcode_is(blk, Arc::<str>::from("control_create_clone_of")) {
@@ -6295,17 +6520,26 @@ fn resolve_stack_block(target: &Sb3Target, blk: &Sb3Block) -> Block {
     }
 }
 
+const MAX_SUBSTACK_DEPTH: isize = 16;
+
 fn resolve_stack(target: &Sb3Target, start_id: Arc<str>) -> Vec<Block> {
+    let mut seen = HashMap::new();
+    resolve_stack_in(target, start_id.clone().clone(), &mut seen, 0)
+}
+
+fn resolve_stack_in(target: &Sb3Target, start_id: Arc<str>, seen: &mut HashMap<Arc<str>, bool>, depth: isize) -> Vec<Block> {
     let mut result = vec![];
+    if (depth > MAX_SUBSTACK_DEPTH) {
+        return result.clone();
+    }
     let mut current = Arc::clone(&start_id);
-    let mut visited = HashMap::new();
     while let Some(blk) = target.get_block(current.clone()) {
-        let already_visited = visited.get(&current.clone()).cloned().unwrap_or_else(|| false);
-        if already_visited {
+        let already_seen = seen.get(&current.clone()).cloned().unwrap_or_else(|| false);
+        if already_seen {
             break;
         }
-        visited.insert(current.clone(), true);
-        result.push(resolve_stack_block(target, &blk));
+        seen.insert(current.clone(), true);
+        result.push(resolve_stack_block(target, &blk, seen, depth.clone()));
         if let Some(nxt) = blk.next_id() {
             current = Arc::<str>::from(Arc::<str>::from(format!("{}", nxt).as_str()));
         } else {
@@ -6406,12 +6640,12 @@ fn eval(b: &Block, mut vars: &mut Vars, frame: &Frame, procs: &ProcTable, mut li
         BlockKind::Gt(l, r) => {
             let l = *l;
             let r = *r;
-            ScratchValue::Bool(eval(&l, vars, frame, procs, lists, broadcasts, positions, keyboard, mouse, timer, rng, looks, target_costumes, costume_dims, sound_queue).to_num().gt_owned(&eval(&r, vars, frame, procs, lists, broadcasts, positions, keyboard, mouse, timer, rng, looks, target_costumes, costume_dims, sound_queue).to_num()))
+            ScratchValue::Bool(eval(&l, vars, frame, procs, lists, broadcasts, positions, keyboard, mouse, timer, rng, looks, target_costumes, costume_dims, sound_queue).loosely_gt(eval(&r, vars, frame, procs, lists, broadcasts, positions, keyboard, mouse, timer, rng, looks, target_costumes, costume_dims, sound_queue)))
         }
         BlockKind::Lt(l, r) => {
             let l = *l;
             let r = *r;
-            ScratchValue::Bool(eval(&l, vars, frame, procs, lists, broadcasts, positions, keyboard, mouse, timer, rng, looks, target_costumes, costume_dims, sound_queue).to_num().lt_owned(&eval(&r, vars, frame, procs, lists, broadcasts, positions, keyboard, mouse, timer, rng, looks, target_costumes, costume_dims, sound_queue).to_num()))
+            ScratchValue::Bool(eval(&l, vars, frame, procs, lists, broadcasts, positions, keyboard, mouse, timer, rng, looks, target_costumes, costume_dims, sound_queue).loosely_lt(eval(&r, vars, frame, procs, lists, broadcasts, positions, keyboard, mouse, timer, rng, looks, target_costumes, costume_dims, sound_queue)))
         }
         BlockKind::Mul(l, r) => {
             let l = *l;
@@ -6452,10 +6686,10 @@ fn eval(b: &Block, mut vars: &mut Vars, frame: &Frame, procs: &ProcTable, mut li
             let str_expr = *str_expr;
             let s: Arc<str> = Arc::<str>::from(Arc::<str>::from(format!("{}", eval(&str_expr, vars, frame, procs, lists, broadcasts, positions, keyboard, mouse, timer, rng, looks, target_costumes, costume_dims, sound_queue)).as_str()));
             let __strchars_s: Vec<char> = s.chars().collect();
-            let idx = eval(&idx_expr, vars, frame, procs, lists, broadcasts, positions, keyboard, mouse, timer, rng, looks, target_costumes, costume_dims, sound_queue).to_num().to_isize_checked().unwrap_or_else(|| 0);
-            if ((idx >= 1) && (idx <= (AsRef::<str>::as_ref(&s).chars().count() as isize))) {
-                let idx0 = (idx - 1);
-                ScratchValue::Str(Arc::<str>::from(s.chars().skip((idx0) as usize).take((idx) as usize-(idx0) as usize).collect::<String>().as_str()))
+            let fidx = (eval(&idx_expr, vars, frame, procs, lists, broadcasts, positions, keyboard, mouse, timer, rng, looks, target_costumes, costume_dims, sound_queue).to_num().to_f64() - 1.0);
+            if ((fidx >= 0.0) && (fidx <= (((AsRef::<str>::as_ref(&s).chars().count() as isize) as f64) - 1.0))) {
+                let idx0 = ((fidx as f64).floor() as isize);
+                ScratchValue::Str(Arc::<str>::from(s.chars().skip((idx0) as usize).take(((idx0 + 1)) as usize-(idx0) as usize).collect::<String>().as_str()))
             } else {
                 ScratchValue::Str(Arc::<str>::from(""))
             }
@@ -6491,22 +6725,22 @@ fn eval(b: &Block, mut vars: &mut Vars, frame: &Frame, procs: &ProcTable, mut li
                     (n as f64).sqrt()
                 }
                 "sin" => {
-                    ((n * 0.017453292) as f64).sin()
+                    ((((((n * 0.017453292519943295) as f64).sin() * 10000000000.0) + 0.5) as f64).floor() / 10000000000.0)
                 }
                 "cos" => {
-                    ((n * 0.017453292) as f64).cos()
+                    ((((((n * 0.017453292519943295) as f64).cos() * 10000000000.0) + 0.5) as f64).floor() / 10000000000.0)
                 }
                 "tan" => {
-                    ((n * 0.017453292) as f64).tan()
+                    scratch_tan_degrees(n.clone())
                 }
                 "asin" => {
-                    ((n as f64).asin() * 57.29577951)
+                    ((n as f64).asin() * 57.29577951308232)
                 }
                 "acos" => {
-                    ((n as f64).acos() * 57.29577951)
+                    ((n as f64).acos() * 57.29577951308232)
                 }
                 "atan" => {
-                    ((n as f64).atan() * 57.29577951)
+                    ((n as f64).atan() * 57.29577951308232)
                 }
                 "ln" => {
                     (n as f64).ln()
@@ -6561,7 +6795,7 @@ fn eval(b: &Block, mut vars: &mut Vars, frame: &Frame, procs: &ProcTable, mut li
             let idx_expr = *idx_expr;
             let idx_val = eval(&idx_expr, vars, frame, procs, lists, broadcasts, positions, keyboard, mouse, timer, rng, looks, target_costumes, costume_dims, sound_queue);
             let len = (*lists).length(list_id.clone(), frame.target_id.clone().clone());
-            let idx0 = resolve_list_index(idx_val.clone(), len.clone(), false);
+            let idx0 = resolve_list_index_rnd(idx_val.clone(), len.clone(), false, rng);
             (*lists).item_at(list_id.clone(), frame.target_id.clone().clone(), idx0.clone())
         }
         BlockKind::ListItemNum(list_id, item_expr) => {
@@ -6608,7 +6842,7 @@ fn eval(b: &Block, mut vars: &mut Vars, frame: &Frame, procs: &ProcTable, mut li
             ScratchValue::Bool((current_loudness() > 10.0))
         }
         BlockKind::Timer => {
-            ScratchValue::Num(ScratchNumber::from_f32(timer.elapsed))
+            ScratchValue::Num(ScratchNumber::from_f32((timer.elapsed - timer.reset_base)))
         }
         BlockKind::Answer => {
             ScratchValue::Str(Arc::<str>::from((*vars).get_answer().to_string()))
@@ -6661,17 +6895,25 @@ fn eval(b: &Block, mut vars: &mut Vars, frame: &Frame, procs: &ProcTable, mut li
             } else if (what == Arc::<str>::from("_edge_")) {
                 ScratchValue::Bool(touching_stage_edge(self_pos.x.clone(), self_pos.y.clone(), self_hw, self_hh))
             } else {
-                let other_looks = (*looks).get(what.clone());
-                if ((!self_looks.visible) || (!other_looks.visible)) {
-                    ScratchValue::Bool(false)
-                } else {
-                    let other_pos = (*positions).get(what.clone());
-                    let other_dim = costume_dims.get(what.clone(), other_looks.costume_index);
-                    let other_scale = (other_looks.size / 100.0);
-                    let other_hw = ((other_dim.width * other_scale) / 2.0);
-                    let other_hh = ((other_dim.height * other_scale) / 2.0);
-                    ScratchValue::Bool(aabb_overlap(self_pos.x.clone(), self_pos.y.clone(), self_hw, self_hh, other_pos.x.clone(), other_pos.y.clone(), other_hw, other_hh))
+                let mut hit = false;
+                if self_looks.visible {
+                    for other_id in instances_of(&sound_queue.instance_types, Arc::<str>::from(what.clone().to_string())).into_iter() {
+                        if ((!hit) && (other_id != self_id)) {
+                            let other_looks = (*looks).get(other_id.clone());
+                            if other_looks.visible {
+                                let other_pos = (*positions).get(other_id.clone());
+                                let other_dim = costume_dims.get(what.clone(), other_looks.costume_index);
+                                let other_scale = (other_looks.size / 100.0);
+                                let other_hw = ((other_dim.width * other_scale) / 2.0);
+                                let other_hh = ((other_dim.height * other_scale) / 2.0);
+                                if aabb_overlap(self_pos.x.clone(), self_pos.y.clone(), self_hw, self_hh, other_pos.x.clone(), other_pos.y.clone(), other_hw, other_hh) {
+                                    hit = true;
+                                }
+                            }
+                        }
+                    }
                 }
+                ScratchValue::Bool(hit)
             }
         }
         BlockKind::TouchingColor(color_expr) => {
@@ -6867,9 +7109,21 @@ fn exec_simple(b: &Block, mut vars: &mut Vars, frame: &Frame, procs: &ProcTable,
         BlockKind::ListDeleteAt(list_id, idx_expr) => {
             let idx_expr = *idx_expr;
             let idx_val = eval(&idx_expr, vars, frame, procs, lists, broadcasts, positions, keyboard, mouse, timer, rng, looks, target_costumes, costume_dims, sound_queue);
-            let len = (*lists).length(list_id.clone(), frame.target_id.clone().clone());
-            let idx0 = resolve_list_index(idx_val.clone(), len.clone(), false);
-            (*lists).delete_at(list_id.clone(), frame.target_id.clone().clone(), idx0.clone());
+            let delete_all =             match idx_val.clone() {
+                ScratchValue::Str(s) => {
+                    (s == Arc::<str>::from("all"))
+                }
+                _ => {
+                    false
+                }
+            };
+            if delete_all {
+                (*lists).delete_all(list_id.clone(), frame.target_id.clone().clone());
+            } else {
+                let len = (*lists).length(list_id.clone(), frame.target_id.clone().clone());
+                let idx0 = resolve_list_index_rnd(idx_val.clone(), len.clone(), false, rng);
+                (*lists).delete_at(list_id.clone(), frame.target_id.clone().clone(), idx0.clone());
+            }
         }
         BlockKind::ListDeleteAll(list_id) => {
             (*lists).delete_all(list_id.clone(), frame.target_id.clone().clone());
@@ -6880,7 +7134,7 @@ fn exec_simple(b: &Block, mut vars: &mut Vars, frame: &Frame, procs: &ProcTable,
             let idx_val = eval(&idx_expr, vars, frame, procs, lists, broadcasts, positions, keyboard, mouse, timer, rng, looks, target_costumes, costume_dims, sound_queue);
             let item = eval(&item_expr, vars, frame, procs, lists, broadcasts, positions, keyboard, mouse, timer, rng, looks, target_costumes, costume_dims, sound_queue);
             let len = (*lists).length(list_id.clone(), frame.target_id.clone().clone());
-            let idx0 = resolve_list_index(idx_val.clone(), len.clone(), true);
+            let idx0 = resolve_list_index_rnd(idx_val.clone(), len.clone(), true, rng);
             (*lists).insert_at(list_id.clone(), frame.target_id.clone().clone(), idx0.clone(), item.clone());
         }
         BlockKind::ListReplaceAt(list_id, idx_expr, item_expr) => {
@@ -6889,7 +7143,7 @@ fn exec_simple(b: &Block, mut vars: &mut Vars, frame: &Frame, procs: &ProcTable,
             let idx_val = eval(&idx_expr, vars, frame, procs, lists, broadcasts, positions, keyboard, mouse, timer, rng, looks, target_costumes, costume_dims, sound_queue);
             let item = eval(&item_expr, vars, frame, procs, lists, broadcasts, positions, keyboard, mouse, timer, rng, looks, target_costumes, costume_dims, sound_queue);
             let len = (*lists).length(list_id.clone(), frame.target_id.clone().clone());
-            let idx0 = resolve_list_index(idx_val.clone(), len.clone(), false);
+            let idx0 = resolve_list_index_rnd(idx_val.clone(), len.clone(), false, rng);
             (*lists).replace_at(list_id.clone(), frame.target_id.clone().clone(), idx0.clone(), item.clone());
         }
         BlockKind::MoveSteps(steps_expr) => {
@@ -7513,15 +7767,56 @@ fn exec_simple(b: &Block, mut vars: &mut Vars, frame: &Frame, procs: &ProcTable,
     }
 }
 
+fn topmost_proc_frame_index(stack: &Vec<ExecFrame>) -> isize {
+    let mut idx = ((stack.len() as isize) - 1);
+    let mut found = (-1);
+    while ((idx >= 0) && (found < 0)) {
+        match stack[(idx) as usize].clone().kind.clone() {
+            FrameKind::ProcCallFrame(w) => {
+                found = idx;
+            }
+            _ => {
+                /* pass */
+            }
+        }
+        idx -= 1;
+    }
+    found
+}
+
+fn scratch_tan_degrees(n: f64) -> f64 {
+    let q = (n / 360.0);
+    let whole = {
+    if (q >= 0.0) {
+        (q as f64).floor()
+    } else {
+        (q as f64).ceil()
+    }
+};
+    let a = (n - (360.0 * whole));
+    if ((a == 90.0) || (a == (-270.0))) {
+        (100000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000.0 * 10.0)
+    } else if ((a == 270.0) || (a == (-90.0))) {
+        ((-100000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000.0) * 10.0)
+    } else if (((a == 0.0) || (a == 180.0)) || (a == (-180.0))) {
+        0.0
+    } else {
+        ((((((a * 0.017453292519943295) as f64).tan() * 10000000000.0) + 0.5) as f64).floor() / 10000000000.0)
+    }
+}
+
 fn normalize_direction(d: f32) -> f32 {
-    let mut result = d;
-    while (result > 180.0) {
+    if (((d != d) || (d > 300000000000000000000000000000000000000.0)) || (d < (-300000000000000000000000000000000000000.0))) {
+        return 90.0;
+    }
+    let mut result = (d - (360.0 * (((d + 180.0) / 360.0) as f32).floor()));
+    if (result <= (-180.0)) {
+        result = 180.0;
+    }
+    if (result > 180.0) {
         result -= 360.0;
     }
-    while (result <= (-180.0)) {
-        result += 360.0;
-    }
-    result.clone()
+    result
 }
 
 fn wrap_costume_index(idx: isize, count: isize) -> isize {
@@ -7742,84 +8037,80 @@ fn thread_in_warp(stack: &Vec<ExecFrame>) -> bool {
 }
 
 fn step_thread(mut thread: &mut Thread, mut vars: &mut Vars, procs: &ProcTable, mut lists: &mut Lists, broadcasts: &Broadcasts, mut positions: &mut Positions, keyboard: &KeyboardState, mouse: &MouseState, timer: &ScratchTimer, mut rng: &mut Rng, mut looks: &mut LooksStates, mut layer_orders: &mut LayerOrders, target_costumes: &TargetCostumes, costume_dims: &TargetCostumeDims, mut sound_queue: &mut SoundQueue, mut speech_bubbles: &mut SpeechBubbles) -> bool {
-    let mut stack = (*thread).stack.clone();
     let mut warp_guard = 0;
     let warp_guard_cap = 1000000;
     let mut proc_call_depth = 0;
     let proc_call_depth_cap = 10000;
     while true {
-        if ((stack.len() as isize) == 0) {
-            (*thread).stack = stack.clone();
+        if (((*thread).stack.len() as isize) == 0) {
             return true;
         }
-        let top = ((stack.len() as isize) - 1);
-        let frame = stack[(top) as usize].clone();
-        if (frame.index >= (frame.body.len() as isize)) {
+        let top = (((*thread).stack.len() as isize) - 1);
+        let probe = (*thread).stack.remove({ let __boring_idx = top as i64; if __boring_idx < 0 { ((*thread).stack.len() as i64 + __boring_idx) as usize } else { __boring_idx as usize } });
+        let frame_index = probe.index.clone();
+        let body_len = (probe.body.len() as isize).clone();
+        (*thread).stack.push(probe);
+        if (frame_index >= body_len) {
+            let frame = (*thread).stack[(top) as usize].clone();
             match frame.kind.clone() {
                 FrameKind::TopLevel => {
-                    stack.remove({ let __boring_idx = top as i64; if __boring_idx < 0 { (stack.len() as i64 + __boring_idx) as usize } else { __boring_idx as usize } });
+                    (*thread).stack.remove({ let __boring_idx = top as i64; if __boring_idx < 0 { ((*thread).stack.len() as i64 + __boring_idx) as usize } else { __boring_idx as usize } });
                 }
                 FrameKind::ProcCallFrame(_) => {
                     proc_call_depth -= 1;
-                    stack.remove({ let __boring_idx = top as i64; if __boring_idx < 0 { (stack.len() as i64 + __boring_idx) as usize } else { __boring_idx as usize } });
+                    (*thread).stack.remove({ let __boring_idx = top as i64; if __boring_idx < 0 { ((*thread).stack.len() as i64 + __boring_idx) as usize } else { __boring_idx as usize } });
                 }
                 FrameKind::RepeatN(remaining) => {
                     if (remaining <= 0) {
-                        stack.remove({ let __boring_idx = top as i64; if __boring_idx < 0 { (stack.len() as i64 + __boring_idx) as usize } else { __boring_idx as usize } });
+                        (*thread).stack.remove({ let __boring_idx = top as i64; if __boring_idx < 0 { ((*thread).stack.len() as i64 + __boring_idx) as usize } else { __boring_idx as usize } });
                     } else {
-                        stack[(top) as usize] = ExecFrame { body: frame.body.clone(), index: 0, kind: FrameKind::RepeatN(remaining.wrapping_sub((1 as isize))), scope: frame.scope.clone() };
-                        if (thread_in_warp(&stack) && (warp_guard < warp_guard_cap)) {
+                        (*thread).stack[(top) as usize] = ExecFrame { body: frame.body.clone(), index: 0, kind: FrameKind::RepeatN(remaining.wrapping_sub((1 as isize))), scope: frame.scope.clone() };
+                        if (thread_in_warp(&(*thread).stack) && (warp_guard < warp_guard_cap)) {
                             warp_guard += 1;
                         } else {
-                            (*thread).stack = stack.clone();
                             return false;
                         }
                     }
                 }
                 FrameKind::RepeatUntilCond(cond) => {
                     if eval(&cond, vars, &frame.scope, procs, lists, broadcasts, positions, keyboard, mouse, timer, rng, looks, target_costumes, costume_dims, sound_queue).truthy() {
-                        stack.remove({ let __boring_idx = top as i64; if __boring_idx < 0 { (stack.len() as i64 + __boring_idx) as usize } else { __boring_idx as usize } });
+                        (*thread).stack.remove({ let __boring_idx = top as i64; if __boring_idx < 0 { ((*thread).stack.len() as i64 + __boring_idx) as usize } else { __boring_idx as usize } });
                     } else {
-                        stack[(top) as usize] = ExecFrame { body: frame.body.clone(), index: 0, kind: FrameKind::RepeatUntilCond(cond.clone()), scope: frame.scope.clone() };
-                        if (thread_in_warp(&stack) && (warp_guard < warp_guard_cap)) {
+                        (*thread).stack[(top) as usize] = ExecFrame { body: frame.body.clone(), index: 0, kind: FrameKind::RepeatUntilCond(cond.clone()), scope: frame.scope.clone() };
+                        if (thread_in_warp(&(*thread).stack) && (warp_guard < warp_guard_cap)) {
                             warp_guard += 1;
                         } else {
-                            (*thread).stack = stack.clone();
                             return false;
                         }
                     }
                 }
                 FrameKind::Forever => {
-                    stack[(top) as usize] = ExecFrame { body: frame.body.clone(), index: 0, kind: FrameKind::Forever, scope: frame.scope.clone() };
-                    if (thread_in_warp(&stack) && (warp_guard < warp_guard_cap)) {
+                    (*thread).stack[(top) as usize] = ExecFrame { body: frame.body.clone(), index: 0, kind: FrameKind::Forever, scope: frame.scope.clone() };
+                    if (thread_in_warp(&(*thread).stack) && (warp_guard < warp_guard_cap)) {
                         warp_guard += 1;
                     } else {
-                        (*thread).stack = stack.clone();
                         return false;
                     }
                 }
                 FrameKind::WaitingUntil(target) => {
                     if (timer.elapsed >= target) {
-                        stack.remove({ let __boring_idx = top as i64; if __boring_idx < 0 { (stack.len() as i64 + __boring_idx) as usize } else { __boring_idx as usize } });
+                        (*thread).stack.remove({ let __boring_idx = top as i64; if __boring_idx < 0 { ((*thread).stack.len() as i64 + __boring_idx) as usize } else { __boring_idx as usize } });
                     } else {
-                        (*thread).stack = stack.clone();
                         return false;
                     }
                 }
                 FrameKind::WaitingUntilCond(cond) => {
                     if eval(&cond, vars, &frame.scope, procs, lists, broadcasts, positions, keyboard, mouse, timer, rng, looks, target_costumes, costume_dims, sound_queue).truthy() {
-                        stack.remove({ let __boring_idx = top as i64; if __boring_idx < 0 { (stack.len() as i64 + __boring_idx) as usize } else { __boring_idx as usize } });
+                        (*thread).stack.remove({ let __boring_idx = top as i64; if __boring_idx < 0 { ((*thread).stack.len() as i64 + __boring_idx) as usize } else { __boring_idx as usize } });
                     } else {
-                        (*thread).stack = stack.clone();
                         return false;
                     }
                 }
                 FrameKind::WaitingUntilThenClearBubble(target) => {
                     if (timer.elapsed >= target) {
                         (*speech_bubbles).set(frame.scope.target_id.clone(), SpeechBubble { text: Arc::<str>::from(""), is_thought: false });
-                        stack.remove({ let __boring_idx = top as i64; if __boring_idx < 0 { (stack.len() as i64 + __boring_idx) as usize } else { __boring_idx as usize } });
+                        (*thread).stack.remove({ let __boring_idx = top as i64; if __boring_idx < 0 { ((*thread).stack.len() as i64 + __boring_idx) as usize } else { __boring_idx as usize } });
                     } else {
-                        (*thread).stack = stack.clone();
                         return false;
                     }
                 }
@@ -7828,90 +8119,96 @@ fn step_thread(mut thread: &mut Thread, mut vars: &mut Vars, procs: &ProcTable, 
                     let cur_dir = (*positions).get(frame.scope.target_id.clone()).direction.clone();
                     if (elapsed >= duration) {
                         move_position(positions, sound_queue, Arc::<str>::from(frame.scope.target_id.clone().to_string()), &Position { x: end_x, y: end_y, direction: cur_dir });
-                        stack.remove({ let __boring_idx = top as i64; if __boring_idx < 0 { (stack.len() as i64 + __boring_idx) as usize } else { __boring_idx as usize } });
+                        (*thread).stack.remove({ let __boring_idx = top as i64; if __boring_idx < 0 { ((*thread).stack.len() as i64 + __boring_idx) as usize } else { __boring_idx as usize } });
                     } else {
                         let frac = (elapsed / duration);
                         move_position(positions, sound_queue, Arc::<str>::from(frame.scope.target_id.clone().to_string()), &Position { x: (start_x + (frac * (end_x - start_x))), y: (start_y + (frac * (end_y - start_y))), direction: cur_dir });
-                        (*thread).stack = stack.clone();
                         return false;
                     }
                 }
                 FrameKind::WaitingForAnswer(ask_id) => {
                     if (ask_id <= (*vars).last_answered_id) {
-                        stack.remove({ let __boring_idx = top as i64; if __boring_idx < 0 { (stack.len() as i64 + __boring_idx) as usize } else { __boring_idx as usize } });
+                        (*thread).stack.remove({ let __boring_idx = top as i64; if __boring_idx < 0 { ((*thread).stack.len() as i64 + __boring_idx) as usize } else { __boring_idx as usize } });
                     } else {
-                        (*thread).stack = stack.clone();
                         return false;
                     }
                 }
             }
         } else {
-            let stmt = frame.body[(frame.index) as usize].clone();
-            let scope = frame.scope.clone();
-            stack[(top) as usize] = ExecFrame { body: frame.body.clone(), index: (frame.index + 1), kind: frame.kind.clone(), scope: frame.scope.clone() };
+            let mut cur = (*thread).stack.remove({ let __boring_idx = top as i64; if __boring_idx < 0 { ((*thread).stack.len() as i64 + __boring_idx) as usize } else { __boring_idx as usize } });
+            let stmt = cur.body[(frame_index) as usize].clone();
+            let scope = cur.scope.clone();
+            cur.index = (frame_index + 1);
+            (*thread).stack.push(cur);
             match stmt.kind.clone() {
                 BlockKind::If(cond, body) => {
                     let cond = *cond;
                     if eval(&cond, vars, &scope, procs, lists, broadcasts, positions, keyboard, mouse, timer, rng, looks, target_costumes, costume_dims, sound_queue).truthy() {
-                        stack.push(ExecFrame { body: body.clone(), index: 0, kind: FrameKind::TopLevel, scope: scope });
+                        (*thread).stack.push(ExecFrame { body: body.clone(), index: 0, kind: FrameKind::TopLevel, scope: scope });
                     }
                 }
                 BlockKind::IfElse(cond, then_body, else_body) => {
                     let cond = *cond;
                     if eval(&cond, vars, &scope, procs, lists, broadcasts, positions, keyboard, mouse, timer, rng, looks, target_costumes, costume_dims, sound_queue).truthy() {
-                        stack.push(ExecFrame { body: then_body.clone(), index: 0, kind: FrameKind::TopLevel, scope: scope });
+                        (*thread).stack.push(ExecFrame { body: then_body.clone(), index: 0, kind: FrameKind::TopLevel, scope: scope });
                     } else {
-                        stack.push(ExecFrame { body: else_body.clone(), index: 0, kind: FrameKind::TopLevel, scope: scope });
+                        (*thread).stack.push(ExecFrame { body: else_body.clone(), index: 0, kind: FrameKind::TopLevel, scope: scope });
                     }
                 }
                 BlockKind::Seq(stmts) => {
-                    stack.push(ExecFrame { body: stmts.clone(), index: 0, kind: FrameKind::TopLevel, scope: scope });
+                    (*thread).stack.push(ExecFrame { body: stmts.clone(), index: 0, kind: FrameKind::TopLevel, scope: scope });
                 }
                 BlockKind::Repeat(count_expr, body) => {
                     let count_expr = *count_expr;
-                    let times = eval(&count_expr, vars, &scope, procs, lists, broadcasts, positions, keyboard, mouse, timer, rng, looks, target_costumes, costume_dims, sound_queue).to_num().to_isize_checked().unwrap_or_else(|| 0);
+                    let times_num = eval(&count_expr, vars, &scope, procs, lists, broadcasts, positions, keyboard, mouse, timer, rng, looks, target_costumes, costume_dims, sound_queue).to_num();
+                    let mut times = times_num.to_isize_checked().unwrap_or_else(|| (-1));
+                    if (times == (-1)) {
+                        let tf = times_num.to_f64();
+                        if ((tf >= 0.5) && (tf < 9000000000000000.0)) {
+                            times = (((tf + 0.5) as f64).floor() as isize);
+                        } else {
+                            times = 0;
+                        }
+                    }
                     if (times > 0) {
-                        stack.push(ExecFrame { body: body.clone(), index: 0, kind: FrameKind::RepeatN((times - 1)), scope: scope });
+                        (*thread).stack.push(ExecFrame { body: body.clone(), index: 0, kind: FrameKind::RepeatN((times - 1)), scope: scope });
                     }
                 }
                 BlockKind::RepeatUntil(cond, body) => {
                     let cond = *cond;
                     if (!eval(&cond, vars, &scope, procs, lists, broadcasts, positions, keyboard, mouse, timer, rng, looks, target_costumes, costume_dims, sound_queue).truthy()) {
-                        stack.push(ExecFrame { body: body.clone(), index: 0, kind: FrameKind::RepeatUntilCond(cond.clone()), scope: scope });
+                        (*thread).stack.push(ExecFrame { body: body.clone(), index: 0, kind: FrameKind::RepeatUntilCond(cond.clone()), scope: scope });
                     }
                 }
                 BlockKind::Forever(body) => {
-                    stack.push(ExecFrame { body: body.clone(), index: 0, kind: FrameKind::Forever, scope: scope });
+                    (*thread).stack.push(ExecFrame { body: body.clone(), index: 0, kind: FrameKind::Forever, scope: scope });
                 }
                 BlockKind::Wait(seconds_expr) => {
                     let seconds_expr = *seconds_expr;
                     let secs = eval(&seconds_expr, vars, &scope, procs, lists, broadcasts, positions, keyboard, mouse, timer, rng, looks, target_costumes, costume_dims, sound_queue).to_num().to_f32();
                     let target = (timer.elapsed + secs);
-                    stack.push(ExecFrame { body: vec![], index: 0, kind: FrameKind::WaitingUntil(target), scope: scope });
-                    (*thread).stack = stack.clone();
+                    (*thread).stack.push(ExecFrame { body: vec![], index: 0, kind: FrameKind::WaitingUntil(target), scope: scope });
                     return false;
                 }
                 BlockKind::PlayUntilDone(sound_expr) => {
                     let sound_expr = *sound_expr;
                     let sound_name: Arc<str> = Arc::<str>::from(Arc::<str>::from(format!("{}", eval(&sound_expr, vars, &scope, procs, lists, broadcasts, positions, keyboard, mouse, timer, rng, looks, target_costumes, costume_dims, sound_queue)).as_str()));
-                    let origin_name = (*sound_queue).instance_type_of(scope.target_id.clone().clone());
-                    let volume = (*sound_queue).get_volume(scope.target_id.clone().clone());
-                    let pitch = (*sound_queue).get_pitch(scope.target_id.clone().clone());
-                    let pan = (*sound_queue).get_pan(scope.target_id.clone().clone());
+                    let origin_name = (*sound_queue).instance_type_of(scope.target_id.clone());
+                    let volume = (*sound_queue).get_volume(scope.target_id.clone());
+                    let pitch = (*sound_queue).get_pitch(scope.target_id.clone());
+                    let pan = (*sound_queue).get_pan(scope.target_id.clone());
                     (*sound_queue).play_queue.push(SoundRequest { target_id: Arc::<str>::from(origin_name.clone().to_string()), sound_name: Arc::<str>::from(sound_name.clone().to_string()), volume: volume, pitch: pitch, pan: pan });
                     let duration = (*sound_queue).get_sound_duration(origin_name.clone(), sound_name.clone());
                     if (duration > 0.0) {
                         let target = (timer.elapsed + duration);
-                        stack.push(ExecFrame { body: vec![], index: 0, kind: FrameKind::WaitingUntil(target), scope: scope });
-                        (*thread).stack = stack.clone();
+                        (*thread).stack.push(ExecFrame { body: vec![], index: 0, kind: FrameKind::WaitingUntil(target), scope: scope });
                         return false;
                     }
                 }
                 BlockKind::WaitUntil(cond) => {
                     let cond = *cond;
                     if (!eval(&cond, vars, &scope, procs, lists, broadcasts, positions, keyboard, mouse, timer, rng, looks, target_costumes, costume_dims, sound_queue).truthy()) {
-                        stack.push(ExecFrame { body: vec![], index: 0, kind: FrameKind::WaitingUntilCond(cond.clone()), scope: scope });
-                        (*thread).stack = stack.clone();
+                        (*thread).stack.push(ExecFrame { body: vec![], index: 0, kind: FrameKind::WaitingUntilCond(cond.clone()), scope: scope });
                         return false;
                     }
                 }
@@ -7920,31 +8217,28 @@ fn step_thread(mut thread: &mut Thread, mut vars: &mut Vars, procs: &ProcTable, 
                     let question: Arc<str> = Arc::<str>::from(Arc::<str>::from(format!("{}", eval(&question_expr, vars, &scope, procs, lists, broadcasts, positions, keyboard, mouse, timer, rng, looks, target_costumes, costume_dims, sound_queue)).as_str()));
                     let my_id = (*vars).next_ask_id.clone();
                     (*vars).next_ask_id += 1;
-                    (*vars).ask_queue.push(PendingAsk { ask_id: my_id, target_id: Arc::<str>::from(scope.target_id.clone().clone().to_string()), question: question.clone().clone() });
-                    stack.push(ExecFrame { body: vec![], index: 0, kind: FrameKind::WaitingForAnswer(my_id), scope: scope });
-                    (*thread).stack = stack.clone();
+                    (*vars).ask_queue.push(PendingAsk { ask_id: my_id, target_id: Arc::<str>::from(scope.target_id.clone().to_string()), question: question.clone().clone() });
+                    (*thread).stack.push(ExecFrame { body: vec![], index: 0, kind: FrameKind::WaitingForAnswer(my_id), scope: scope });
                     return false;
                 }
                 BlockKind::SayForSecs(msg_expr, secs_expr) => {
                     let msg_expr = *msg_expr;
                     let secs_expr = *secs_expr;
                     let msg: Arc<str> = Arc::<str>::from(Arc::<str>::from(format!("{}", eval(&msg_expr, vars, &scope, procs, lists, broadcasts, positions, keyboard, mouse, timer, rng, looks, target_costumes, costume_dims, sound_queue)).as_str()));
-                    (*speech_bubbles).set(scope.target_id.clone().clone(), SpeechBubble { text: msg.clone().clone(), is_thought: false });
+                    (*speech_bubbles).set(scope.target_id.clone(), SpeechBubble { text: msg.clone().clone(), is_thought: false });
                     let secs = eval(&secs_expr, vars, &scope, procs, lists, broadcasts, positions, keyboard, mouse, timer, rng, looks, target_costumes, costume_dims, sound_queue).to_num().to_f32();
                     let target = (timer.elapsed + secs);
-                    stack.push(ExecFrame { body: vec![], index: 0, kind: FrameKind::WaitingUntilThenClearBubble(target), scope: scope });
-                    (*thread).stack = stack.clone();
+                    (*thread).stack.push(ExecFrame { body: vec![], index: 0, kind: FrameKind::WaitingUntilThenClearBubble(target), scope: scope });
                     return false;
                 }
                 BlockKind::ThinkForSecs(msg_expr, secs_expr) => {
                     let msg_expr = *msg_expr;
                     let secs_expr = *secs_expr;
                     let msg: Arc<str> = Arc::<str>::from(Arc::<str>::from(format!("{}", eval(&msg_expr, vars, &scope, procs, lists, broadcasts, positions, keyboard, mouse, timer, rng, looks, target_costumes, costume_dims, sound_queue)).as_str()));
-                    (*speech_bubbles).set(scope.target_id.clone().clone(), SpeechBubble { text: msg.clone().clone(), is_thought: true });
+                    (*speech_bubbles).set(scope.target_id.clone(), SpeechBubble { text: msg.clone().clone(), is_thought: true });
                     let secs = eval(&secs_expr, vars, &scope, procs, lists, broadcasts, positions, keyboard, mouse, timer, rng, looks, target_costumes, costume_dims, sound_queue).to_num().to_f32();
                     let target = (timer.elapsed + secs);
-                    stack.push(ExecFrame { body: vec![], index: 0, kind: FrameKind::WaitingUntilThenClearBubble(target), scope: scope });
-                    (*thread).stack = stack.clone();
+                    (*thread).stack.push(ExecFrame { body: vec![], index: 0, kind: FrameKind::WaitingUntilThenClearBubble(target), scope: scope });
                     return false;
                 }
                 BlockKind::GlideSecsToXY(secs_expr, x_expr, y_expr) => {
@@ -7954,12 +8248,11 @@ fn step_thread(mut thread: &mut Thread, mut vars: &mut Vars, procs: &ProcTable, 
                     let secs = eval(&secs_expr, vars, &scope, procs, lists, broadcasts, positions, keyboard, mouse, timer, rng, looks, target_costumes, costume_dims, sound_queue).to_num().to_f32();
                     let target_x = eval(&x_expr, vars, &scope, procs, lists, broadcasts, positions, keyboard, mouse, timer, rng, looks, target_costumes, costume_dims, sound_queue).to_num().to_f32();
                     let target_y = eval(&y_expr, vars, &scope, procs, lists, broadcasts, positions, keyboard, mouse, timer, rng, looks, target_costumes, costume_dims, sound_queue).to_num().to_f32();
-                    let cur = (*positions).get(scope.target_id.clone().clone());
+                    let cur = (*positions).get(scope.target_id.clone());
                     if (secs <= 0.0) {
-                        move_position(positions, sound_queue, Arc::<str>::from(scope.target_id.clone().clone().to_string()), &Position { x: target_x, y: target_y, direction: cur.direction });
+                        move_position(positions, sound_queue, Arc::<str>::from(scope.target_id.clone().to_string()), &Position { x: target_x, y: target_y, direction: cur.direction });
                     } else {
-                        stack.push(ExecFrame { body: vec![], index: 0, kind: FrameKind::Gliding(timer.elapsed, secs, cur.x, cur.y, target_x, target_y), scope: scope });
-                        (*thread).stack = stack.clone();
+                        (*thread).stack.push(ExecFrame { body: vec![], index: 0, kind: FrameKind::Gliding(timer.elapsed, secs, cur.x, cur.y, target_x, target_y), scope: scope });
                         return false;
                     }
                 }
@@ -7968,7 +8261,7 @@ fn step_thread(mut thread: &mut Thread, mut vars: &mut Vars, procs: &ProcTable, 
                     let to_expr = *to_expr;
                     let secs = eval(&secs_expr, vars, &scope, procs, lists, broadcasts, positions, keyboard, mouse, timer, rng, looks, target_costumes, costume_dims, sound_queue).to_num().to_f32();
                     let to: Arc<str> = Arc::<str>::from(Arc::<str>::from(format!("{}", eval(&to_expr, vars, &scope, procs, lists, broadcasts, positions, keyboard, mouse, timer, rng, looks, target_costumes, costume_dims, sound_queue)).as_str()));
-                    let cur = (*positions).get(scope.target_id.clone().clone());
+                    let cur = (*positions).get(scope.target_id.clone());
                     let mut target_x = cur.x.clone();
                     let mut target_y = cur.y.clone();
                     if (to == Arc::<str>::from("_mouse_")) {
@@ -7985,23 +8278,36 @@ fn step_thread(mut thread: &mut Thread, mut vars: &mut Vars, procs: &ProcTable, 
                         target_y = other.y;
                     }
                     if (secs <= 0.0) {
-                        move_position(positions, sound_queue, Arc::<str>::from(scope.target_id.clone().clone().to_string()), &Position { x: target_x, y: target_y, direction: cur.direction });
+                        move_position(positions, sound_queue, Arc::<str>::from(scope.target_id.clone().to_string()), &Position { x: target_x, y: target_y, direction: cur.direction });
                     } else {
-                        stack.push(ExecFrame { body: vec![], index: 0, kind: FrameKind::Gliding(timer.elapsed, secs, cur.x, cur.y, target_x, target_y), scope: scope });
-                        (*thread).stack = stack.clone();
+                        (*thread).stack.push(ExecFrame { body: vec![], index: 0, kind: FrameKind::Gliding(timer.elapsed, secs, cur.x, cur.y, target_x, target_y), scope: scope });
                         return false;
                     }
                 }
                 BlockKind::Stop(option) => {
-                    if (option != Arc::<str>::from("other scripts in sprite")) {
-                        stack = vec![];
+                    if (option == Arc::<str>::from("all")) {
+                        (*sound_queue).stop_all_threads_requested = true;
+                        (*thread).stack = vec![];
+                    } else if (option == Arc::<str>::from("other scripts in sprite")) {
+                        (*sound_queue).stop_other_requests.push(scope.target_id.clone());
+                    } else if (option == Arc::<str>::from("this script")) {
+                        let call_idx = topmost_proc_frame_index(&(*thread).stack);
+                        if (call_idx >= 0) {
+                            while (((*thread).stack.len() as isize) > call_idx) {
+                                (*thread).stack.pop();
+                            }
+                        } else {
+                            (*thread).stack = vec![];
+                        }
+                    } else {
+                        (*thread).stack = vec![];
                     }
                 }
                 BlockKind::DeleteThisClone => {
-                    if ((*sound_queue).instance_type_of(scope.target_id.clone().clone()) != scope.target_id.clone()) {
-                        (*sound_queue).despawn_requests.push(scope.target_id.clone().clone());
+                    if ((*sound_queue).instance_type_of(scope.target_id.clone()) != scope.target_id) {
+                        (*sound_queue).despawn_requests.push(scope.target_id.clone());
                         (*sound_queue).live_clone_count -= 1;
-                        stack = vec![];
+                        (*thread).stack = vec![];
                     }
                 }
                 BlockKind::ProcCall(proc_name, arg_exprs) => {
@@ -8015,10 +8321,10 @@ fn step_thread(mut thread: &mut Thread, mut vars: &mut Vars, procs: &ProcTable, 
                         }
                         i += 1;
                     }
-                    let new_scope: Frame = Frame { params: new_params, target_id: Arc::<str>::from(scope.target_id.clone().clone().to_string()) };
+                    let new_scope: Frame = Frame { params: new_params, target_id: Arc::<str>::from(scope.target_id.clone().to_string()) };
                     if (proc_call_depth < proc_call_depth_cap) {
                         proc_call_depth += 1;
-                        stack.push(ExecFrame { body: proc.body.clone(), index: 0, kind: FrameKind::ProcCallFrame(proc.warp), scope: new_scope });
+                        (*thread).stack.push(ExecFrame { body: proc.body.clone(), index: 0, kind: FrameKind::ProcCallFrame(proc.warp), scope: new_scope });
                     }
                 }
                 _ => {
@@ -8030,7 +8336,13 @@ fn step_thread(mut thread: &mut Thread, mut vars: &mut Vars, procs: &ProcTable, 
     false
 }
 
+const MAX_DRIVE_DEPTH: isize = 8;
+
 fn drive_thread_to_completion(mut thread: &mut Thread, mut vars: &mut Vars, procs: &ProcTable, mut lists: &mut Lists, broadcasts: &Broadcasts, mut positions: &mut Positions, keyboard: &KeyboardState, mouse: &MouseState, timer: &ScratchTimer, mut rng: &mut Rng, mut looks: &mut LooksStates, mut layer_orders: &mut LayerOrders, target_costumes: &TargetCostumes, costume_dims: &TargetCostumeDims, mut sound_queue: &mut SoundQueue, mut speech_bubbles: &mut SpeechBubbles, outer_spawned: &mut Vec<ReceiverScript>) -> () {
+    if ((*sound_queue).drive_depth >= MAX_DRIVE_DEPTH) {
+        return;
+    }
+    (*sound_queue).drive_depth += 1;
     let mut done = false;
     let mut iterations = 0;
     let iteration_cap = 100000;
@@ -8042,6 +8354,7 @@ fn drive_thread_to_completion(mut thread: &mut Thread, mut vars: &mut Vars, proc
         (*thread).spawned = vec![];
         iterations += 1;
     }
+    (*sound_queue).drive_depth -= 1;
 }
 
 
@@ -8091,13 +8404,13 @@ fn run_and_build_headless_result(project: &Sb3Project, path: Arc<str>) -> Headle
     let mut positions = build_positions(&project);
     let keyboard: KeyboardState = KeyboardState { pressed_keys: vec![], any_key_pressed: false };
     let mouse: MouseState = MouseState { x: 0.0, y: 0.0, down: false };
-    let timer: ScratchTimer = ScratchTimer { elapsed: 0.0 };
+    let timer: ScratchTimer = ScratchTimer { elapsed: 0.0, reset_base: 0.0 };
     let mut rng: Rng = Rng { state: (88172645463325252i64 as u64) };
     let mut looks = build_looks_states(&project);
     let target_costumes = build_target_costumes(&project);
     let mut layer_orders = build_layer_orders(&project);
     let costume_dims = build_target_costume_dims(Arc::<str>::from(path.clone().to_string()), &project);
-    let mut sound_queue: SoundQueue = SoundQueue { play_queue: vec![], stop_all_requested: false, volumes: build_sound_volume_table(&project), pitches: HashMap::new(), pans: HashMap::new(), effects: HashMap::new(), rotation_styles: build_target_rotation_styles(&project), sound_durations: build_target_sound_durations(&project), instance_types: build_instance_types_table(&project), next_clone_id: 0, clone_requests: vec![], despawn_requests: vec![], live_clone_count: 0, reset_timer_requested: false, backdrop_switch_hats: build_backdrop_switch_hats(&project), draggable: build_target_draggable(&project), pen_states: HashMap::new(), pen_line_requests: vec![], pen_clear_requested: false, stamp_requests: vec![], scene_composite: blank_scene_composite_data() };
+    let mut sound_queue: SoundQueue = SoundQueue { play_queue: vec![], stop_all_requested: false, volumes: build_sound_volume_table(&project), pitches: HashMap::new(), pans: HashMap::new(), effects: HashMap::new(), rotation_styles: build_target_rotation_styles(&project), sound_durations: build_target_sound_durations(&project), instance_types: build_instance_types_table(&project), next_clone_id: 0, clone_requests: vec![], despawn_requests: vec![], live_clone_count: 0, stop_all_threads_requested: false, stop_other_requests: vec![], touching_color_used: build_uses_touching_color(&project), drive_depth: 0, reset_timer_requested: false, backdrop_switch_hats: build_backdrop_switch_hats(&project), draggable: build_target_draggable(&project), pen_states: HashMap::new(), pen_line_requests: vec![], pen_clear_requested: false, stamp_requests: vec![], scene_composite: blank_scene_composite_data() };
     let mut speech_bubbles: SpeechBubbles = SpeechBubbles { table: HashMap::new() };
     for script in scripts.iter() {
         run_script(&mut vars, &script, &procs, &mut lists, &broadcasts, &mut positions, &keyboard, &mouse, &timer, &mut rng, &mut looks, &mut layer_orders, &target_costumes, &costume_dims, &mut sound_queue, &mut speech_bubbles);
@@ -8276,7 +8589,7 @@ fn list_contents_string(lists: &Lists, list_id: Arc<str>) -> Arc<str> {
 }
 
 pub fn run_report_touching_color_test(scene_pixels: &Vec<u8>, self_x: f32, self_y: f32, self_hw: f32, self_hh: f32, target_hex: Arc<str>) -> bool {
-    let sound_queue: SoundQueue = SoundQueue { play_queue: vec![], stop_all_requested: false, volumes: HashMap::new(), pitches: HashMap::new(), pans: HashMap::new(), effects: HashMap::new(), rotation_styles: HashMap::new(), sound_durations: HashMap::new(), instance_types: HashMap::new(), next_clone_id: 0, clone_requests: vec![], despawn_requests: vec![], live_clone_count: 0, reset_timer_requested: false, backdrop_switch_hats: vec![], draggable: HashMap::new(), pen_states: HashMap::new(), pen_line_requests: vec![], pen_clear_requested: false, stamp_requests: vec![], scene_composite: scene_pixels.clone() };
+    let sound_queue: SoundQueue = SoundQueue { play_queue: vec![], stop_all_requested: false, volumes: HashMap::new(), pitches: HashMap::new(), pans: HashMap::new(), effects: HashMap::new(), rotation_styles: HashMap::new(), sound_durations: HashMap::new(), instance_types: HashMap::new(), next_clone_id: 0, clone_requests: vec![], despawn_requests: vec![], live_clone_count: 0, stop_all_threads_requested: false, stop_other_requests: vec![], touching_color_used: true, drive_depth: 0, reset_timer_requested: false, backdrop_switch_hats: vec![], draggable: HashMap::new(), pen_states: HashMap::new(), pen_line_requests: vec![], pen_clear_requested: false, stamp_requests: vec![], scene_composite: scene_pixels.clone() };
     let target = hex_to_pen_color(target_hex.clone().clone());
     let min_x = ((canvas_px((self_x - self_hw)) as f32).floor() as isize);
     let max_x = ((canvas_px((self_x + self_hw)) as f32).floor() as isize);
@@ -8339,12 +8652,18 @@ fn read_zip_entry_bytes(sb3Path: Arc<str>, entryFilename: Arc<str>) -> Option<Ve
         return None;
     }
     let mut buf: Vec<u8> = vec![];
-    let bytesReadOpt = ZipFile::read_to_end(&mut entry, &mut buf).ok();
+    let mut limited = Read::take(&mut entry, (MAX_ZIP_ENTRY_BYTES + (1i64 as u64)));
+    let bytesReadOpt = Read::read_to_end(&mut limited, &mut buf).ok();
     let Some(bytesRead) = (bytesReadOpt) else {
         return None;
     };
+    if (((buf.len() as isize) as u64) > MAX_ZIP_ENTRY_BYTES) {
+        return None;
+    }
     Some(buf)
 }
+
+const MAX_SVG_DIMENSION: u32 = (8192i64 as u32);
 
 pub fn rasterize_svg_to_png(svgBytes: &Vec<u8>) -> Option<Vec<u8>> {
     let mut fonts = Database::new();
@@ -8358,6 +8677,9 @@ pub fn rasterize_svg_to_png(svgBytes: &Vec<u8>) -> Option<Vec<u8>> {
     let size = tree.size();
     let width = (size.width().ceil() as u32);
     let height = (size.height().ceil() as u32);
+    if ((width > MAX_SVG_DIMENSION) || (height > MAX_SVG_DIMENSION)) {
+        return None;
+    }
     let Some(pixmap) = (Pixmap::new(width.max(1), height.max(1))) else {
         return None;
     };
@@ -8485,6 +8807,13 @@ pub fn extract_current_costume_to_temp_file(sb3Path: Arc<str>, targetName: Arc<s
     extract_costume_bytes_to_temp_file(sb3Path.clone().clone(), &costume)
 }
 
+pub fn extract_costume_at_index_for_project(sb3Path: Arc<str>, project: &Sb3Project, targetName: Arc<str>, idx: isize) -> Option<Arc<str>> {
+    let Some(costume) = (find_target_costume_at_index(project, targetName.clone().clone(), idx.clone())) else {
+        return None;
+    };
+    extract_costume_bytes_to_temp_file(sb3Path.clone().clone(), &costume)
+}
+
 pub fn extract_costume_at_index_to_temp_file(sb3Path: Arc<str>, targetName: Arc<str>, idx: isize) -> Option<Arc<str>> {
     let Some(project) = (Sb3Project::load_for_boring(sb3Path.clone())) else {
         return None;
@@ -8507,8 +8836,8 @@ fn png_dimensions(bytes: &Vec<u8>) -> Option<(u32, u32)> {
     Some((width, height))
 }
 
-fn costume_pixel_dims(sb3Path: Arc<str>, targetName: Arc<str>, idx: isize) -> Option<CostumeDim> {
-    let Some(cachePath) = (extract_costume_at_index_to_temp_file(Arc::<str>::from(sb3Path.clone().to_string()), Arc::<str>::from(targetName.clone().to_string()), idx.clone())) else {
+fn costume_pixel_dims(sb3Path: Arc<str>, project: &Sb3Project, targetName: Arc<str>, idx: isize) -> Option<CostumeDim> {
+    let Some(cachePath) = (extract_costume_at_index_for_project(Arc::<str>::from(sb3Path.clone().to_string()), project, Arc::<str>::from(targetName.clone().to_string()), idx.clone())) else {
         return None;
     };
     let Some(assetsDir) = (Path::new(sb3Path.as_ref()).parent()) else {
@@ -8534,7 +8863,7 @@ pub fn build_target_costume_dims(sb3Path: Arc<str>, project: &Sb3Project) -> Tar
         let mut i = 0;
         while (i < (target.costumes.len() as isize)) {
             let resolution = (target.costumes[(i) as usize].clone().bitmap_resolution.clone().unwrap_or_else(|| 1.0) as f32);
-            if let Some(raw) = costume_pixel_dims(Arc::<str>::from(sb3Path.clone().to_string()), Arc::<str>::from(target_id.clone().to_string()), i) {
+            if let Some(raw) = costume_pixel_dims(Arc::<str>::from(sb3Path.clone().to_string()), project, Arc::<str>::from(target_id.clone().to_string()), i) {
                 dims.push(CostumeDim { width: (raw.width / resolution), height: (raw.height / resolution) });
             } else {
                 dims.push(CostumeDim { width: 40.0, height: 40.0 });
@@ -8661,6 +8990,17 @@ fn blend_pixel(data: &mut Vec<u8>, i: isize, color: &PenColor) -> () {
     }
 }
 
+fn clamp_px_bound(v: f32) -> isize {
+    let mut c = v;
+    if (c < (-1000.0)) {
+        c = (-1000.0);
+    }
+    if (c > 1000.0) {
+        c = 1000.0;
+    }
+    (c as isize)
+}
+
 fn draw_pen_line(data: &mut Vec<u8>, x1: f32, y1: f32, x2: f32, y2: f32, color: &PenColor, diameter: f32) -> () {
     let radius = (diameter / 2.0);
     let min_x_f = {
@@ -8691,10 +9031,22 @@ fn draw_pen_line(data: &mut Vec<u8>, x1: f32, y1: f32, x2: f32, y2: f32, color: 
         y2.clone()
     }
 };
-    let min_x = ((((min_x_f - radius) as f32).floor() as isize) - 1);
-    let max_x = ((((max_x_f + radius) as f32).floor() as isize) + 1);
-    let min_y = ((((min_y_f - radius) as f32).floor() as isize) - 1);
-    let max_y = ((((max_y_f + radius) as f32).floor() as isize) + 1);
+    let mut min_x = (clamp_px_bound(((min_x_f - radius) as f32).floor()) - 1);
+    let mut max_x = (clamp_px_bound(((max_x_f + radius) as f32).floor()) + 1);
+    let mut min_y = (clamp_px_bound(((min_y_f - radius) as f32).floor()) - 1);
+    let mut max_y = (clamp_px_bound(((max_y_f + radius) as f32).floor()) + 1);
+    if (min_x < 0) {
+        min_x = 0;
+    }
+    if (min_y < 0) {
+        min_y = 0;
+    }
+    if (max_x > 479) {
+        max_x = 479;
+    }
+    if (max_y > 359) {
+        max_y = 359;
+    }
     let dx = (x2 - x1);
     let dy = (y2 - y1);
     let seg_len_sq = ((dx * dx) + (dy * dy));
@@ -8733,6 +9085,9 @@ fn draw_pen_line(data: &mut Vec<u8>, x1: f32, y1: f32, x2: f32, y2: f32, color: 
 }
 
 pub fn draw_pen_marks(mut sound_queue: ResMut<SoundQueue>, mut pen_canvas: ResMut<PenCanvas>, mut images: ResMut<Assets<Image>>) -> () {
+    if ((!sound_queue.pen_clear_requested) && ((sound_queue.pen_line_requests.len() as isize) == 0)) {
+        return;
+    }
     let Some(imageFixed) = (Assets::get_mut(&mut images, &pen_canvas.handle)) else {
         return;
     };
@@ -8826,10 +9181,22 @@ fn draw_stamp(data: &mut Vec<u8>, src: &StampSource) -> () {
         }
         i += 1;
     }
-    let min_x = (((canvas_px(min_wx) as f32).floor() as isize) - 1);
-    let max_x = (((canvas_px(max_wx) as f32).floor() as isize) + 1);
-    let min_y = (((canvas_py(max_wy) as f32).floor() as isize) - 1);
-    let max_y = (((canvas_py(min_wy) as f32).floor() as isize) + 1);
+    let mut min_x = (clamp_px_bound((canvas_px(min_wx) as f32).floor()) - 1);
+    let mut max_x = (clamp_px_bound((canvas_px(max_wx) as f32).floor()) + 1);
+    let mut min_y = (clamp_px_bound((canvas_py(max_wy) as f32).floor()) - 1);
+    let mut max_y = (clamp_px_bound((canvas_py(min_wy) as f32).floor()) + 1);
+    if (min_x < 0) {
+        min_x = 0;
+    }
+    if (min_y < 0) {
+        min_y = 0;
+    }
+    if (max_x > 479) {
+        max_x = 479;
+    }
+    if (max_y > 359) {
+        max_y = 359;
+    }
     let mut py = min_y;
     while (py <= max_y) {
         if ((py >= 0) && (py < 360)) {
@@ -8955,6 +9322,9 @@ pub fn render_stamp_for_test(px: f32, py: f32, direction: f32, rotation_style: A
 }
 
 pub fn compose_scene_for_touching(positions: Res<Positions>, looks: Res<LooksStates>, costume_dims: Res<TargetCostumeDims>, mut sound_queue: ResMut<SoundQueue>, layer_orders: Res<LayerOrders>, pen_canvas: Res<PenCanvas>, images: Res<Assets<Image>>, sprites: Query<(&ScratchSprite, &TargetCostumeHandles)>) -> () {
+    if (!sound_queue.touching_color_used) {
+        return;
+    }
     let mut handle_by_target = HashMap::new();
     for (tag, costumes) in sprites.into_iter() {
         handle_by_target.insert(tag.target_id.clone(), costumes.handles.clone());
@@ -9249,7 +9619,7 @@ struct BigUint {
 impl BigUint {
     fn normalize(&mut self) -> () {
         while ((len32(&self.limbs) > 1) && (self.limbs[((len32(&self.limbs) - 1)) as usize].clone() == 0)) {
-            self.limbs.pop().unwrap_or_default();
+            self.limbs.pop();
         }
         if (len32(&self.limbs) == 0) {
             self.limbs.push(0);

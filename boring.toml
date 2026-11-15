@@ -77,6 +77,10 @@ include = ["../boring-bevylib/derives.toml"]
 # as `ZipArchive::byName` above: both positions count from 0 (`&mut` for the
 # `self` position, `&mut` for `buf`).
 "ZipFile::readToEnd" = ["&mut", "&mut"]
+# `Read::take(self, limit: u64)` on `&mut ZipFile` -- caps a decompressed read (zip-bomb guard,
+# see `read_zip_entry_bytes`); then `Read::read_to_end` on the `Take`.
+"Read::take" = ["&mut", ""]
+"Read::readToEnd" = ["&mut", "&mut"]
 # `ZipArchive::by_name(&mut self, name: &str) -> ZipResult<ZipFile>` --
 # called via explicit UFCS (`ZipArchive.byName(archive, entryName)`, not
 # `archive.byName(entryName)`) so this whitelist entry's qualifier doesn't

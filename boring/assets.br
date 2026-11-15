@@ -93,9 +93,18 @@ def [uint8]? read_zip_entry_bytes(string sb3Path, string entryFilename):
     if entry.size() > MAX_ZIP_ENTRY_BYTES:
         return nil
     mut [uint8] buf = []
-    let bytesReadOpt = try? ZipFile.readToEnd(entry, buf)
+    # Bounded read: `entry.size()` is only the *declared* size; a forged zip can
+    # declare 1 KB over a deflate stream that inflates to gigabytes. Cap what is
+    # actually decompressed at the limit + 1 byte, and reject if it hit it.
+    var mut limited = Read.take(entry, MAX_ZIP_ENTRY_BYTES + (1 as uint64))
+    let bytesReadOpt = try? Read.readToEnd(limited, buf)
     guard let bytesRead = bytesReadOpt else return nil
+    if (buf.length as uint64) > MAX_ZIP_ENTRY_BYTES:
+        return nil
     buf
+
+# Max rasterized SVG side in px -- see the check in `rasterize_svg_to_png`.
+let uint32 MAX_SVG_DIMENSION = 8192 as uint32
 
 # Rasterizes an SVG document to a PNG image, sized to the SVG's own natural
 # (ceil'd) dimensions -- `nil` if the SVG fails to parse or the pixmap can't
@@ -121,6 +130,12 @@ pub def [uint8]? rasterize_svg_to_png([uint8] svgBytes):
     let size = tree.size()
     let width = size.width().ceil() as uint32
     let height = size.height().ceil() as uint32
+    # Cap the rasterized size: a forged SVG declaring e.g. width="30000"
+    # height="30000" would otherwise allocate ~3.6 GB in `Pixmap.new` (and again
+    # in `encodePng`), and 1e6 x 1e6 aborts on OOM. Real Scratch costumes are at
+    # most a few thousand px on a side (the stage is 480x360).
+    if width > MAX_SVG_DIMENSION or height > MAX_SVG_DIMENSION:
+        return nil
     guard let pixmap = Pixmap.new(width.max(1), height.max(1)) else return nil
     var mut pixmap2 = pixmap
     resvg.render(tree, resvg.tiny_skia.Transform.default(), pixmap2.asMut())
@@ -297,6 +312,13 @@ pub def string? extract_current_costume_to_temp_file(string sb3Path, string targ
 # costume up front, so `looks_switchcostumeto`/`looks_nextcostume` can
 # swap a sprite's real image at runtime without ever re-touching the zip
 # (see `TargetCostumeHandles`' own doc comment in `scratch.br`).
+# Same as `extract_costume_at_index_to_temp_file`, for a caller that already has
+# the parsed `Sb3Project` -- avoids re-opening the zip and re-parsing the whole
+# `project.json` for every costume (O(costumes x project size) at load).
+pub def string? extract_costume_at_index_for_project(string sb3Path, Sb3Project project, string targetName, int idx):
+    guard let costume = find_target_costume_at_index(project, targetName, idx) else return nil
+    extract_costume_bytes_to_temp_file(sb3Path, costume)
+
 pub def string? extract_costume_at_index_to_temp_file(string sb3Path, string targetName, int idx):
     guard let project = Sb3Project.load_for_boring(sb3Path.clone()) else return nil
     guard let costume = find_target_costume_at_index(project, targetName, idx) else return nil
@@ -344,8 +366,8 @@ def (uint32, uint32)? png_dimensions([uint8] bytes):
 # extraction itself), or a genuinely non-PNG bitmap format (see
 # `png_dimensions`' own doc comment) -- `TargetCostumeDims.get`'s own
 # fallback in `runtime.br` is what a caller actually sees for either case.
-def CostumeDim? costume_pixel_dims(string sb3Path, string targetName, int idx):
-    guard let cachePath = extract_costume_at_index_to_temp_file(sb3Path.clone(), targetName.clone(), idx) else return nil
+def CostumeDim? costume_pixel_dims(string sb3Path, Sb3Project project, string targetName, int idx):
+    guard let cachePath = extract_costume_at_index_for_project(sb3Path.clone(), project, targetName.clone(), idx) else return nil
     guard let assetsDir = Path.new(sb3Path.asRef()).parent() else return nil
     let fullPath = Path.join(assetsDir, cachePath.asRef())
     let bytesOpt = try? std.fs.read(fullPath)
@@ -389,7 +411,7 @@ pub def TargetCostumeDims build_target_costume_dims(string sb3Path, Sb3Project p
             # that function's own job stays "what does the PNG file
             # itself say", independent of any sb3-level metadata.
             let resolution = (target.costumes[i].bitmap_resolution else 1.0) as float32
-            if let raw = costume_pixel_dims(sb3Path.clone(), target_id.clone(), i):
+            if let raw = costume_pixel_dims(sb3Path.clone(), project, target_id.clone(), i):
                 dims.push(CostumeDim(width = raw.width / resolution, height = raw.height / resolution))
             else:
                 dims.push(CostumeDim(width = 40.0, height = 40.0))

@@ -1,0 +1,463 @@
+{
+ "targets": [
+  {
+   "isStage": true,
+   "name": "Stage",
+   "variables": {
+    "v_t_truthy": [
+     "t_truthy",
+     0
+    ],
+    "v_t_gt": [
+     "t_gt",
+     0
+    ],
+    "v_t_repeat": [
+     "t_repeat",
+     0
+    ],
+    "v_t_sin": [
+     "t_sin",
+     0
+    ],
+    "v_t_cos": [
+     "t_cos",
+     0
+    ],
+    "v_t_letter": [
+     "t_letter",
+     0
+    ],
+    "v_t_tan": [
+     "t_tan",
+     0
+    ]
+   },
+   "lists": {
+    "lid": [
+     "L",
+     [
+      "a",
+      "b"
+     ]
+    ]
+   },
+   "broadcasts": {},
+   "blocks": {},
+   "comments": {},
+   "currentCostume": 0,
+   "costumes": [],
+   "sounds": [],
+   "volume": 100,
+   "layerOrder": 0
+  },
+  {
+   "isStage": false,
+   "name": "Sprite1",
+   "variables": {},
+   "lists": {},
+   "broadcasts": {},
+   "blocks": {
+    "hat": {
+     "opcode": "event_whenflagclicked",
+     "next": "if1",
+     "parent": null,
+     "inputs": {},
+     "fields": {},
+     "shadow": false,
+     "topLevel": true,
+     "x": 0,
+     "y": 0
+    },
+    "if1": {
+     "opcode": "control_if",
+     "next": "s_gt",
+     "parent": "hat",
+     "inputs": {
+      "CONDITION": [
+       1,
+       [
+        10,
+        "hello"
+       ]
+      ],
+      "SUBSTACK": [
+       2,
+       "s_truthy"
+      ]
+     },
+     "fields": {},
+     "shadow": false,
+     "topLevel": false
+    },
+    "s_truthy": {
+     "opcode": "data_setvariableto",
+     "next": null,
+     "parent": "if1",
+     "inputs": {
+      "VALUE": [
+       1,
+       [
+        4,
+        "1"
+       ]
+      ]
+     },
+     "fields": {
+      "VARIABLE": [
+       "t_truthy",
+       "v_t_truthy"
+      ]
+     },
+     "shadow": false,
+     "topLevel": false
+    },
+    "s_gt": {
+     "opcode": "data_setvariableto",
+     "next": "s_rep0",
+     "parent": "if1",
+     "inputs": {
+      "VALUE": [
+       3,
+       "gt1",
+       [
+        1,
+        [
+         10,
+         "0"
+        ]
+       ]
+      ]
+     },
+     "fields": {
+      "VARIABLE": [
+       "t_gt",
+       "v_t_gt"
+      ]
+     },
+     "shadow": false,
+     "topLevel": false
+    },
+    "gt1": {
+     "opcode": "operator_gt",
+     "next": null,
+     "parent": "s_gt",
+     "inputs": {
+      "OPERAND1": [
+       1,
+       [
+        10,
+        "banana"
+       ]
+      ],
+      "OPERAND2": [
+       1,
+       [
+        10,
+        "apple"
+       ]
+      ]
+     },
+     "fields": {},
+     "shadow": false,
+     "topLevel": false
+    },
+    "s_rep0": {
+     "opcode": "data_setvariableto",
+     "next": "rep",
+     "parent": "s_gt",
+     "inputs": {
+      "VALUE": [
+       1,
+       [
+        4,
+        "0"
+       ]
+      ]
+     },
+     "fields": {
+      "VARIABLE": [
+       "t_repeat",
+       "v_t_repeat"
+      ]
+     },
+     "shadow": false,
+     "topLevel": false
+    },
+    "rep": {
+     "opcode": "control_repeat",
+     "next": "s_sin",
+     "parent": "s_rep0",
+     "inputs": {
+      "TIMES": [
+       1,
+       [
+        4,
+        "2.5"
+       ]
+      ],
+      "SUBSTACK": [
+       2,
+       "inc"
+      ]
+     },
+     "fields": {},
+     "shadow": false,
+     "topLevel": false
+    },
+    "inc": {
+     "opcode": "data_changevariableby",
+     "next": null,
+     "parent": "rep",
+     "inputs": {
+      "VALUE": [
+       1,
+       [
+        4,
+        "1"
+       ]
+      ]
+     },
+     "fields": {
+      "VARIABLE": [
+       "t_repeat",
+       "v_t_repeat"
+      ]
+     },
+     "shadow": false,
+     "topLevel": false
+    },
+    "s_sin": {
+     "opcode": "data_setvariableto",
+     "next": "s_cos",
+     "parent": "rep",
+     "inputs": {
+      "VALUE": [
+       3,
+       "sin1",
+       [
+        1,
+        [
+         4,
+         "0"
+        ]
+       ]
+      ]
+     },
+     "fields": {
+      "VARIABLE": [
+       "t_sin",
+       "v_t_sin"
+      ]
+     },
+     "shadow": false,
+     "topLevel": false
+    },
+    "sin1": {
+     "opcode": "operator_mathop",
+     "next": null,
+     "parent": "s_sin",
+     "inputs": {
+      "NUM": [
+       1,
+       [
+        4,
+        "30"
+       ]
+      ]
+     },
+     "fields": {
+      "OPERATOR": [
+       "sin",
+       null
+      ]
+     },
+     "shadow": false,
+     "topLevel": false
+    },
+    "s_cos": {
+     "opcode": "data_setvariableto",
+     "next": "s_tan",
+     "parent": "s_sin",
+     "inputs": {
+      "VALUE": [
+       3,
+       "cos1",
+       [
+        1,
+        [
+         4,
+         "0"
+        ]
+       ]
+      ]
+     },
+     "fields": {
+      "VARIABLE": [
+       "t_cos",
+       "v_t_cos"
+      ]
+     },
+     "shadow": false,
+     "topLevel": false
+    },
+    "cos1": {
+     "opcode": "operator_mathop",
+     "next": null,
+     "parent": "s_cos",
+     "inputs": {
+      "NUM": [
+       1,
+       [
+        4,
+        "90"
+       ]
+      ]
+     },
+     "fields": {
+      "OPERATOR": [
+       "cos",
+       null
+      ]
+     },
+     "shadow": false,
+     "topLevel": false
+    },
+    "s_tan": {
+     "opcode": "data_setvariableto",
+     "next": "s_let",
+     "parent": "s_cos",
+     "inputs": {
+      "VALUE": [
+       3,
+       "tan1",
+       [
+        1,
+        [
+         4,
+         "0"
+        ]
+       ]
+      ]
+     },
+     "fields": {
+      "VARIABLE": [
+       "t_tan",
+       "v_t_tan"
+      ]
+     },
+     "shadow": false,
+     "topLevel": false
+    },
+    "tan1": {
+     "opcode": "operator_mathop",
+     "next": null,
+     "parent": "s_tan",
+     "inputs": {
+      "NUM": [
+       1,
+       [
+        4,
+        "180"
+       ]
+      ]
+     },
+     "fields": {
+      "OPERATOR": [
+       "tan",
+       null
+      ]
+     },
+     "shadow": false,
+     "topLevel": false
+    },
+    "s_let": {
+     "opcode": "data_setvariableto",
+     "next": "ins",
+     "parent": "s_tan",
+     "inputs": {
+      "VALUE": [
+       3,
+       "let1",
+       [
+        1,
+        [
+         10,
+         ""
+        ]
+       ]
+      ]
+     },
+     "fields": {
+      "VARIABLE": [
+       "t_letter",
+       "v_t_letter"
+      ]
+     },
+     "shadow": false,
+     "topLevel": false
+    },
+    "let1": {
+     "opcode": "operator_letter_of",
+     "next": null,
+     "parent": "s_let",
+     "inputs": {
+      "LETTER": [
+       1,
+       [
+        4,
+        "1.5"
+       ]
+      ],
+      "STRING": [
+       1,
+       [
+        10,
+        "abc"
+       ]
+      ]
+     },
+     "fields": {},
+     "shadow": false,
+     "topLevel": false
+    },
+    "ins": {
+     "opcode": "data_insertatlist",
+     "next": null,
+     "parent": "s_let",
+     "inputs": {
+      "INDEX": [
+       1,
+       [
+        10,
+        "last"
+       ]
+      ],
+      "ITEM": [
+       1,
+       [
+        10,
+        "x"
+       ]
+      ]
+     },
+     "fields": {
+      "LIST": [
+       "L",
+       "lid"
+      ]
+     },
+     "shadow": false,
+     "topLevel": false
+    }
+   },
+   "comments": {},
+   "currentCostume": 0,
+   "costumes": [],
+   "sounds": [],
+   "volume": 100,
+   "layerOrder": 1
+  }
+ ],
+ "monitors": []
+}

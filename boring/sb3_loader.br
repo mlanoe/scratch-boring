@@ -713,6 +713,12 @@ pub enum Sb3Primitive:
             Broadcast(name, id): name
             _: nil
 
+    # `[9, "#rrggbb"]` -- the compact form real editors save a colour picker as.
+    pub req string? as_color_hex():
+        match self.clone():
+            ColorPicker(hex): hex
+            _: nil
+
 # `fields: {"<FIELD_NAME>": ["<value>", "<id_or_null>"]}`. Never read
 # directly by `scratch.br` (confirmed by grep) -- only through `Sb3Block`'s
 # `field_value`/`field_id` glue methods, so this stays non-`pub`.
@@ -1150,8 +1156,14 @@ def string? read_project_json_from_zip(string sb3Path):
     if entry.size() > MAX_ZIP_ENTRY_BYTES:
         return nil
     mut [uint8] buf = []
-    let bytesReadOpt = try? ZipFile.readToEnd(entry, buf)
+    # Bounded read: `entry.size()` is only the *declared* size; a forged zip can
+    # declare 1 KB over a deflate stream that inflates to gigabytes. Cap what is
+    # actually decompressed at the limit + 1 byte, and reject if it hit it.
+    var mut limited = Read.take(entry, MAX_ZIP_ENTRY_BYTES + (1 as uint64))
+    let bytesReadOpt = try? Read.readToEnd(limited, buf)
     guard let bytesRead = bytesReadOpt else return nil
+    if (buf.length as uint64) > MAX_ZIP_ENTRY_BYTES:
+        return nil
     let contentsOpt = try? String.fromUtf8(buf)
     guard let contents = contentsOpt else return nil
     # `String::from_utf8` returns a real Rust `String`, not Boring's own
