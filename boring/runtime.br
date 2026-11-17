@@ -664,7 +664,8 @@ struct Proc:
 # what makes the procedure registry usable as a Bevy `Resource` in Phase 2's
 # ECS wiring, the same reason `Vars`/`Lists`/`Broadcasts` are already
 # one-field-wrapped structs rather than bare dicts passed around directly.
-pub struct ProcTable as Resource, Debug, Clone:
+@resource
+pub data ProcTable:
     {string=Proc} table
 
 # A procedure call's parameter bindings, active only while executing that
@@ -701,7 +702,8 @@ struct Frame:
 # so a single flat table is enough to validate load->link->run end to end;
 # per-sprite locals + clones are a real follow-up, not a shortcut taken by
 # accident).
-pub struct Vars as Resource, Debug, Clone:
+@resource
+pub data Vars:
     var mut {string=ScratchValue} table
     # Sprite-local variable support -- real Scratch scopes a variable
     # either to the Stage (global, `table` above) or to one specific
@@ -950,7 +952,8 @@ pub struct Vars as Resource, Debug, Clone:
 # back under the same id. There's no way to get a live mutable reference
 # into the dict's value from Boring, so this is the only correct pattern,
 # not just a style choice.
-pub struct Lists as Resource, Debug, Clone:
+@resource
+pub data Lists:
     var mut {string=[ScratchValue]} table
     # `data_showlist`/`data_hidelist`'s own state -- same shape and same
     # reasoning as `Vars.watcher_visible`: whether each list's on-stage
@@ -1203,7 +1206,8 @@ struct Position:
 # separate Update system (`sync_transforms_from_positions`, in the Bevy ECS
 # section below) copies this resource's values onto each `ScratchSprite`
 # entity's `Transform` once per tick, after scripts have run.
-pub struct Positions as Resource, Debug, Clone:
+@resource
+pub data Positions:
     var mut {string=Position} table
 
     req Position get(string target_id):
@@ -1265,7 +1269,8 @@ struct LooksState:
     int costume_index
     float32 ghost
 
-pub struct LooksStates as Resource, Debug, Clone:
+@resource
+pub data LooksStates:
     var mut {string=LooksState} table
 
     req LooksState get(string target_id):
@@ -1292,7 +1297,8 @@ pub struct LooksStates as Resource, Debug, Clone:
 # time, not a value baked in at link time (a sprite that's since had
 # *another* sprite go further front/back needs the *next* front/back
 # call to still end up above/below everything, including that change).
-pub struct LayerOrders as Resource, Debug, Clone:
+@resource
+pub data LayerOrders:
     var mut {string=int} table
 
     req int get(string target_id):
@@ -1464,7 +1470,8 @@ pub struct LayerOrders as Resource, Debug, Clone:
 # threaded through `eval`/`exec_simple`/`step_thread` -- every other
 # runtime resource in this file is built the same way, a small pre-
 # extracted slice of the loaded project rather than the project itself.
-pub struct TargetCostumes as Resource, Debug, Clone:
+@resource
+pub data TargetCostumes:
     {string=[string]} table
 
     req [string] get(string target_id):
@@ -1495,7 +1502,7 @@ pub struct TargetCostumes as Resource, Debug, Clone:
 # extract at all (a raw-JSON test fixture with no real asset bytes, or a
 # genuinely corrupt/unsupported asset) has no entry -- see
 # `TargetCostumeDims.get`'s own fallback below for what that degrades to.
-struct CostumeDim:
+data CostumeDim:
     float32 width
     float32 height
 
@@ -1508,7 +1515,8 @@ struct CostumeDim:
 # by `LooksState.size` (the same percent `sync_visibility_and_size_from_
 # looks_states` already applies to `Transform.scale`), centered on its
 # `Position`.
-pub struct TargetCostumeDims as Resource, Debug, Clone:
+@resource
+pub data TargetCostumeDims:
     {string=[CostumeDim]} table
 
     # `(40.0, 40.0)` for an out-of-range index or a target with no entry
@@ -1603,7 +1611,8 @@ def float32 current_loudness():
 # `sync_keyboard_state` from Bevy's own `ButtonInput::get_pressed()`
 # (every currently-held key, regardless of name) -- true parity with real
 # Scratch's own "any" semantics, not just "any of the 41 covered above".
-pub struct KeyboardState as Resource, Debug, Clone:
+@resource
+pub data KeyboardState:
     var mut [string] pressed_keys
     var bool any_key_pressed
 
@@ -1625,7 +1634,8 @@ pub struct KeyboardState as Resource, Debug, Clone:
 # `Result`, a type Boring has no established unwrapping convention for --
 # revisit this the moment a real camera-scaling feature lands and this
 # assumption stops holding).
-pub struct MouseState as Resource, Debug, Clone:
+@resource
+pub data MouseState:
     float32 x
     float32 y
     bool down
@@ -1653,7 +1663,8 @@ pub struct MouseState as Resource, Debug, Clone:
 # straightforward, unambiguous "grab offset stays constant" version any
 # correct drag implementation reduces to, not a guessed port of that
 # component's own screen/canvas-specific sign juggling).
-pub struct DragState as Resource, Debug, Clone:
+@resource
+pub data DragState:
     var mut string dragging_id
     var float32 offset_x
     var float32 offset_y
@@ -1672,7 +1683,8 @@ pub struct DragState as Resource, Debug, Clone:
 # `0.0` -- there's no real Bevy tick advancing it there, the same
 # "nothing pressed, mouse at origin" honesty already established for
 # `KeyboardState`/`MouseState`'s own headless defaults.
-pub struct ScratchTimer as Resource, Debug, Clone:
+@resource
+pub data ScratchTimer:
     float32 elapsed
     # `elapsed` at the last `reset timer`. `wait`/`glide` use raw `elapsed`, so a
     # reset no longer shifts their absolute deadlines; the `timer` reporter and
@@ -1704,7 +1716,8 @@ pub struct ScratchTimer as Resource, Debug, Clone:
 # matches how `KeyboardState`/`MouseState` already start from the same
 # fixed "nothing pressed" state every run rather than reading real
 # initial hardware state at Startup.
-pub struct Rng as Resource, Debug, Clone:
+@resource
+pub data Rng:
     var uint64 state
 
     # One xorshift64 step: advances `state` and returns it directly as the
@@ -1731,7 +1744,8 @@ struct KeyPressHat:
     string key_option
     ReceiverScript script
 
-pub struct KeyPressHats as Resource, Debug, Clone:
+@resource
+pub data KeyPressHats:
     [KeyPressHat] hats
 
 # One `when this sprite clicked` hat -- no field of its own to tag (unlike
@@ -1747,7 +1761,8 @@ pub struct KeyPressHats as Resource, Debug, Clone:
 struct ClickHat:
     ReceiverScript script
 
-pub struct ClickHats as Resource, Debug, Clone:
+@resource
+pub data ClickHats:
     [ClickHat] hats
 
 # One `event_whentouchingobject` hat -- `touching_block` is the WHOLE
@@ -1770,7 +1785,8 @@ struct TouchingObjectHat:
     {string=bool} was_true_by_instance
     ReceiverScript script
 
-pub struct TouchingObjectHats as Resource, Debug, Clone:
+@resource
+pub data TouchingObjectHats:
     var mut [TouchingObjectHat] hats
 
 # One `event_whengreaterthan` hat -- `menu` is the WHENGREATERTHANMENU
@@ -1790,7 +1806,8 @@ struct GreaterThanHat:
     bool was_true
     ReceiverScript script
 
-pub struct GreaterThanHats as Resource, Debug, Clone:
+@resource
+pub data GreaterThanHats:
     var mut [GreaterThanHat] hats
 
 # One `event_whenbackdropswitchesto` hat -- BACKDROP is a plain field (a
@@ -1812,7 +1829,8 @@ struct BackdropSwitchHat:
     string backdrop_name
     ReceiverScript script
 
-pub struct BackdropSwitchHats as Resource, Debug, Clone:
+@resource
+pub data BackdropSwitchHats:
     var mut [BackdropSwitchHat] hats
     # The Stage's own backdrop name as of the last tick `check_backdrop_
     # switch_hats` ran -- seeded at Startup to the Stage's real *initial*
@@ -2263,7 +2281,8 @@ def [uint8] blank_scene_composite_data():
         i = i + 1
     data
 
-pub struct SoundQueue as Resource, Debug, Clone:
+@resource
+pub data SoundQueue:
     var mut [SoundRequest] play_queue
     var bool stop_all_requested
     var mut {string=float32} volumes
@@ -2667,7 +2686,8 @@ struct SpeechBubble:
 # eval/exec stay Bevy-free" rationale as `Positions`/`KeyboardState`.
 # Absent from `table` (the common case: nothing has ever been said) means
 # "no bubble", same as `text_for`'s own empty-string fallback.
-pub struct SpeechBubbles as Resource, Debug, Clone:
+@resource
+pub data SpeechBubbles:
     var mut {string=SpeechBubble} table
 
     req string text_for(string target_id):
@@ -2701,7 +2721,8 @@ struct VariableWatcher:
     float32 x
     float32 y
 
-pub struct VariableWatchers as Resource, Debug, Clone:
+@resource
+pub data VariableWatchers:
     [VariableWatcher] watchers
 
 # A visible *reporter* watcher -- real Scratch can watch a handful of
@@ -2835,7 +2856,8 @@ struct ReceiverScript:
     string target_id
     [Block] body
 
-pub struct Broadcasts as Resource, Debug, Clone:
+@resource
+pub data Broadcasts:
     {string=[ReceiverScript]} table
 
     req [ReceiverScript] get(string name):
@@ -2852,7 +2874,8 @@ pub struct Broadcasts as Resource, Debug, Clone:
 # substituted to the new clone's own id (the template itself is still
 # tagged with the origin's name, same as every other hat-template resource
 # in this file).
-pub struct StartAsCloneHats as Resource, Debug, Clone:
+@resource
+pub data StartAsCloneHats:
     {string=[ReceiverScript]} table
 
     req [ReceiverScript] get(string origin_name):

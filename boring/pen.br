@@ -40,7 +40,8 @@ use bevy.render.render_resource.TextureFormat
 # long straight line across the tick's own net displacement instead of
 # each real intermediate segment). `PenCanvas` itself needs no per-
 # instance state at all any more.
-pub struct PenCanvas as Resource, Debug, Clone:
+@resource
+pub data PenCanvas:
     var mut Handle<Image> handle
 
     # `pub` (unlike every other accessor here) specifically so headless

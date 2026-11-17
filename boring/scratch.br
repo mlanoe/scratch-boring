@@ -118,7 +118,8 @@ use numlib.big_num.*
 # (see that struct's own doc comment on why it's the target's *name*) --
 # `sync_transforms_from_positions` below uses it to find which `Position`
 # entry belongs to which entity's `Transform`.
-pub struct ScratchSprite as Component, Debug:
+@component
+pub data ScratchSprite:
     string target_id
 
 # Every costume this sprite's own target has, pre-loaded as a real Bevy
@@ -132,7 +133,8 @@ pub struct ScratchSprite as Component, Debug:
 # `handles = []` there, so `sync_costume_from_looks_states` below can
 # stay a single, unconditional system with no per-entity "does this one
 # even have costumes" branch to worry about.
-pub struct TargetCostumeHandles as Component, Debug, Clone:
+@component
+pub data TargetCostumeHandles:
     [Handle<Image>] handles
 
 # Per-target cache of the one processed (effect-applied) costume image
@@ -140,7 +142,8 @@ pub struct TargetCostumeHandles as Component, Debug, Clone:
 # every effect value -- rebuilt only when that key changes, and the
 # previous `Handle<Image>` is dropped on replacement (freeing it), so an
 # animated `change color effect by` loop never accumulates images.
-pub struct EffectCache as Resource, Debug, Clone:
+@resource
+pub data EffectCache:
     var mut {string=string} keys
     var mut {string=Handle<Image>} handles
 
@@ -170,14 +173,16 @@ pub struct EffectCache as Resource, Debug, Clone:
 # to exist for Bevy's own transform-propagation to combine this entity's
 # local offset with its parent's world position each frame, nothing this
 # project's own code has to do by hand.
-pub struct SpeechBubbleAnchor as Component, Debug, Clone:
+@component
+pub data SpeechBubbleAnchor:
     string target_id
 
 # Marker + static data for one variable watcher's dedicated entity --
 # `variable_id` for the live lookup, `label` (the variable's human name)
 # baked in at spawn time since it never changes at runtime (see
 # `VariableWatcher`'s own doc comment).
-pub struct VariableWatcherTag as Component, Debug:
+@component
+pub data VariableWatcherTag:
     string variable_id
     string label
 
@@ -185,7 +190,8 @@ pub struct VariableWatcherTag as Component, Debug:
 # `target_id`/`expr` for the live `eval()` each tick, `label` baked in at
 # spawn time (see `ReporterWatcher`'s own doc comment for why none of this
 # ever changes at runtime).
-pub struct ReporterWatcherTag as Component, Debug:
+@component
+pub data ReporterWatcherTag:
     string target_id
     Block expr
     string label
@@ -193,7 +199,8 @@ pub struct ReporterWatcherTag as Component, Debug:
 # Marker + static data for one list watcher's dedicated entity --
 # `list_id` for the live lookup, `label` baked in at spawn time, same
 # reasoning as `VariableWatcherTag`.
-pub struct ListWatcherTag as Component, Debug:
+@component
+pub data ListWatcherTag:
     string list_id
     string label
 
@@ -205,7 +212,8 @@ pub struct ListWatcherTag as Component, Debug:
 # own round). No fields -- unlike the watcher tags above, there's nothing
 # static to bake in at spawn time (the question/typed-so-far text both
 # change at runtime, read fresh from `Vars` each tick).
-pub struct AskBoxText as Component, Debug:
+@component
+pub data AskBoxText:
     pass
 
 # Which project to load, set once when `build_app` constructs the `App` --
@@ -213,7 +221,8 @@ pub struct AskBoxText as Component, Debug:
 # resource (rather than a `build_app` parameter closed over directly)
 # because Bevy systems only ever receive real system params (Res/ResMut/
 # Commands/Query/...), never arbitrary function arguments.
-pub struct ProjectPath as Resource, Debug, Clone:
+@resource
+pub data ProjectPath:
     string path
 
 # Every currently-running `Thread` -- a green-flag click, a keypress hat,
@@ -229,7 +238,8 @@ pub struct ProjectPath as Resource, Debug, Clone:
 # test file that already imports it, for a change that's purely about
 # what happens to an entry *after* it's queued, not how queuing itself
 # works.
-pub struct PendingThreads as Resource, Debug, Clone:
+@resource
+pub data PendingThreads:
     var mut [Thread] queue
 
     # Number of threads still running (for tests).
@@ -528,7 +538,8 @@ pub def run_pending_threads(mut ResMut<Vars> vars, mut ResMut<Lists> lists, Res<
 # `sound_stopallsounds` find and despawn every one of them, real Scratch's
 # own "stop everything, unconditionally" semantics for that block (not
 # scoped to any one target).
-pub struct PlayingSound as Component, Debug:
+@component
+pub data PlayingSound:
     pass
 
 # Drains `SoundQueue` each tick: handles `stop_all_requested` first (despawn

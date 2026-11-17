@@ -10,6 +10,7 @@ use std::sync::Arc;
 use std::sync::{Mutex, RwLock};
 use std::f64::consts::{PI, E, TAU};
 use std::time::Duration;
+use bevy::prelude::*;
 
 trait BoringArrayIndex {
     type Item: Clone;
@@ -434,7 +435,7 @@ impl std::fmt::Display for ListWatcherTag {
 impl ListWatcherTag {
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Component)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Component, Copy, Default)]
 pub struct AskBoxText {
 }
 
@@ -637,7 +638,7 @@ pub fn run_pending_threads(mut vars: ResMut<Vars>, mut lists: ResMut<Lists>, pro
     pending.queue = still_running;
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Component)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Component, Copy, Default)]
 pub struct PlayingSound {
 }
 
@@ -1302,7 +1303,7 @@ pub fn sync_graphic_effects(query: Query<(&mut Sprite, &TargetCostumeHandles, &S
                         let dim = costume_dims.get(origin.clone(), idx.clone());
                         let bw = (base.width() as f32);
                         let bh = (base.height() as f32);
-                        let processed = apply_graphic_effects(&base_pixels, bw, bh, dim.width.clone(), dim.height.clone(), c.clone(), f.clone(), w.clone(), p.clone(), m.clone(), b.clone());
+                        let processed = apply_graphic_effects(&base_pixels, bw.clone(), bh.clone(), dim.width.clone(), dim.height.clone(), c.clone(), f.clone(), w.clone(), p.clone(), m.clone(), b.clone());
                         let mut img = base.clone();
                         let wrapped: Option<Vec<u8>> = Some(processed);
                         img.data = wrapped;
@@ -2645,7 +2646,7 @@ fn read_project_json_from_zip(sb3Path: Arc<str>) -> Option<Arc<str>> {
                 foundName = Some(nameStr.clone());
             }
         }
-        i += (1i64 as usize);
+        i = i.wrapping_add(((1i64 as usize) as usize));
     }
     let Some(entryName) = (foundName) else {
         return None;
@@ -4503,8 +4504,8 @@ impl Rng {
         x = (x ^ (x << 13));
         x = (x ^ (x >> 7));
         x = (x ^ (x << 17));
-        self.state = x;
-        x
+        self.state = x.clone();
+        x.clone()
     }
 
     fn next_f64_01(&mut self) -> f64 {
@@ -4867,7 +4868,7 @@ fn rgb_to_hsv100(r: f32, g: f32, b: f32) -> HsvTriple {
 };
     let x = {
     if (rg_min < b) {
-        rg_min
+        rg_min.clone()
     } else {
         b.clone()
     }
@@ -4881,7 +4882,7 @@ fn rgb_to_hsv100(r: f32, g: f32, b: f32) -> HsvTriple {
 };
     let v = {
     if (rg_max > b) {
-        rg_max
+        rg_max.clone()
     } else {
         b.clone()
     }
@@ -5346,7 +5347,7 @@ fn resolve_list_index_rnd(idx_val: ScratchValue, len: isize, allow_end: bool, mu
             if (pick >= span) {
                 (span - 1)
             } else {
-                pick
+                pick.clone()
             }
         } else {
             (-1)
@@ -5385,7 +5386,7 @@ fn resolve_list_index(idx_val: ScratchValue, len: isize, allow_end: bool) -> isi
         if (n == int_min) {
             (-1)
         } else {
-            let zero_based = (n - 1);
+            let zero_based = n.wrapping_sub((1 as isize));
             let max_valid = {
             if allow_end {
                 len.clone()
@@ -6689,7 +6690,7 @@ fn eval(b: &Block, mut vars: &mut Vars, frame: &Frame, procs: &ProcTable, mut li
             let fidx = (eval(&idx_expr, vars, frame, procs, lists, broadcasts, positions, keyboard, mouse, timer, rng, looks, target_costumes, costume_dims, sound_queue).to_num().to_f64() - 1.0);
             if ((fidx >= 0.0) && (fidx <= (((AsRef::<str>::as_ref(&s).chars().count() as isize) as f64) - 1.0))) {
                 let idx0 = ((fidx as f64).floor() as isize);
-                ScratchValue::Str(Arc::<str>::from(s.chars().skip((idx0) as usize).take(((idx0 + 1)) as usize-(idx0) as usize).collect::<String>().as_str()))
+                ScratchValue::Str(Arc::<str>::from(s.chars().skip((idx0) as usize).take((idx0.wrapping_add((1 as isize))) as usize-(idx0) as usize).collect::<String>().as_str()))
             } else {
                 ScratchValue::Str(Arc::<str>::from(""))
             }
@@ -6935,7 +6936,7 @@ fn eval(b: &Block, mut vars: &mut Vars, frame: &Frame, procs: &ProcTable, mut li
                 let max_x = ((canvas_px((self_pos.x + self_hw)) as f32).floor() as isize);
                 let min_y = ((canvas_py((self_pos.y + self_hh)) as f32).floor() as isize);
                 let max_y = ((canvas_py((self_pos.y - self_hh)) as f32).floor() as isize);
-                ScratchValue::Bool(scan_scene_for_color(sound_queue, min_x, max_x, min_y, max_y, &target_color))
+                ScratchValue::Bool(scan_scene_for_color(sound_queue, min_x.clone(), max_x.clone(), min_y.clone(), max_y.clone(), &target_color))
             }
         }
         BlockKind::DistanceTo(what_expr) => {
@@ -6964,7 +6965,7 @@ fn eval(b: &Block, mut vars: &mut Vars, frame: &Frame, procs: &ProcTable, mut li
                 let dy = (self_pos.y - target_y);
                 let dist_sq = (((dx * dx) + (dy * dy)) as f64);
                 let dist = ((dist_sq as f64).sqrt() as f32);
-                ScratchValue::Num(ScratchNumber::from_f32(dist))
+                ScratchValue::Num(ScratchNumber::from_f32(dist.clone()))
             }
         }
         BlockKind::SensingOf(object_expr, property) => {
@@ -7033,7 +7034,7 @@ fn eval(b: &Block, mut vars: &mut Vars, frame: &Frame, procs: &ProcTable, mut li
                     ScratchValue::Str(Arc::<str>::from(""))
                 }
             } else {
-                ScratchValue::Num(ScratchNumber::from_isize((idx + 1)))
+                ScratchValue::Num(ScratchNumber::from_isize(idx.wrapping_add((1 as isize))))
             }
         }
         BlockKind::BackdropNumberName(which) => {
@@ -7046,7 +7047,7 @@ fn eval(b: &Block, mut vars: &mut Vars, frame: &Frame, procs: &ProcTable, mut li
                     ScratchValue::Str(Arc::<str>::from(""))
                 }
             } else {
-                ScratchValue::Num(ScratchNumber::from_isize((idx + 1)))
+                ScratchValue::Num(ScratchNumber::from_isize(idx.wrapping_add((1 as isize))))
             }
         }
         _ => {
@@ -7724,9 +7725,9 @@ fn exec_simple(b: &Block, mut vars: &mut Vars, frame: &Frame, procs: &ProcTable,
             let num = eval(&num_expr, vars, frame, procs, lists, broadcasts, positions, keyboard, mouse, timer, rng, looks, target_costumes, costume_dims, sound_queue).to_num().to_isize_checked().unwrap_or_else(|| 0);
             let delta = {
             if (which == Arc::<str>::from("backward")) {
-                ((0i64 as isize) - num)
+                ((0i64 as isize) as isize).wrapping_sub(num)
             } else {
-                num
+                num.clone()
             }
 };
             (*layer_orders).go_forward_backward(frame.target_id.clone().clone(), delta);
@@ -8171,7 +8172,7 @@ fn step_thread(mut thread: &mut Thread, mut vars: &mut Vars, procs: &ProcTable, 
                         }
                     }
                     if (times > 0) {
-                        (*thread).stack.push(ExecFrame { body: body.clone(), index: 0, kind: FrameKind::RepeatN((times - 1)), scope: scope });
+                        (*thread).stack.push(ExecFrame { body: body.clone(), index: 0, kind: FrameKind::RepeatN(times.wrapping_sub((1 as isize))), scope: scope });
                     }
                 }
                 BlockKind::RepeatUntil(cond, body) => {
@@ -8526,7 +8527,7 @@ pub fn run_greenflag_and_report_backdrop_index_json(path: Arc<str>) -> Arc<str> 
     if let Some(project) = Sb3Project::load_json_for_boring(path.clone()) {
         let result = run_and_build_headless_result(&project, path.clone().clone());
         let idx = result.looks.get(Arc::<str>::from("Stage")).costume_index.clone();
-        Arc::<str>::from(Arc::<str>::from(format!("{}", (idx + 1)).as_str()))
+        Arc::<str>::from(Arc::<str>::from(format!("{}", idx.wrapping_add((1 as isize))).as_str()))
     } else {
         Arc::<str>::from("")
     }
@@ -8595,7 +8596,7 @@ pub fn run_report_touching_color_test(scene_pixels: &Vec<u8>, self_x: f32, self_
     let max_x = ((canvas_px((self_x + self_hw)) as f32).floor() as isize);
     let min_y = ((canvas_py((self_y + self_hh)) as f32).floor() as isize);
     let max_y = ((canvas_py((self_y - self_hh)) as f32).floor() as isize);
-    scan_scene_for_color(&sound_queue, min_x, max_x, min_y, max_y, &target)
+    scan_scene_for_color(&sound_queue, min_x.clone(), max_x.clone(), min_y.clone(), max_y.clone(), &target)
 }
 
 
@@ -8638,7 +8639,7 @@ fn read_zip_entry_bytes(sb3Path: Arc<str>, entryFilename: Arc<str>) -> Option<Ve
                 foundName = Some(nameStr.clone());
             }
         }
-        i += (1i64 as usize);
+        i = i.wrapping_add(((1i64 as usize) as usize));
     }
     let Some(entryName) = (foundName) else {
         return None;
@@ -9225,15 +9226,15 @@ fn draw_stamp(data: &mut Vec<u8>, src: &StampSource) -> () {
                             sx = 0;
                         }
                         if (sx >= src_w_i) {
-                            sx = (src_w_i - 1);
+                            sx = src_w_i.wrapping_sub((1 as isize));
                         }
                         if (sy < 0) {
                             sy = 0;
                         }
                         if (sy >= src_h_i) {
-                            sy = (src_h_i - 1);
+                            sy = src_h_i.wrapping_sub((1 as isize));
                         }
-                        let src_i = (((sy * src_w_i) + sx) * 4);
+                        let src_i = sy.wrapping_mul(src_w_i).wrapping_add(sx).wrapping_mul((4 as isize));
                         if ((src_i >= 0) && ((src_i + 3) < (src.pixels.len() as isize))) {
                             let byte_r = src.pixels[(src_i) as usize].clone();
                             let byte_g = src.pixels[((src_i + 1)) as usize].clone();
@@ -9546,12 +9547,12 @@ pub fn apply_graphic_effects(src: &Vec<u8>, w: f32, h: f32, dest_w: f32, dest_h:
                 let mut sx = ((u * w) as isize);
                 let mut sy = ((v * h) as isize);
                 if (sx >= wi) {
-                    sx = (wi - 1);
+                    sx = wi.wrapping_sub((1 as isize));
                 }
                 if (sy >= hi) {
-                    sy = (hi - 1);
+                    sy = hi.wrapping_sub((1 as isize));
                 }
-                let idx = (((sy * wi) + sx) * 4);
+                let idx = sy.wrapping_mul(wi).wrapping_add(sx).wrapping_mul((4 as isize));
                 rr = ((src[(idx) as usize].clone() as f32) / 255.0);
                 gg = ((src[((idx + 1)) as usize].clone() as f32) / 255.0);
                 bb = ((src[((idx + 2)) as usize].clone() as f32) / 255.0);
@@ -9678,7 +9679,7 @@ impl BigUint {
                 let limb_b = other.limbs[(i) as usize].clone();
                 b = (limb_b as u64);
             }
-            let total = ((a + b) + carry);
+            let total = a.wrapping_add(b).wrapping_add(carry);
             result_limbs.push(((total & 4294967295) as u32));
             carry = (total >> 32);
             i += 1;
@@ -9708,11 +9709,11 @@ impl BigUint {
                 b = (limb_b as u64);
             }
             let mut diff = (0i64 as u64);
-            if (a >= (b + borrow)) {
+            if (a >= b.wrapping_add(borrow)) {
                 diff = ((a - b) - borrow);
                 borrow = (0i64 as u64);
             } else {
-                diff = (((a + two32) - b) - borrow);
+                diff = ((a.wrapping_add(two32) - b) - borrow);
                 borrow = (1i64 as u64);
             }
             result_limbs.push((diff as u32));
@@ -9743,7 +9744,7 @@ impl BigUint {
         let mut i = 0;
         while (i < len32(&self.limbs)) {
             let limb_i = self.limbs[(i) as usize].clone();
-            let prod = (((limb_i as u64) * (scalar as u64)) + carry);
+            let prod = (((limb_i as u64) * (scalar as u64)) as u64).wrapping_add(carry);
             result_limbs.push(((prod & 4294967295) as u32));
             carry = (prod >> 32);
             i += 1;
@@ -9780,7 +9781,7 @@ impl BigUint {
                     let b = (limb_j as u64);
                     let existing_val = result_limbs[((i + j)) as usize].clone();
                     let existing = (existing_val as u64);
-                    let total = ((existing + (a * b)) + carry);
+                    let total = existing.wrapping_add(a.wrapping_mul(b)).wrapping_add(carry);
                     result_limbs[((i + j)) as usize] = ((total & 4294967295) as u32);
                     carry = (total >> 32);
                     j += 1;
@@ -9789,7 +9790,7 @@ impl BigUint {
                 while (carry > 0) {
                     let existing2_val = result_limbs[(k) as usize].clone();
                     let existing2 = (existing2_val as u64);
-                    let total2 = (existing2 + carry);
+                    let total2 = existing2.wrapping_add(carry);
                     result_limbs[(k) as usize] = ((total2 & 4294967295) as u32);
                     carry = (total2 >> 32);
                     k += 1;
@@ -9884,7 +9885,7 @@ let error = __boring_e;
                 let limb1 = self.limbs[(1) as usize].clone();
                 result = (result | ((limb1 as u64) << 32));
             }
-            Some(result)
+            Some(result.clone())
         }
     }
 
